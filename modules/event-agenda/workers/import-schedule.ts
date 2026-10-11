@@ -15,7 +15,7 @@
 
 import { createHash } from 'node:crypto';
 import { detectSource } from '../lib/schedule-sources/index.js';
-import { guardedFetch, clean, LIMITS, FetchRefused, DEFAULT_HOST_ALLOWLIST } from '../lib/import-safety.js';
+import { guardedFetch, clean, safeAvatarUrl, LIMITS, FetchRefused, DEFAULT_HOST_ALLOWLIST } from '../lib/import-safety.js';
 import { listMirroredAvatars, mirrorAvatar } from '../lib/avatar-mirror.js';
 import { normalizeTitle } from '../lib/normalize-title.js';
 
@@ -193,6 +193,9 @@ export async function importSchedule(
       // conference's own URL. A rising hotlinked count is the signal that the
       // source CDN or the allowlist needs looking at.
       avatars_mirrored: 0, avatars_hotlinked: 0,
+      // Returning speakers recognised by their sched account rather than their
+      // name. A rising number here means fewer duplicate profiles created.
+      speakers_matched_by_source_id: 0,
       skeleton_mismatch: parsed.diagnostics.skeletonMismatch, unchanged: false,
     };
 
@@ -273,18 +276,28 @@ export async function importSchedule(
         stats.avatars_hotlinked = ((stats.avatars_hotlinked as number) ?? 0) + 1;
       }
 
+      // The source's global account id, kept so dedupe has something better
+      // than the name to work with, and so mirroring the avatar does not throw
+      // the identifier away: the mirrored path is sha256 of the source URL and
+      // is therefore one-way.
+      const sourceUserId = k.sourceUserId ? String(k.sourceUserId).slice(0, 64) : null;
+      const sourceAvatarUrl = copied ? (copied.storagePath ? safeAvatarUrl(k.avatarUrl) : copied.url) : null;
+
       const existing = await refs.get(ref, 'speaker_profile');
       if (existing?.entity_id) {
         speakerIds.set(ref, existing.entity_id);
         // Fill only fields that are still empty; never overwrite a human's edit.
         const cur = await supabase.from('events_speaker_profiles')
-          .select('title, company, bio, avatar_url').eq('id', existing.entity_id).maybeSingle();
+          .select('title, company, bio, avatar_url, sched_user_id, source_avatar_url')
+          .eq('id', existing.entity_id).maybeSingle();
         const patch: Record<string, unknown> = {};
         if (cur?.data) {
           if (!cur.data.title && role) patch.title = role;
           if (!cur.data.company && company) patch.company = company;
           if (!cur.data.bio && bio) patch.bio = bio;
           if (!cur.data.avatar_url && avatar) patch.avatar_url = avatar;
+          if (!cur.data.sched_user_id && sourceUserId) patch.sched_user_id = sourceUserId;
+          if (!cur.data.source_avatar_url && sourceAvatarUrl) patch.source_avatar_url = sourceAvatarUrl;
         }
         if (Object.keys(patch).length > 0) {
           await supabase.from('events_speaker_profiles').update(patch).eq('id', existing.entity_id);
@@ -293,21 +306,59 @@ export async function importSchedule(
         continue;
       }
 
-      // Already attached to this event under the same name? Adopt it rather
-      // than creating a second profile for the same person. Read from the map
-      // built once before this loop — querying per speaker turned a
-      // 107-speaker programme into 107 reads of the event's whole speaker list.
-      const hit = attachedByName.get(normName(name)) ?? null;
+      // Same sched account anywhere in the database? Adopt that profile.
+      //
+      // This is the check that stops the importer manufacturing a new row for
+      // every returning speaker, which is how 507 duplicate name groups built
+      // up across 994 events. It is deliberately NOT scoped to this event: the
+      // whole point is to find the person's existing profile from a previous
+      // conference. The id comes from sched rather than from the name, so it
+      // is safe to match across events in a way a name is not.
+      let hit: string | null = null;
+      if (sourceUserId) {
+        const bySched = await supabase.from('events_speaker_profiles')
+          .select('id').eq('sched_user_id', sourceUserId).is('canonical_profile_id', null)
+          .order('created_at').limit(1).maybeSingle();
+        if (bySched?.data?.id) {
+          hit = bySched.data.id;
+          stats.speakers_matched_by_source_id = ((stats.speakers_matched_by_source_id as number) ?? 0) + 1;
+        }
+      }
+
+      // Otherwise: already attached to THIS event under the same name? Adopt
+      // it rather than creating a second profile. Scoped to the event on
+      // purpose — matching a bare name across events would merge the two
+      // different people this database already holds who are both recorded
+      // only as "Ethan". Read from the map built once before this loop;
+      // querying per speaker turned a 107-speaker programme into 107 reads of
+      // the event's whole speaker list.
+      if (!hit) hit = attachedByName.get(normName(name)) ?? null;
 
       let profileId: string;
       if (hit) {
         profileId = hit; // the map stores the profile id directly
         stats.speakers_adopted = (stats.speakers_adopted as number) + 1;
+        // Backfill the identifiers onto an adopted profile that predates them,
+        // so the next import matches on the id rather than the name.
+        if (sourceUserId || sourceAvatarUrl) {
+          const cur = await supabase.from('events_speaker_profiles')
+            .select('sched_user_id, source_avatar_url').eq('id', profileId).maybeSingle();
+          const patch: Record<string, unknown> = {};
+          if (cur?.data && !cur.data.sched_user_id && sourceUserId) patch.sched_user_id = sourceUserId;
+          if (cur?.data && !cur.data.source_avatar_url && sourceAvatarUrl) patch.source_avatar_url = sourceAvatarUrl;
+          if (Object.keys(patch).length > 0) {
+            await supabase.from('events_speaker_profiles').update(patch).eq('id', profileId);
+          }
+        }
       } else {
         // §7.3 step 4: a placeholder profile. person_id stays null — linking a
         // person on a name alone would put one person's face on another's talk.
         const ins = await supabase.from('events_speaker_profiles')
-          .insert({ name, title: role, company, bio, avatar_url: avatar })
+          .insert({
+            name, title: role, company, bio, avatar_url: avatar,
+            sched_user_id: sourceUserId,
+            source_avatar_url: sourceAvatarUrl,
+          })
           .select('id').single();
         if (ins.error) throw new Error(`speaker profile insert failed: ${ins.error.message}`);
         profileId = ins.data.id;

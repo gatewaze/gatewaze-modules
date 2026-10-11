@@ -12,13 +12,24 @@ export type SessionKind = 'session' | 'break';
 export type SessionType = 'talk' | 'keynote' | 'workshop' | 'panel' | 'lightning' | 'fireside';
 
 export interface ParsedSpeaker {
-  /** Stable id on the source (sched speaker slug). The idempotency key. */
+  /**
+   * Stable id on the source (sched speaker slug). The per-event idempotency
+   * key, and NOT an identity: the slug is derived from the name, is a hex
+   * fallback for speakers with no sched account, and one account can appear
+   * under two slugs on a single page. Use `sourceUserId` for identity.
+   */
   ref: string;
   name: string;
   role: string | null;
   company: string | null;
   bio: string | null;
   avatarUrl: string | null;
+  /**
+   * The source's own global account id for this person, when the page exposes
+   * one. For sched it is the numeric id in the avatar URL, which is stable
+   * across events and across name changes, so it is what dedupe matches on.
+   */
+  sourceUserId: string | null;
 }
 
 export interface ParsedSession {
