@@ -90,6 +90,10 @@ CREATE TABLE IF NOT EXISTS public.integrations_download_logs (
   file_path     text NOT NULL,
   offer_id      text,
   resource_id   uuid REFERENCES public.integrations_offer_resources(id) ON DELETE SET NULL,
+  -- Matched person, when the address belongs to one (set by
+  -- platform-generate-download-token).
+  person_id     uuid REFERENCES public.people(id) ON DELETE SET NULL,
+  -- Legacy gatewaze-admin customers.id, kept for traceability.
   customer_id   bigint,
   downloaded_at timestamptz NOT NULL DEFAULT now(),
   created_at    timestamptz NOT NULL DEFAULT now()
