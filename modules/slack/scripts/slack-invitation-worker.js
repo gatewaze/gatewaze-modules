@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { SlackInvitationManager } from './SlackInvitationManager.js';
+import { unsealSecret, checkProxy } from '../lib/proxy-credentials.js';
 
 // Injected by caller (job-worker.js)
 let supabase = null;
@@ -69,10 +70,18 @@ async function resolveProxyUrl(sb) {
     const { data } = await sb.from('installed_modules').select('config').eq('id', 'residential-egress').maybeSingle();
     const c = data && data.config;
     if (c && c.provider === 'dataimpulse' && c.proxy_username && c.proxy_password) {
-      // US-pinned sticky session keeps the send IP consistent with the captured session.
-      const user = encodeURIComponent(`${c.proxy_username}__cr.us__sid.aaifslack1`);
-      const pass = encodeURIComponent(c.proxy_password);
-      return `http://${user}:${pass}@gw.dataimpulse.com:823`;
+      // Stored credentials are SEALED (`v1:` envelope) once the config has been
+      // saved through the platform; legacy plaintext passes through. Ciphertext
+      // must never be sent to the provider as a credential, so a failed unseal
+      // disables the proxy rather than guaranteeing a 407.
+      const user = unsealSecret(c.proxy_username);
+      const pass = unsealSecret(c.proxy_password);
+      if (user == null || pass == null) {
+        console.warn('⚠️  residential-egress credentials could not be unsealed (GATEWAZE_SECRETS_KEY missing or wrong?) — not using the proxy');
+      } else {
+        // US-pinned sticky session keeps the send IP consistent with the captured session.
+        return `http://${encodeURIComponent(`${user}__cr.us__sid.aaifslack1`)}:${encodeURIComponent(pass)}@gw.dataimpulse.com:823`;
+      }
     }
   } catch (e) {
     console.warn('⚠️  Could not read residential-egress config for proxy:', e.message);
@@ -102,7 +111,16 @@ export async function processQueue() {
     // Initialize invitation manager once
     seedSessionFromEnv();
     const proxyUrl = await resolveProxyUrl(getSupabase());
-    if (proxyUrl) console.log('🌐 Slack worker egress via residential proxy');
+    if (proxyUrl) {
+      const probe = await checkProxy(proxyUrl);
+      if (!probe.ok) {
+        // Every invite would fail at page load and consume its queue row, so
+        // stop here and leave the queue for the next tick.
+        console.error(`❌ Egress proxy is not usable — ${probe.detail}. Leaving the queue untouched; no invitations were attempted.`);
+        return;
+      }
+      console.log(`🌐 Slack worker egress via residential proxy — ${probe.detail}`);
+    }
     invitationManager = new SlackInvitationManager({
       workspaceUrl: process.env.SLACK_WORKSPACE_URL,
       adminEmail: process.env.SLACK_ADMIN_EMAIL,
