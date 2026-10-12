@@ -37,9 +37,21 @@ COMMENT ON COLUMN public.video_publications.origin IS
 -- One publication per video per account. Without this, re-running discovery
 -- creates a second row for the same video and the metrics collector writes
 -- two rows a day for one video, each claiming to be the whole picture.
+--
+-- NOT partial, deliberately. A `WHERE connection_id IS NOT NULL AND
+-- external_id IS NOT NULL` predicate here looks tidier and breaks the thing
+-- the index exists for: ON CONFLICT cannot match a partial index without
+-- repeating its predicate, which PostgREST has no way to express, so every
+-- discovery upsert fails with "no unique or exclusion constraint matching
+-- the ON CONFLICT specification". That cost 555 episodes their publication
+-- rows on the first real run.
+--
+-- The predicate was also unnecessary: Postgres treats NULLs as distinct in a
+-- unique index by default, so draft publications with no connection and no
+-- external id do not collide with each other.
+DROP INDEX IF EXISTS public.video_publications_one_per_connection;
 CREATE UNIQUE INDEX IF NOT EXISTS video_publications_one_per_connection
-  ON public.video_publications (connection_id, external_id)
-  WHERE connection_id IS NOT NULL AND external_id IS NOT NULL;
+  ON public.video_publications (connection_id, external_id);
 
 -- ==========================================================================
 -- 2. Where a video came from
