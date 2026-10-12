@@ -7,7 +7,7 @@ const segmentsModule: GatewazeModule = {
   visibility: 'public',
   name: 'Segments',
   description: 'Create and manage audience segments for targeted communications and analytics',
-  version: '1.0.0',
+  version: '1.1.0',
   features: [
     'segments',
     'segments.create',
