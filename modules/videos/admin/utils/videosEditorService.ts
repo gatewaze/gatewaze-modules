@@ -183,6 +183,92 @@ export async function listUnitVideos(
   return (await jsonOrThrow<{ videos: EditorVideo[] }>(res)).videos;
 }
 
+// ── Triage: videos belonging to nothing yet ──────────────────────────────────
+
+/** What a discovered video can be attached to. */
+export type AssignSubjectType = 'event' | 'podcast' | 'agenda_entry' | 'podcast_episode';
+
+export interface UnassignedVideo {
+  id: string;
+  provider: string;
+  title: string | null;
+  url: string | null;
+  thumbnail_url: string | null;
+  duration_seconds: number | null;
+  published_at: string | null;
+  channel_title: string | null;
+  kind: string | null;
+  connection_label: string | null;
+  /** Null when no metric has been collected yet, which is not the same as 0. */
+  latest_views: number | null;
+  views_as_of: string | null;
+}
+
+export interface UnassignedPage {
+  videos: UnassignedVideo[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+/**
+ * The triage queue, newest-first by view count.
+ *
+ * Paged server-side. Connecting an account adopts its whole back catalogue, so
+ * this list starts at several hundred rows on a real brand and loading it all
+ * would be both slow and useless.
+ */
+export async function listUnassigned(
+  opts: { limit?: number; offset?: number; provider?: string; search?: string } = {},
+): Promise<UnassignedPage> {
+  const params = new URLSearchParams({
+    limit: String(opts.limit ?? 50),
+    offset: String(opts.offset ?? 0),
+  });
+  if (opts.provider) params.set('provider', opts.provider);
+  if (opts.search?.trim()) params.set('q', opts.search.trim());
+  const res = await authedFetch(`${BASE}/unassigned?${params}`);
+  const body = await jsonOrThrow<Partial<UnassignedPage>>(res);
+  return {
+    videos: body.videos ?? [],
+    total: body.total ?? 0,
+    limit: body.limit ?? 50,
+    offset: body.offset ?? 0,
+  };
+}
+
+export async function unassignedSummary(): Promise<{
+  total: number;
+  byProvider: Record<string, number>;
+  /** Platforms whose count could not be read, so the total is short. */
+  unreadable: string[];
+}> {
+  const res = await authedFetch(`${BASE}/unassigned/summary`);
+  const body = await jsonOrThrow<{
+    total?: number;
+    by_provider?: Record<string, number>;
+    unreadable?: string[];
+  }>(res);
+  return {
+    total: body.total ?? 0,
+    byProvider: body.by_provider ?? {},
+    unreadable: body.unreadable ?? [],
+  };
+}
+
+/** Attach one video to an event, podcast, talk or episode. */
+export async function assignVideo(
+  videoId: string,
+  subjectType: AssignSubjectType,
+  subjectId: string,
+): Promise<void> {
+  const res = await authedFetch(`${BASE}/unassigned/${encodeURIComponent(videoId)}/assign`, {
+    method: 'POST',
+    body: JSON.stringify({ subject_type: subjectType, subject_id: subjectId }),
+  });
+  await jsonOrThrow<unknown>(res);
+}
+
 export async function getCopy(videoId: string, platforms: string[] = ['youtube']): Promise<GeneratedCopy> {
   const res = await authedFetch(
     `${BASE}/videos/${encodeURIComponent(videoId)}/copy?platforms=${encodeURIComponent(platforms.join(','))}`,

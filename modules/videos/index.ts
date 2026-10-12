@@ -21,7 +21,7 @@ const videosModule: GatewazeModule = {
   description:
     'Video masters, shorts and scheduled publication. Editors upload against a talk or episode; '
     + 'Gatewaze holds the file and publishes on a schedule.',
-  version: '1.7.0',
+  version: '1.8.0',
   features: ['videos', 'videos.manage', 'videos.edit'],
 
   dependencies: ['content-platform'],
@@ -62,6 +62,13 @@ const videosModule: GatewazeModule = {
 
   adminRoutes: [
     {
+      // Before 'videos', so a future 'videos/:id' cannot swallow it.
+      path: 'videos/unassigned',
+      component: () => import('./admin/components/UnassignedVideos'),
+      requiredFeature: 'videos.edit',
+      guard: 'none',
+    },
+    {
       // guard 'none' puts this at /videos rather than /admin/videos, so a
       // third-party editor lands on their own workspace rather than inside the
       // admin section. The authorisation is per subject in the API, not the
@@ -85,6 +92,16 @@ const videosModule: GatewazeModule = {
       defaultLocation: 'sidebar',
       // conference-recap is 63 and vehicle-video 64; this sits with them.
       order: 65,
+    },
+    {
+      path: '/videos/unassigned',
+      label: 'Unassigned videos',
+      // InboxStackIcon.
+      icon: 'InboxStack',
+      requiredFeature: 'videos.edit',
+      defaultSection: 'Content',
+      defaultLocation: 'sidebar',
+      order: 66,
     },
   ],
 
