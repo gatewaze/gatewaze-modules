@@ -96,12 +96,13 @@ async function handler(req: Request) {
       ? source.trim().slice(0, 100)
       : null
 
-    // Fetch the discount offer config
+    // Fetch the discount's Luma config. Whether it is open, the one-code-per-
+    // person rule and max_codes are enforced atomically by
+    // events_reserve_luma_code below.
     const { data: discount, error: discountError } = await supabase
       .from('events_discounts')
-      .select('id, event_id, luma_event_api_id, luma_percent_off, max_codes, status')
+      .select('id, luma_event_api_id, luma_percent_off')
       .eq('id', discount_id)
-      .eq('status', 'active')
       .maybeSingle()
 
     if (discountError || !discount) {
@@ -127,38 +128,61 @@ async function handler(req: Request) {
       })
     }
 
-    // Check if user already has a code for this discount (idempotent)
-    const { data: existingCodes } = await supabase
-      .from('events_discount_codes')
-      .select('code')
-      .eq('discount_id', discount.id)
-      .ilike('issued_to', escapeLike(normalizedEmail))
-      .eq('issued', true)
-      .order('issued_at', { ascending: true })
-      .limit(1)
-    const existingCode = existingCodes?.[0]
+    // Hold a slot before minting. Parallel calls (one person or many) are
+    // serialised per discount in the database, so a person never gets two
+    // coupons and max_codes is never overshot.
+    const { data: reservation, error: reserveError } = await supabase
+      .rpc('events_reserve_luma_code', { p_discount_id: discount.id, p_email: normalizedEmail })
+    const reserved = Array.isArray(reservation) ? reservation[0] : reservation
 
-    if (existingCode) {
-      return new Response(JSON.stringify({ success: true, code: existingCode.code, message: 'Code already issued' }), {
-        status: 200,
+    if (reserveError || !reserved) {
+      console.error('Error reserving discount code:', reserveError)
+      return new Response(JSON.stringify({ success: false, error: 'Internal server error' }), {
+        status: 500,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       })
     }
 
-    // Enforce max_codes limit if set
-    if (discount.max_codes !== null && discount.max_codes !== undefined) {
-      const { count } = await supabase
-        .from('events_discount_codes')
-        .select('*', { count: 'exact', head: true })
-        .eq('discount_id', discount.id)
-        .eq('issued', true)
-
-      if ((count ?? 0) >= discount.max_codes) {
-        return new Response(JSON.stringify({ success: false, error: 'All codes have been claimed', sold_out: true }), {
+    switch (reserved.status) {
+      case 'existing':
+        return new Response(JSON.stringify({ success: true, code: reserved.code, message: 'Code already issued' }), {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        })
+      case 'pending':
+        return new Response(JSON.stringify({ success: false, error: 'Your code is being created, try again in a moment' }), {
           status: 409,
           headers: { ...corsHeaders, 'Content-Type': 'application/json' },
         })
-      }
+      case 'sold_out':
+        return new Response(JSON.stringify({ success: false, sold_out: true, error: 'Sold out' }), {
+          status: 409,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        })
+      case 'closed':
+        return new Response(JSON.stringify({ success: false, error: 'This discount is closed' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        })
+      case 'reserved':
+        break
+      default:
+        console.error('Unexpected reservation status:', reserved.status)
+        return new Response(JSON.stringify({ success: false, error: 'Internal server error' }), {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        })
+    }
+
+    const reservedId: string = reserved.code_id
+
+    // Release the held slot when minting does not complete.
+    const releaseReservation = async () => {
+      const { error: releaseError } = await supabase
+        .from('events_discount_codes')
+        .delete()
+        .eq('id', reservedId)
+      if (releaseError) console.error('Error releasing code reservation:', releaseError)
     }
 
     // Generate a unique code
@@ -166,26 +190,37 @@ async function handler(req: Request) {
     const percentOff = discount.luma_percent_off ?? 100
 
     // Create coupon in Luma
-    const lumaResponse = await fetch('https://public-api.luma.com/v1/event/create-coupon', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-luma-api-key': lumaApiKey,
-      },
-      body: JSON.stringify({
-        event_api_id: discount.luma_event_api_id,
-        code,
-        discount: {
-          discount_type: 'percent',
-          percent_off: percentOff,
+    let lumaResponse: Response
+    try {
+      lumaResponse = await fetch('https://public-api.luma.com/v1/event/create-coupon', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-luma-api-key': lumaApiKey,
         },
-        remaining_count: 1,
-      }),
-    })
+        body: JSON.stringify({
+          event_api_id: discount.luma_event_api_id,
+          code,
+          discount: {
+            discount_type: 'percent',
+            percent_off: percentOff,
+          },
+          remaining_count: 1,
+        }),
+      })
+    } catch (fetchError) {
+      console.error('Luma API request failed:', fetchError)
+      await releaseReservation()
+      return new Response(JSON.stringify({ success: false, error: 'Failed to create coupon in Luma' }), {
+        status: 502,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
 
     if (!lumaResponse.ok) {
       const lumaError = await lumaResponse.text()
       console.error('Luma API error:', lumaResponse.status, lumaError)
+      await releaseReservation()
       return new Response(JSON.stringify({ success: false, error: 'Failed to create coupon in Luma' }), {
         status: 502,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -194,47 +229,47 @@ async function handler(req: Request) {
 
     const issuedAt = new Date().toISOString()
 
-    // Store the issued code. event_id is the event uuid from the discount row
-    // (null for a discount with no event). discount_type/discount_value stay
-    // null: minted Luma coupons never carried them.
-    const { error: insertError } = await supabase
+    // Replace the placeholder with the real code. The reservation already
+    // carries event_id (the event uuid), discount_id and issued_to;
+    // discount_type/discount_value stay null for minted Luma coupons.
+    const codeUpdate: Record<string, unknown> = {
+      code,
+      issued: true,
+      issued_at: issuedAt,
+      is_active: true,
+    }
+    if (codeSource) codeUpdate.source = codeSource
+    const { error: updateError } = await supabase
       .from('events_discount_codes')
-      .insert({
-        event_id: discount.event_id ?? null,
-        discount_id: discount.id,
-        code,
-        issued: true,
-        issued_to: normalizedEmail,
-        issued_at: issuedAt,
-        source: codeSource,
-      })
+      .update(codeUpdate)
+      .eq('id', reservedId)
 
-    if (insertError) {
-      console.error('Error storing discount code:', insertError)
-      // Code was created in Luma but we failed to store it — still return it to the user
-      // so they're not left without a code
-      console.error('Code created in Luma but not stored in DB for discount', discount.id)
+    if (updateError) {
+      // The coupon exists in Luma, so still return it to the user rather than
+      // leave them without a code.
+      console.error('Code created in Luma but not stored in DB for discount', discount.id, updateError)
     }
 
-    // Keep the claims record in step, as events_issue_code_to_user does for
-    // pool discounts.
+    // Keep the claims record in step, as events_issue_code_to_user does. Never
+    // step a claim backwards from deposit-initiated or deposit-paid.
     const { data: claimRows, error: claimLookupError } = await supabase
       .from('events_discount_claims')
-      .select('id, accepted_at')
+      .select('id, status, accepted_at, code_issued_at')
       .eq('discount_id', discount.id)
       .ilike('email', escapeLike(normalizedEmail))
       .limit(1)
     if (claimLookupError) {
       console.error('Error looking up discount claim:', claimLookupError)
     } else if (claimRows && claimRows.length > 0) {
+      const claim = claimRows[0]
       const { error: claimUpdateError } = await supabase
         .from('events_discount_claims')
         .update({
-          status: 'code-issued',
-          code_issued_at: issuedAt,
-          accepted_at: claimRows[0].accepted_at ?? issuedAt,
+          status: ['viewed', 'accepted', 'sold-out'].includes(claim.status) ? 'code-issued' : claim.status,
+          code_issued_at: claim.code_issued_at ?? issuedAt,
+          accepted_at: claim.accepted_at ?? issuedAt,
         })
-        .eq('id', claimRows[0].id)
+        .eq('id', claim.id)
       if (claimUpdateError) console.error('Error updating discount claim:', claimUpdateError)
     } else {
       const { error: claimInsertError } = await supabase
