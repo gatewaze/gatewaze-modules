@@ -6,7 +6,7 @@
  * update in place), and returns the run to watching. Auto-address, unlimited rounds. A failed/empty
  * revise leaves the PRs open for a human rather than failing the run.
  */
-import { canAutoMergeRepo } from '../lib/repo-merge-policy.js';
+import { canAutoMergeRepo, canRepairRepo } from '../lib/repo-merge-policy.js';
 import { enqueuePhase } from '../lib/enqueue.js';
 import { createClient } from '@supabase/supabase-js';
 import { getProject, getCodeRepos, resolveCommitIdentity } from '../lib/credentials.js';
@@ -67,7 +67,7 @@ export default async function revise(job, ctx) {
       // it — on a public repo anyone can submit them.
       for (const r of reviews ?? []) if (['CHANGES_REQUESTED', 'COMMENTED'].includes(r.state) && (r.body ?? '').trim() && isTrustedFeedbackAuthor(r.user?.login, project, run)) lines.push(`- (${r.state}) @${r.user?.login ?? '?'}: ${r.body.trim()}`);
       for (const c of inline ?? []) if ((c.body ?? '').trim() && isTrustedFeedbackAuthor(c.user?.login, project, run)) lines.push(`- ${c.path}:${c.line ?? c.original_line ?? '?'} — ${c.body.trim()}`);
-      if (lines.length) feedbackByRepo[p.repo_name] = lines.join('\n');
+      if (lines.length) feedbackByRepo[`${p.repo_owner}/${p.repo_name}`] = lines.join('\n');
     }
     const feedback = Object.entries(feedbackByRepo).map(([repo, f]) => `### ${repo}\n${f}`).join('\n\n').slice(0, 12000);
     // No trusted review feedback normally means nothing to do — EXCEPT a CI-fix pass, where the
@@ -81,11 +81,14 @@ export default async function revise(job, ctx) {
     }
 
     // Clone the affected repos' RUN BRANCH (writable), so pushes update the existing PRs.
-    const affected = new Set(openPrs.map((p) => `${p.repo_owner}/${p.repo_name}`));
+    const affected = new Set();
+    for (const p of openPrs) {
+      if (!conflictMode || (await gh.getPullRequest(p.repo_owner,p.repo_name,p.pr_number)).mergeable_state === 'dirty') affected.add(`${p.repo_owner}/${p.repo_name}`);
+    }
     const codeRepos = (await getCodeRepos(supabase, run.project_id))
-      .filter((r) => affected.has(`${r.repoOwner}/${r.repoName}`) && (!conflictMode || canAutoMergeRepo(r,project,run)))
+      .filter((r) => affected.has(`${r.repoOwner}/${r.repoName}`) && (!conflictMode || canRepairRepo(r,run)))
       .map((r) => ({ ...r, checkoutRef: undefined, writeMode: 'writable' }));
-    if (conflictMode && !codeRepos.length) throw new Error('No repository permits automatic conflict repair');
+    if (conflictMode && !codeRepos.length) throw new Error('No writable repository still needs conflict repair');
     const commitId = await resolveCommitIdentity(supabase, project, token);
     ws = await makeMultiWorkspace(codeRepos, token, run.branch_name, commitId, true);
 
@@ -97,7 +100,7 @@ export default async function revise(job, ctx) {
     const prompt = conflictMode
       ? [
           `Bring each writable PR branch up to date with its configured base branch (${codeRepos.map(r => `${r.repoOwner}/${r.repoName}: ${r.baseBranch || 'main'}`).join(', ')}).`,
-          `Fetch origin, merge the base into the existing run branch, and resolve conflicts preserving both intended changes.`,
+          `Fetch the run branch and configured base with enough history to find their real merge base (the clone may be shallow). Merge the base into the existing run branch and resolve conflicts preserving both intended changes. Never use --allow-unrelated-histories.`,
           `Do not rewrite history, force push, bypass hooks, disable checks, or change unrelated repositories.`,
           `Remove all conflict markers and run the repository tests, typecheck and security checks.`,
           `If requirements conflict or checks cannot pass, abort the merge and explain what needs human attention.`,
@@ -164,7 +167,7 @@ export default async function revise(job, ctx) {
     try { await gh.postComment(run.repo_owner, run.repo_name, run.issue_number ?? run.pr_number, comment); } catch { /* best-effort */ }
     // Fold this round's TRUSTED feedback into the review-learnings KB (pending until the PR merges).
     try { await distillReviewLearnings(supabase, project, run, feedback, ctx?.logger); } catch { /* best-effort, never blocks revise */ }
-    if (pushed && automatic) {
+    if (pushed && (automatic || conflictMode)) {
       const {data: last} = await supabase.from('se_phases').select('attempt').eq('run_id',run.id).eq('phase','verify').order('attempt',{ascending:false}).limit(1).maybeSingle();
       await supabase.from('se_runs').update({status:'queued',current_phase:'verify'}).eq('id',run.id);
       await enqueuePhase(ctx,run.id,'verify',{attempt:(last?.attempt ?? 0)+1});
