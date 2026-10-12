@@ -26,12 +26,14 @@ function escapeLike(value: string): string {
 }
 
 function generateCode(): string {
-  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789' // omit ambiguous chars (O, 0, I, 1)
+  // 32 symbols, omitting the ambiguous O, 0, I and 1. Exactly 32 so that the
+  // low five bits of a random byte select one uniformly.
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'
   // A coupon code is a bearer credential for a discounted ticket, so draw it
-  // from the CSPRNG. 32 divides 256 exactly, so the modulo has no bias.
+  // from the CSPRNG.
   const bytes = crypto.getRandomValues(new Uint8Array(8))
   let suffix = ''
-  for (const b of bytes) suffix += chars[b % chars.length]
+  for (const b of bytes) suffix += chars[b & 0x1f]
   return `TT-${suffix}`
 }
 
