@@ -37,7 +37,7 @@ const spotifyPublisherModule: GatewazeModule = {
   name: 'Videos Publisher: Podcasts',
   description:
     'Episode catalogue from the RSS feed, download metrics from OP3 with a per-app split, and Spotify analytics CSV import. Holds no Spotify credential.',
-  version: '0.1.0',
+  version: '0.2.0',
   // Namespaced on the MODULE ID: the platform rejects anything else with
   // MODULE_FEATURE_NAMESPACE_VIOLATION.
   features: ['videos-publisher-spotify', 'videos-publisher-spotify.metrics'],
