@@ -151,24 +151,24 @@ function decodeHtmlEntities(input) {
  * no surface should ever receive (scripts, styles, inline handlers, and
  * javascript:/data: links) and caps the length.
  */
+// Everything cleanEventHtml removes, as one pattern:
+//   a whole script/style/iframe/object/embed/noscript element;
+//   any leftover opening or closing tag of those, or of link/meta/base/form;
+//   an inline event handler attribute (on…=), quoted or not;
+//   an href/src whose value is a javascript:, data: or vbscript: URL.
+const UNSAFE_HTML = /<(script|style|iframe|object|embed|noscript)\b[\s\S]*?<\/\1\s*>|<\/?(?:script|style|iframe|object|embed|noscript|link|meta|base|form)\b[^>]*>|\son[a-z]+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)|\s(?:href|src)\s*=\s*(?:(["'])\s*(?:javascript|data|vbscript):[^"']*\2|(?:javascript|data|vbscript):[^\s>]*)/gi;
+
 export function cleanEventHtml(html) {
   if (typeof html !== 'string' || !html.trim()) return '';
   // Cap first so the passes below work on bounded input; they only shrink it.
   let out = html.length > MAX_PAGE_CONTENT ? html.slice(0, MAX_PAGE_CONTENT) : html;
   // Repeat until nothing changes: removing one fragment can join the text
-  // around it into a new one, e.g. "<scr<script>…</script>ipt>". Every pass
-  // removes at least one character, so this ends.
+  // around it into a new one, e.g. "<scr<script>…</script>ipt>". Every
+  // changing pass shortens the string, so this ends.
   let previous;
   do {
     previous = out;
-    out = out
-      .replace(/<(script|style|iframe|object|embed|noscript)\b[\s\S]*?<\/\1\s*>/gi, '')
-      .replace(/<\/?(script|style|iframe|object|embed|noscript|link|meta|base|form)\b[^>]*>/gi, '')
-      .replace(/\son[a-z]+\s*=\s*"[^"]*"/gi, '')
-      .replace(/\son[a-z]+\s*=\s*'[^']*'/gi, '')
-      .replace(/\son[a-z]+\s*=\s*[^\s>]+/gi, '')
-      .replace(/\s(href|src)\s*=\s*(["'])\s*(javascript|data|vbscript):[^"']*\2/gi, '')
-      .replace(/\s(href|src)\s*=\s*(javascript|data|vbscript):[^\s>]*/gi, '');
+    out = out.replace(UNSAFE_HTML, '');
   } while (out !== previous);
   return out.trim();
 }
