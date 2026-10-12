@@ -1,0 +1,42 @@
+name: Module migrations
+
+# Two checks on the migrations a pull request ADDS. Both failures happened
+# here, repeatedly, and both are silent — see the script's header for the
+# detail and the history.
+#
+#   1. A .sql file not listed in its module's index.ts never runs. The feature
+#      looks shipped and the first query against its table fails.
+#   2. Two branches cut from the same main both take the next free number, and
+#      whichever merges second collides.
+#
+# Scoped to added files, so older migrations missing from a module's array
+# (applied out of band, not all idempotent) are left alone rather than being
+# re-declared by a gate.
+#
+# Blocking from the start, unlike module-version-bump, which landed
+# non-blocking. These two caught real defects that reached a live deployment,
+# and both are mechanical to fix. Add "Module migrations" to the required
+# checks on main to enforce it on merge as well as report it.
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  migrations:
+    name: Module migrations
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+
+      - name: Check added migrations are declared and uniquely numbered
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: node scripts/check-module-migrations.mjs "$BASE_SHA" "$HEAD_SHA"
