@@ -1,0 +1,31 @@
+-- ============================================================================
+-- Module: broadcasts
+-- Migration: 029_require_send_preheader
+-- Description: every broadcast send must carry a preheader. Gmail files mail
+-- without one as spam, and people were forgetting to fill it in. The admin
+-- blocks Send without one; this is the server-side backstop for any other
+-- path that creates a send row.
+--
+-- BEFORE INSERT only, deliberately: the engine updates send rows throughout a
+-- send (counts, status, completed_at), and a CHECK constraint (even NOT VALID)
+-- is re-evaluated on every UPDATE, which would break sends already in flight
+-- that predate this rule. Whitespace-only does not count.
+-- ============================================================================
+CREATE OR REPLACE FUNCTION public.broadcast_sends_require_preheader()
+RETURNS trigger
+LANGUAGE plpgsql
+SET search_path = public
+AS $$
+BEGIN
+  IF btrim(coalesce(NEW.preheader, '')) = '' THEN
+    RAISE EXCEPTION 'A preheader is required before sending. Add one in Email details and save.'
+      USING ERRCODE = 'check_violation',
+            HINT = 'Gmail files emails without a preheader as spam.';
+  END IF;
+  RETURN NEW;
+END $$;
+
+DROP TRIGGER IF EXISTS broadcast_sends_require_preheader ON public.broadcast_sends;
+CREATE TRIGGER broadcast_sends_require_preheader
+  BEFORE INSERT ON public.broadcast_sends
+  FOR EACH ROW EXECUTE FUNCTION public.broadcast_sends_require_preheader();

@@ -15,7 +15,8 @@ import { PersonLocationMap } from '@/components/charts/PersonLocationMap';
 // Cross-module reuse: the visual Segments Builder (controlled value/onChange).
 import { SegmentBuilder } from '../../../segments/admin/pages/components/SegmentBuilder';
 import SegmentCopilot from '../components/SegmentCopilot';
-import { getBroadcast, updateBroadcast, createBroadcastSend, listEventsForLink, listCategoryLists, EVENT_VARIABLES, type Broadcast, type EventOption, type CategoryList } from '../lib/broadcastService';
+import { applyPreheader } from '../../../newsletters/lib/preheader.js';
+import { getBroadcast, updateBroadcast, createBroadcastSend, hasPreheader, listEventsForLink, listCategoryLists, EVENT_VARIABLES, type Broadcast, type EventOption, type CategoryList } from '../lib/broadcastService';
 import { BroadcastTemplateTab } from '../components/BroadcastTemplateTab';
 import { BroadcastContentEditor } from '../components/BroadcastContentEditor';
 import { BroadcastRepliesTab } from '../components/BroadcastRepliesTab';
@@ -98,11 +99,14 @@ export default function BroadcastDetailPage() {
       // (the send is tied to that list; unsubscribing removes from it), AND a
       // valid From address — sending from a fallback no-reply address lands in
       // spam, so a real sender is mandatory (defaulted from config on create).
-      canSend: !!b.rendered_html && hasAudience && !!b.category_list_id && isValidEmail(b.from_address),
+      // A preheader is mandatory too: Gmail sends mail without one to spam.
+      // Gated on the SAVED value, because the send snapshots the saved parent.
+      canSend: !!b.rendered_html && hasAudience && !!b.category_list_id && isValidEmail(b.from_address) && hasPreheader(b.preheader),
       canSendReason: !b.rendered_html ? 'Add content before sending'
         : !hasAudience ? 'Set an audience first'
         : !b.category_list_id ? 'Choose an unsubscribe list before sending'
         : !isValidEmail(b.from_address) ? 'Set a valid From address before sending'
+        : !hasPreheader(b.preheader) ? 'Add a preheader in Email details and save before sending'
         : undefined,
       features: { deliveryStrategy: true, excludeSent: true },
       emailDetails: {
@@ -119,6 +123,10 @@ export default function BroadcastDetailPage() {
           const nb = await updateBroadcast(b.id, {
             subject: values.subject || null,
             preheader: values.preheader || null,
+            // The inbox preview text is part of the rendered HTML (set when the
+            // content was saved), so re-stamp it here; otherwise a preheader
+            // added on this step never reaches the email or a test send.
+            ...(b.rendered_html ? { rendered_html: applyPreheader(b.rendered_html, values.preheader) } : {}),
             from_address: values.fromAddress || null,
             from_name: values.fromName || null,
             reply_to: values.replyTo || null,
@@ -189,7 +197,7 @@ export default function BroadcastDetailPage() {
           from_address: b.from_address,
           from_name: b.from_name,
           reply_to: b.reply_to,
-          rendered_html: b.rendered_html,
+          rendered_html: b.rendered_html ? applyPreheader(b.rendered_html, b.preheader) : b.rendered_html,
           content_json: b.content_json,
           updated_at: new Date().toISOString(),
         }).eq('id', sendId);

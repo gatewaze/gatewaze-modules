@@ -20,6 +20,8 @@ interface EditionSendingTabProps {
   editionId: string;
   editionDate?: string;
   subject: string;
+  /** The edition's preheader (current editor state, same source as the rendered HTML). Required to send. */
+  preheader?: string | null;
   collection: CollectionInfo | null;
   newsletterSlug?: string;
   editionStatus?: string;
@@ -38,7 +40,7 @@ interface EditionSendingTabProps {
  * newsletter-level (collection), shown read-only with an Edit link to the
  * newsletter settings. The editor keeps its own test send; this adds one too.
  */
-export function EditionSendingTab({ editionId, editionDate, subject, collection, newsletterSlug, editionStatus, getRenderedHtml }: EditionSendingTabProps) {
+export function EditionSendingTab({ editionId, editionDate, subject, preheader, collection, newsletterSlug, editionStatus, getRenderedHtml }: EditionSendingTabProps) {
   // Render the edition to final email HTML with the web-version link substituted
   // (shared by createSend + rerenderContent so both produce identical output).
   const buildFinalHtml = useCallback(async (): Promise<{ html: string | null; webVersionUrl: string; portalBaseUrl: string }> => {
@@ -78,6 +80,7 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
   const adapter: SendingAdapter = useMemo(() => {
     const settingsHref = newsletterSlug ? `/newsletters/${newsletterSlug}` : undefined;
     const isNew = editionId === 'new';
+    const hasPreheader = !!preheader && preheader.trim().length > 0;
     return {
       domainKey: 'newsletter',
       title: 'Send Newsletter',
@@ -87,12 +90,16 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
       logSendIdColumn: 'newsletter_send_id',
       tzBreakdownRpc: 'newsletter_send_timezone_breakdown',
       sendEndpoint: 'newsletter-send',
-      canSend: editionStatus === 'published',
+      // A preheader is mandatory: Gmail sends mail without one to spam.
+      // Migration 090 enforces the same rule on newsletter_sends inserts.
+      canSend: editionStatus === 'published' && hasPreheader,
       canSendReason: isNew
         ? 'Save the edition first'
         : editionStatus !== 'published'
           ? 'This edition is a draft. Publish it before sending — the email’s “View Online” link points at the published page.'
-          : undefined,
+          : !hasPreheader
+            ? 'Add a preheader on the Details tab before sending'
+            : undefined,
       features: { deliveryStrategy: true, excludeSent: true },
       emailDetails: {
         editable: false,
@@ -100,7 +107,7 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
         editLabel: 'Edit in settings',
         values: {
           subject: subject || '',
-          preheader: '',
+          preheader: preheader || '',
           fromAddress: collection?.from_email || '',
           fromName: collection?.from_name || '',
           replyTo: collection?.reply_to || '',
@@ -147,6 +154,8 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
           collection_id: collection?.id ?? null,
           status: config.scheduleType === 'scheduled' ? 'scheduled' : 'sending',
           subject: subject || null,
+          // Recorded on the send for history; the trigger rejects a blank one.
+          preheader: preheader?.trim() || null,
           from_address: collection?.from_email || null,
           from_name: collection?.from_name || null,
           list_ids: collection?.list_id ? [collection.list_id] : [],
@@ -189,7 +198,7 @@ export function EditionSendingTab({ editionId, editionDate, subject, collection,
         }
       },
     };
-  }, [editionId, editionStatus, subject, collection, newsletterSlug, buildFinalHtml]);
+  }, [editionId, editionStatus, subject, preheader, collection, newsletterSlug, buildFinalHtml]);
 
   return <SendingPanel adapter={adapter} />;
 }

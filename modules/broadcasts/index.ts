@@ -166,6 +166,8 @@ const broadcastsModule: GatewazeModule = {
     'migrations/026_broadcast_folders.sql',
     'migrations/027_broadcast_template.sql',
     'migrations/028_broadcast_template_library.sql',
+    // Reject a broadcast_sends insert without a preheader (Gmail spams mail without one).
+    'migrations/029_require_send_preheader.sql',
   ],
 
   adminRoutes: [

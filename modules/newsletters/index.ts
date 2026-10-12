@@ -364,6 +364,8 @@ const newslettersModule: GatewazeModule = {
     'migrations/088_drop_snapshot_finder_overload.sql',
     // Snapshot editions whose send has started, not only completed ones.
     'migrations/089_snapshot_in_progress_sends.sql',
+    // Reject a newsletter_sends insert without a preheader (Gmail spams mail without one).
+    'migrations/090_require_send_preheader.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
