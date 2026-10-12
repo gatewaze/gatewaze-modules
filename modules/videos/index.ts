@@ -21,7 +21,7 @@ const videosModule: GatewazeModule = {
   description:
     'Video masters, shorts and scheduled publication. Editors upload against a talk or episode; '
     + 'Gatewaze holds the file and publishes on a schedule.',
-  version: '1.8.0',
+  version: '1.9.0',
   features: ['videos', 'videos.manage', 'videos.edit'],
 
   dependencies: ['content-platform'],
@@ -52,6 +52,10 @@ const videosModule: GatewazeModule = {
     // 012 gives a connection non-secret settings (a feed URL, an OP3 show
     // uuid), with a CHECK that refuses anything that looks like a token.
     'migrations/012_connection_config.sql',
+    // 013 lets a video belong to a whole podcast. assign_video_subject() has
+    // accepted 'podcast' since 010 while the table's CHECK rejected it, so
+    // the function accepted the value and the INSERT then failed.
+    'migrations/013_podcast_subject.sql',
   ],
 
   apiRoutes: async (app: unknown, ctx?: unknown) => {
