@@ -22,6 +22,7 @@ import { LumaSearchScraperFast } from './scrapers/LumaSearchScraperFast.js';
 import { LumaCategoryScraperFast } from './scrapers/LumaCategoryScraperFast.js';
 import { LinuxFoundationEventsScraper } from './scrapers/LinuxFoundationEventsScraper.js';
 import { AaifVirtualEventsScraper } from './scrapers/AaifVirtualEventsScraper.js';
+import { GatewazePortalEventsScraper } from './scrapers/GatewazePortalEventsScraper.js';
 import { TopicMatcher } from './scrapers/TopicMatcher.js';
 import { GeocodingService } from './scrapers/GeocodingService.js';
 import { EventProcessor } from './scrapers/EventProcessor.js';
@@ -170,6 +171,9 @@ const scraperClasses = {
   // (home.mlops.community/public/events). Pure HTTP; parses the Next.js
   // __NEXT_DATA__ event list + drills each future event's detail page.
   'AaifVirtualEventsScraper': AaifVirtualEventsScraper,
+  // Another Gatewaze brand's public events, read from its /api/portal/events
+  // JSON API (e.g. every aaif.live event into tech.tickets). Pure HTTP.
+  'GatewazePortalEventsScraper': GatewazePortalEventsScraper,
 };
 
 // ──────────────────────────────────────────────────────────────────────
