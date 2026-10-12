@@ -23,6 +23,7 @@ import { LumaCategoryScraperFast } from './scrapers/LumaCategoryScraperFast.js';
 import { LinuxFoundationEventsScraper } from './scrapers/LinuxFoundationEventsScraper.js';
 import { AaifVirtualEventsScraper } from './scrapers/AaifVirtualEventsScraper.js';
 import { GatewazePortalEventsScraper } from './scrapers/GatewazePortalEventsScraper.js';
+import { fetchImage } from './lib/guarded-fetch.js';
 import { TopicMatcher } from './scrapers/TopicMatcher.js';
 import { GeocodingService } from './scrapers/GeocodingService.js';
 import { EventProcessor } from './scrapers/EventProcessor.js';
@@ -582,12 +583,14 @@ export async function runScraperJob(jobId, logger, bullmqJob = null) {
 
           if (cleanedEvent.coverImageUrl) {
             try {
-              const fetch = (await import('node-fetch')).default;
-              const response = await fetch(cleanedEvent.coverImageUrl);
-              if (response.ok) {
-                const imageBuffer = Buffer.from(await response.arrayBuffer());
+              // The cover URL comes from the scraped source. Fetch it through
+              // the guard so a source cannot point (or redirect) the worker at
+              // an internal address and read the reply back from the bucket.
+              const image = await fetchImage(cleanedEvent.coverImageUrl);
+              if (image) {
+                const imageBuffer = image.buffer;
                 let fileExtension = 'jpg';
-                const contentType = response.headers.get('content-type');
+                const contentType = image.contentType;
                 if (contentType) {
                   if (contentType.includes('png')) fileExtension = 'png';
                   else if (contentType.includes('webp')) fileExtension = 'webp';

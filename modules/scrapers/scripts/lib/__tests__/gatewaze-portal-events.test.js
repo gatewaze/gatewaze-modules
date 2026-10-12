@@ -91,6 +91,8 @@ describe('resolveSource', () => {
     ['cluster service name', 'https://aaif-api.gatewaze.svc.cluster.local'],
     ['credentials', 'https://user:pw@api.aaif.live'],
     ['odd port', 'https://api.aaif.live:8443'],
+    ['trailing-dot localhost', 'https://localhost./'],
+    ['trailing-dot cluster name', 'https://kubernetes.default.svc./'],
     ['empty', ''],
   ]) {
     test(`rejects a ${label} base_url`, () => {

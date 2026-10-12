@@ -506,12 +506,20 @@ export class EventProcessor {
         eventLink = eventLink.trim().replace(/\/+$/, '');
 
         // Check for event_link match (both with and without trailing slash)
-        // This prevents duplicates when one URL has a trailing slash and another doesn't
-        const { data: linkMatches } = await supabase
-          .from('events')
-          .select('id, luma_event_id, source_event_id')
-          .or(`event_link.eq.${eventLink},event_link.eq.${eventLink}/`)
-          .limit(1);
+        // This prevents duplicates when one URL has a trailing slash and another doesn't.
+        // The link comes from the scraped source, so match it with .eq(), one
+        // form at a time, and never interpolate it into an .or() filter: a
+        // comma or parenthesis in the URL would add filter clauses there and
+        // match an unrelated event, which the caller then overwrites.
+        let linkMatches = null;
+        for (const candidate of [eventLink, `${eventLink}/`]) {
+          const { data } = await supabase
+            .from('events')
+            .select('id, luma_event_id, source_event_id')
+            .eq('event_link', candidate)
+            .limit(1);
+          if (data && data.length > 0) { linkMatches = data; break; }
+        }
 
         if (linkMatches && linkMatches.length > 0) {
           // If we have a lumaEventId but the existing event doesn't, we'll backfill it on update

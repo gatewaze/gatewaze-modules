@@ -76,7 +76,8 @@ export function isPublicHttpsUrl(value) {
   if (u.protocol !== 'https:') return false;
   if (u.username || u.password) return false;
   if (u.port && u.port !== '443') return false;
-  const host = u.hostname.toLowerCase();
+  // A trailing dot ("localhost.") names the same host; drop it before the checks.
+  const host = u.hostname.toLowerCase().replace(/\.+$/, '');
   if (!host || !host.includes('.')) return false;
   if (host === 'localhost' || isIpLiteral(host)) return false;
   if (BLOCKED_HOST_SUFFIXES.some((s) => host.endsWith(s))) return false;
