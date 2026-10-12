@@ -18,14 +18,16 @@ interface EventConditionFieldsProps {
   onChange: (condition: SegmentCondition) => void;
 }
 
-// Filterable properties of the event itself (map to events columns for
-// event_registered/event_attended; to event_data keys for other event types).
+// Filterable properties of the event itself. Registrations, attendance,
+// discount claims, competition entries and offers map these to their own
+// tables (segments migrations 007 and 017); other event types read
+// people_events.event_data keys.
 const EVENT_FILTER_PROPERTIES = [
   { value: 'event_city', label: 'Event city' },
   { value: 'event_country_code', label: 'Event country (ISO-2)' },
   { value: 'event_title', label: 'Event title' },
   { value: 'event_id', label: 'Event ID' },
-  { value: 'status', label: 'Registration status' },
+  { value: 'status', label: 'Status (registration, claim or entry)' },
 ];
 const EVENT_FILTER_OPERATORS: { value: AttributeOperator; label: string }[] = [
   { value: 'equals', label: 'is' },
