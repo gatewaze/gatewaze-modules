@@ -164,6 +164,14 @@ export default async function spec(job, ctx) {
     await enqueuePhase(ctx, run.id, 'review');
     return { ok: true, branch };
   } catch (e) {
+    if (e?.code === 'github_rate_limit' && ctx?.enqueueJob && Number.isFinite(e.retryAt)) {
+      const delay=Math.max(60000,e.retryAt-Date.now());
+      const reason='Waiting for GitHub API quota; automatic retry after '+new Date(Date.now()+delay).toISOString();
+      await recordPhaseEnd(supabase,run,'spec','blocked',reason);
+      await supabase.from('se_runs').update({status:'blocked',current_phase:'spec',error:reason}).eq('id',run.id);
+      await ctx.enqueueJob('se','software-engineer:spec',{runId:run.id,attempt:attempt+1},{delay,jobId:`se-run-${run.id}-spec-quota-${Math.ceil(e.retryAt/1000)}`,removeOnComplete:true,removeOnFail:true});
+      return {deferred:true};
+    }
     const msg = redactToken(e?.message || String(e), token);
     await recordPhaseEnd(supabase, run, 'spec', 'failed', msg);
     await supabase.from('se_runs').update({ status: 'failed', error: msg }).eq('id', run.id);

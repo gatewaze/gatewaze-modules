@@ -11,6 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const gh = vi.hoisted(() => ({
+  quotaError: null as any,
   putFileCalls: [] as any[],
   setStatusLabelCalls: [] as any[],
   removeLabelCalls: [] as any[],
@@ -20,7 +21,7 @@ const gh = vi.hoisted(() => ({
 }));
 vi.mock('../../lib/github.js', () => ({
   githubClient: () => ({
-    getIssue: async (_o: string, _n: string, num: number) => (num === 53 ? gh.issue : gh.depIssue),
+    getIssue: async (_o: string, _n: string, num: number) => { if(gh.quotaError)throw gh.quotaError;return num === 53 ? gh.issue : gh.depIssue; },
     putFile: async (...args: any[]) => { gh.putFileCalls.push(args); },
     setStatusLabel: async (...args: any[]) => { gh.setStatusLabelCalls.push(args); },
     removeLabel: async (...args: any[]) => { gh.removeLabelCalls.push(args); },
@@ -226,4 +227,14 @@ describe('spec worker', () => {
     expect(result).toEqual({ ok: true, branch: expect.any(String) });
     expect(rs.ends.at(-1)).toMatchObject({ phase: 'spec', status: 'passed' });
   });
+});
+
+it('GitHub quota exhaustion defers spec without spending model calls',async()=>{
+ const {supabase,updates}=mockSupabase();const enqueueJob=vi.fn(async()=>({id:'retry'}));
+ gh.quotaError=Object.assign(new Error('rate limit'),{code:'github_rate_limit',retryAt:Date.now()+120000});
+ try {
+  const result=await spec({data:{runId:'run-1'}},{supabase,enqueueJob});
+  expect(result).toEqual({deferred:true});expect(updates.some(v=>v.row?.status==='blocked')).toBe(true);
+  expect(enqueueJob).toHaveBeenCalledWith('se','software-engineer:spec',expect.objectContaining({attempt:2}),expect.objectContaining({delay:expect.any(Number),removeOnComplete:true}));
+ } finally {gh.quotaError=null;}
 });
