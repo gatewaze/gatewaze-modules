@@ -57,6 +57,9 @@ const segmentsModule: GatewazeModule = {
     // 016 email_engagement condition source: include/exclude by what a person
     // was sent / opened / clicked for a specific broadcast or newsletter edition.
     'migrations/016_email_engagement_condition.sql',
+    // 017 discount_claimed / competition_entered / offer_* read their modules'
+    // own tables instead of the people_events stream.
+    'migrations/017_module_event_sources.sql',
   ],
 
   publicApiScopes: [
