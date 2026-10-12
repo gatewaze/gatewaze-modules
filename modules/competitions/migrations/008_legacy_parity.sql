@@ -29,7 +29,10 @@ ALTER TABLE public.events_competitions
   DROP CONSTRAINT IF EXISTS events_competitions_status_check;
 ALTER TABLE public.events_competitions
   ADD CONSTRAINT events_competitions_status_check
-    CHECK (status IN ('draft', 'active', 'closed', 'completed', 'cancelled'));
+    -- pending_review and rejected come from 004 (content triage) and must
+    -- stay, or the triage adapter's writes fail.
+    CHECK (status IN ('draft', 'active', 'closed', 'completed', 'cancelled',
+                      'pending_review', 'rejected'));
 
 -- Was FOR ALL TO authenticated USING (true): any signed-in member could create,
 -- rewrite or delete a competition. Reads stay open, writes are admin only.

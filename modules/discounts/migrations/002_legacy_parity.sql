@@ -84,10 +84,30 @@ CREATE TRIGGER events_discount_secrets_updated_at
 ALTER TABLE public.events_discount_secrets ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.events_discount_secrets FROM anon;
 
+-- Narrower than is_admin(), which also admits the 'editor' role: an editor
+-- can manage discount copy but has no need to read a Luma account key.
+CREATE OR REPLACE FUNCTION public.events_can_manage_discount_secrets()
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT EXISTS (
+    SELECT 1 FROM public.admin_profiles
+    WHERE user_id = auth.uid()
+      AND is_active = true
+      AND role IN ('super_admin', 'admin')
+  );
+$$;
+REVOKE ALL ON FUNCTION public.events_can_manage_discount_secrets() FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.events_can_manage_discount_secrets() TO authenticated;
+
 DROP POLICY IF EXISTS "events_discount_secrets_admin_all" ON public.events_discount_secrets;
 CREATE POLICY "events_discount_secrets_admin_all"
   ON public.events_discount_secrets FOR ALL TO authenticated
-  USING (public.is_admin()) WITH CHECK (public.is_admin());
+  USING (public.events_can_manage_discount_secrets())
+  WITH CHECK (public.events_can_manage_discount_secrets());
 
 -- If a brand ever had luma_api_key added to events_discounts by hand, move the
 -- values into the secrets table and drop the public column.
@@ -358,6 +378,36 @@ BEGIN
 END;
 $$;
 
+-- A pool code is claimable only while its discount is open. The original
+-- function ignored the discount entirely, so a direct RPC call could still
+-- draw codes from a closed, cancelled or past-close-date discount that the
+-- portal UI had hidden. is_active = false marks a Luma reservation in flight
+-- (see events_reserve_luma_code), which must never be handed out as a pool code.
+CREATE OR REPLACE FUNCTION public.events_discount_code_is_claimable(p_code_id uuid)
+RETURNS boolean
+LANGUAGE sql
+STABLE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+  SELECT EXISTS (
+    SELECT 1
+    FROM public.events_discount_codes dc
+    LEFT JOIN public.events_discounts d ON d.id = dc.discount_id
+    WHERE dc.id = p_code_id
+      AND dc.issued = false
+      AND dc.status = 'active'
+      AND dc.is_active
+      AND (dc.valid_from  IS NULL OR dc.valid_from  <= now())
+      AND (dc.valid_until IS NULL OR dc.valid_until >  now())
+      AND (dc.discount_id IS NULL
+           OR (d.status = 'active' AND (d.close_date IS NULL OR d.close_date > now())))
+  );
+$$;
+-- Supabase's default privileges grant EXECUTE to anon and authenticated
+-- explicitly, so revoking from PUBLIC alone would leave them able to call it.
+REVOKE ALL ON FUNCTION public.events_discount_code_is_claimable(uuid) FROM PUBLIC, anon, authenticated;
+
 CREATE OR REPLACE FUNCTION public.events_get_available_codes_count(p_event_id text)
 RETURNS bigint
 LANGUAGE sql
@@ -368,11 +418,10 @@ AS $$
   SELECT COUNT(*)
   FROM public.events_discount_codes dc
   LEFT JOIN public.events e ON e.id = dc.event_id
-  WHERE dc.issued = false
-    AND dc.status = 'active'
-    AND (e.event_id = p_event_id
+  WHERE (e.event_id = p_event_id
          OR dc.event_id::text = p_event_id
-         OR dc.legacy_event_ref = p_event_id);
+         OR dc.legacy_event_ref = p_event_id)
+    AND public.events_discount_code_is_claimable(dc.id);
 $$;
 
 DROP FUNCTION IF EXISTS public.events_issue_code_to_user(text, text);
@@ -389,11 +438,18 @@ DECLARE
   v_id       uuid;
   v_code     text;
   v_discount uuid;
+  v_max      integer;
+  v_issued   bigint;
 BEGIN
   IF v_email = '' OR lower(trim(coalesce(p_user_email, ''))) <> v_email THEN
     RETURN QUERY SELECT false, NULL::text, 'Sign in to claim a code';
     RETURN;
   END IF;
+
+  -- Serialise claims by the same person for the same event. Without this, two
+  -- parallel calls both passed the "already has a code" check and each took a
+  -- different code, so one person could hold as many codes as requests sent.
+  PERFORM pg_advisory_xact_lock(hashtextextended('events_issue_code:' || v_email || '|' || p_event_id, 0));
 
   SELECT dc.code INTO v_existing
   FROM public.events_discount_codes dc
@@ -408,13 +464,13 @@ BEGIN
     RETURN;
   END IF;
 
-  -- Oldest unissued code, locked so two concurrent claims never get the same one.
+  -- Oldest claimable code, locked so concurrent claims by different people
+  -- never get the same one.
   SELECT dc.id, dc.code, dc.discount_id INTO v_id, v_code, v_discount
   FROM public.events_discount_codes dc
   LEFT JOIN public.events e ON e.id = dc.event_id
-  WHERE dc.issued = false
-    AND dc.status = 'active'
-    AND (e.event_id = p_event_id OR dc.event_id::text = p_event_id OR dc.legacy_event_ref = p_event_id)
+  WHERE (e.event_id = p_event_id OR dc.event_id::text = p_event_id OR dc.legacy_event_ref = p_event_id)
+    AND public.events_discount_code_is_claimable(dc.id)
   ORDER BY dc.created_at ASC
   LIMIT 1
   FOR UPDATE OF dc SKIP LOCKED;
@@ -424,16 +480,33 @@ BEGIN
     RETURN;
   END IF;
 
+  -- Honour the discount's cap. The lock (taken after the per-person lock, in
+  -- that order everywhere, so the two never deadlock) stops parallel claims by
+  -- different people overshooting it.
+  IF v_discount IS NOT NULL THEN
+    SELECT max_codes INTO v_max FROM public.events_discounts WHERE id = v_discount;
+    IF v_max IS NOT NULL THEN
+      PERFORM pg_advisory_xact_lock(hashtextextended('events_discount:' || v_discount::text, 0));
+      SELECT COUNT(*) INTO v_issued FROM public.events_discount_codes
+      WHERE discount_id = v_discount AND issued_to IS NOT NULL;
+      IF v_issued >= v_max THEN
+        RETURN QUERY SELECT false, NULL::text, 'No codes available - all claimed';
+        RETURN;
+      END IF;
+    END IF;
+  END IF;
+
   UPDATE public.events_discount_codes
      SET issued = true, issued_to = v_email, issued_at = now()
    WHERE id = v_id;
 
   -- Keep the claims record in step for pool discounts, which is what the
-  -- admin event tab shows for them.
+  -- admin event tab shows for them. Never step a claim backwards: a claim an
+  -- admin has moved on to deposit-initiated or deposit-paid keeps that status.
   IF v_discount IS NOT NULL THEN
     UPDATE public.events_discount_claims
-       SET status = 'code-issued',
-           code_issued_at = now(),
+       SET status = CASE WHEN status IN ('viewed', 'accepted', 'sold-out') THEN 'code-issued' ELSE status END,
+           code_issued_at = coalesce(code_issued_at, now()),
            accepted_at = coalesce(accepted_at, now())
      WHERE discount_id = v_discount AND lower(email) = v_email;
     IF NOT FOUND THEN
@@ -446,6 +519,87 @@ BEGIN
   RETURN QUERY SELECT true, v_code, 'Code issued successfully';
 END;
 $$;
+
+-- Luma mode mints a real single-use coupon at Luma for each claim, so the
+-- slot must be held BEFORE the coupon exists. The issuing edge function
+-- calls this first; it returns one of:
+--   'reserved' (code_id = a placeholder row held for this person),
+--   'existing' (code = the code they already have),
+--   'pending'  (another request for this person is mid-mint; retry),
+--   'sold_out', 'closed'.
+-- The per-discount lock makes the one-per-person check and the max_codes
+-- count atomic, which an edge function cannot do across separate requests.
+-- The function then mints, and replaces the placeholder with the real code
+-- (or deletes it if minting failed). Service role only.
+CREATE OR REPLACE FUNCTION public.events_reserve_luma_code(p_discount_id uuid, p_email text)
+RETURNS TABLE(status text, code_id uuid, code text)
+LANGUAGE plpgsql
+VOLATILE
+SECURITY DEFINER
+SET search_path = public
+AS $$
+DECLARE
+  v_email    text := lower(trim(coalesce(p_email, '')));
+  d          record;
+  v_existing text;
+  v_issued   bigint;
+  v_id       uuid;
+BEGIN
+  IF v_email = '' THEN
+    RAISE EXCEPTION 'email required';
+  END IF;
+
+  PERFORM pg_advisory_xact_lock(hashtextextended('events_discount:' || p_discount_id::text, 0));
+
+  -- A reservation abandoned by a crashed or timed-out request must not block
+  -- the person (or hold a capped slot) forever.
+  DELETE FROM public.events_discount_codes
+   WHERE discount_id = p_discount_id
+     AND code LIKE 'PENDING-%'
+     AND created_at < now() - interval '15 minutes';
+
+  SELECT id, event_id, status AS dstatus, close_date, max_codes INTO d
+  FROM public.events_discounts WHERE id = p_discount_id;
+  IF NOT FOUND OR d.dstatus <> 'active' OR (d.close_date IS NOT NULL AND d.close_date <= now()) THEN
+    RETURN QUERY SELECT 'closed'::text, NULL::uuid, NULL::text;
+    RETURN;
+  END IF;
+
+  SELECT dc.code INTO v_existing
+  FROM public.events_discount_codes dc
+  WHERE dc.discount_id = p_discount_id AND lower(dc.issued_to) = v_email
+  ORDER BY dc.created_at
+  LIMIT 1;
+  IF FOUND THEN
+    IF v_existing LIKE 'PENDING-%' THEN
+      RETURN QUERY SELECT 'pending'::text, NULL::uuid, NULL::text;
+    ELSE
+      RETURN QUERY SELECT 'existing'::text, NULL::uuid, v_existing;
+    END IF;
+    RETURN;
+  END IF;
+
+  IF d.max_codes IS NOT NULL THEN
+    SELECT COUNT(*) INTO v_issued FROM public.events_discount_codes
+    WHERE discount_id = p_discount_id AND issued_to IS NOT NULL;
+    IF v_issued >= d.max_codes THEN
+      RETURN QUERY SELECT 'sold_out'::text, NULL::uuid, NULL::text;
+      RETURN;
+    END IF;
+  END IF;
+
+  INSERT INTO public.events_discount_codes
+    (event_id, discount_id, code, issued, issued_to, status, is_active, source)
+  VALUES
+    (d.event_id, p_discount_id, 'PENDING-' || gen_random_uuid()::text, false, v_email, 'active', false, 'luma')
+  RETURNING id INTO v_id;
+
+  RETURN QUERY SELECT 'reserved'::text, v_id, NULL::text;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.events_reserve_luma_code(uuid, text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.events_reserve_luma_code(uuid, text) TO service_role;
 
 -- The portal shows "n of max claimed"; it previously counted issued rows
 -- directly, which needed the public read policy removed in section 5.

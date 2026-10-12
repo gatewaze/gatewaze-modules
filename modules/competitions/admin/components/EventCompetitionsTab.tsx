@@ -39,6 +39,7 @@ interface CompetitionEntry {
   competition_id: string;
   email: string;
   member_profile_id: string | null;
+  person_id?: string | null;
   status: string;
   entered_at: string | null;
   viewed_at: string | null;
@@ -156,14 +157,38 @@ const MultiSelectFilter = ({
 };
 
 interface EventCompetitionsTabProps {
-  eventId: string;
+  eventId: string; // events.id (uuid)
+  // The event detail page passes the full event; its eventId is the short
+  // text id (events.event_id) that events_competition_winners is keyed by.
+  event?: { eventId?: string | null } | null;
   eventTitle?: string;
   eventStart?: string;
   eventEnd?: string;
   offerTicketDetails?: string;
 }
 
-export const EventCompetitionsTab = ({ eventId, eventTitle, eventStart, eventEnd, offerTicketDetails }: EventCompetitionsTabProps) => {
+export const EventCompetitionsTab = ({ eventId, event, eventTitle, eventStart, eventEnd, offerTicketDetails }: EventCompetitionsTabProps) => {
+  // events_competition_winners.event_id holds the short text event id, not
+  // the uuid. Resolve it once from the event when the page did not pass it.
+  const [winnerEventId, setWinnerEventId] = useState<string>(event?.eventId || '');
+  useEffect(() => {
+    if (event?.eventId) {
+      setWinnerEventId(event.eventId);
+      return;
+    }
+    let cancelled = false;
+    supabase
+      .from('events')
+      .select('event_id')
+      .eq('id', eventId)
+      .maybeSingle()
+      .then(({ data }) => {
+        if (!cancelled && data?.event_id) setWinnerEventId(data.event_id);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [eventId, event?.eventId]);
   const [competitions, setCompetitions] = useState<Competition[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -309,26 +334,31 @@ export const EventCompetitionsTab = ({ eventId, eventTitle, eventStart, eventEnd
 
       if (error) throw error;
 
-      // Fetch profile data via member_profiles -> customers -> attributes
+      // Fetch profile data via people_profiles -> customers -> attributes
       const entriesWithProfiles = await Promise.all(
         (entriesData || []).map(async (entry) => {
-          if (!entry.member_profile_id) {
+          if (!entry.person_id && !entry.member_profile_id) {
             return { ...entry };
           }
 
           try {
-            // Get member profile to find person_id
-            const { data: profile } = await supabase
-              .from('people_profiles')
-              .select('id, person_id')
-              .eq('id', entry.member_profile_id)
-              .maybeSingle();
+            // Entries carry person_id directly when the entrant has a people
+            // row; otherwise go through the member profile.
+            let personId: string | null = entry.person_id || null;
+            if (!personId) {
+              const { data: profile } = await supabase
+                .from('people_profiles')
+                .select('id, person_id')
+                .eq('id', entry.member_profile_id)
+                .maybeSingle();
+              personId = profile?.person_id || null;
+            }
 
-            if (profile?.person_id) {
+            if (personId) {
               const { data: customer } = await supabase
                 .from('people')
                 .select('id, attributes')
-                .eq('id', profile.person_id)
+                .eq('id', personId)
                 .maybeSingle();
 
               if (customer?.attributes) {
@@ -358,8 +388,7 @@ export const EventCompetitionsTab = ({ eventId, eventTitle, eventStart, eventEnd
       const { data: winnersData } = await supabase
         .from('events_competition_winners')
         .select('email, status')
-        .eq('competition_id', competitionId)
-        .eq('event_id', eventId);
+        .eq('competition_id', competitionId);
 
       if (winnersData && winnersData.length > 0) {
         const winnerEmails = new Set(winnersData.map((w: { email: string }) => w.email));
@@ -484,7 +513,7 @@ export const EventCompetitionsTab = ({ eventId, eventTitle, eventStart, eventEnd
       if (toAdd.length > 0) {
         const winnersToInsert = toAdd.map((email) => ({
           email,
-          event_id: eventId,
+          event_id: winnerEventId || null,
           competition_id: competition.id,
           status: 'selected',
         }));
@@ -502,7 +531,6 @@ export const EventCompetitionsTab = ({ eventId, eventTitle, eventStart, eventEnd
           .from('events_competition_winners')
           .delete()
           .eq('competition_id', competition.id)
-          .eq('event_id', eventId)
           .in('email', toRemove);
 
         if (error) throw error;
@@ -757,7 +785,6 @@ export const EventCompetitionsTab = ({ eventId, eventTitle, eventStart, eventEnd
             .from('events_competition_winners')
             .update({ status: 'notified', notified_at: new Date().toISOString() })
             .eq('competition_id', compId)
-            .eq('event_id', eventId)
             .eq('email', emailEntry.email);
           setWinnerStatusMap((prev) => ({
             ...prev,
@@ -1043,7 +1070,6 @@ export const EventCompetitionsTab = ({ eventId, eventTitle, eventStart, eventEnd
         .from('events_competition_winners')
         .update(updateData)
         .eq('competition_id', competitionId)
-        .eq('event_id', eventId)
         .eq('email', email);
 
       if (error) throw error;
