@@ -82,12 +82,41 @@ describe('toPlainText', () => {
     expect(toPlainText('<img src=x onerror=alert(1)>caption')).toBe('caption');
   });
 
-  it('decodes entities AFTER stripping, so an escaped tag cannot come back', () => {
-    // Decoding first would turn "&lt;script&gt;" into "<script>" and then
-    // leave it in place, which is the whole trick.
-    expect(toPlainText('&lt;script&gt;alert(1)&lt;/script&gt;')).toBe('<script>alert(1)</script>');
+  it('decodes entities first, so an escaped tag becomes a tag and is then removed', () => {
+    // Decoding last leaves the literal text "<script>" in the column, which
+    // is safe only while every reader escapes it. CodeQL flagged exactly that.
+    expect(toPlainText('&lt;script&gt;alert(1)&lt;/script&gt;')).toBe('alert(1)');
     expect(toPlainText('Q&amp;A')).toBe('Q&A');
     expect(toPlainText('a&nbsp;b')).toBe('a b');
+    // A double-escaped entity is text, and stays text.
+    expect(toPlainText('&amp;lt;b&amp;gt;')).toBe('&lt;b&gt;');
+  });
+
+  it('strips to a fixed point, so one pass cannot splice a new tag', () => {
+    // A single `.replace(/<[^>]*>/g, '')` can leave the halves of two
+    // fragments adjacent and form a tag that was not in the input.
+    //
+    // What survives is inert text, not reconstructed intent: "<scr<x>ipt>"
+    // leaves the characters "ipt" behind. That is the right outcome. The
+    // guarantee is that no tag survives, not that a mangled input is tidied.
+    expect(toPlainText('<scr<x>ipt>alert(1)')).toBe('iptalert(1)');
+    expect(toPlainText('<<script>script>alert(1)<</script>/script>')).toBe('script>alert(1)/script>'.replace(/[<>]/g, ''));
+  });
+
+  it('never returns an angle bracket at all', () => {
+    // The guarantee the rest of the system can rely on: whatever the feed
+    // sent, no element can be rebuilt from what is stored.
+    for (const input of [
+      '<script>x</script>',
+      '&lt;script&gt;x&lt;/script&gt;',
+      '<scr<x>ipt>x',
+      '<img src=x onerror=alert(1)>x',
+      'a < b and c > d',
+      '&lt;&lt;&gt;&gt;',
+    ]) {
+      const out = toPlainText(input) ?? '';
+      expect(out, `input: ${input}`).not.toMatch(/[<>]/);
+    }
   });
 
   it('returns null rather than an empty string', () => {

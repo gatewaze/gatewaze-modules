@@ -94,22 +94,42 @@ export function episodeSlug(title: string, episodeNumber: number | null): string
  * is exactly that careless call. Stripping at the boundary means no renderer
  * has to be careful.
  *
- * Block-level tags become a space so sentences do not run together, and the
- * five XML entities are decoded after the tags are gone.
+ * Three things about the order, each of which was wrong in the first version
+ * and caught by CodeQL as "incomplete multi-character sanitization":
+ *
+ *   - Entities are decoded FIRST. Decoding afterwards leaves the literal text
+ *     "<script>" sitting in the column, which is safe only for as long as
+ *     every reader escapes it. Decoding first turns an escaped tag into a tag,
+ *     which the next step then removes.
+ *   - Tags are stripped to a FIXED POINT. One pass can splice what is left of
+ *     two fragments into a tag that was not there before, e.g. "<scr<x>ipt>"
+ *     leaves "ipt>" from one angle and can reassemble from another.
+ *   - Any angle bracket that survives all of that is dropped. After this, no
+ *     element can be reconstructed from the output however it is later
+ *     rendered, so no downstream renderer has to be careful.
  */
 export function toPlainText(value: string | null | undefined): string | null {
   if (typeof value !== 'string') return null;
-  const text = value
-    // A <br> or </p> is a sentence boundary, not nothing.
-    .replace(/<\s*(br|\/p|\/div|\/li|\/h[1-6])\s*\/?\s*>/gi, ' ')
-    .replace(/<[^>]*>/g, '')
-    // After the tags, so "&lt;script&gt;" cannot be decoded back into a tag.
+
+  let text = value
     .replace(/&nbsp;/gi, ' ')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#3[49];|&apos;/g, "'")
-    .replace(/&amp;/g, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#3[49];|&apos;/gi, "'")
+    .replace(/&amp;/gi, '&');
+
+  // A <br> or </p> is a sentence boundary, not nothing.
+  text = text.replace(/<\s*(br|\/p|\/div|\/li|\/h[1-6])\s*\/?\s*>/gi, ' ');
+
+  let previous: string;
+  do {
+    previous = text;
+    text = text.replace(/<[^>]*>/g, '');
+  } while (text !== previous);
+
+  text = text
+    .replace(/[<>]/g, '')
     .replace(/\s+/g, ' ')
     .trim();
   return text.length > 0 ? text : null;
