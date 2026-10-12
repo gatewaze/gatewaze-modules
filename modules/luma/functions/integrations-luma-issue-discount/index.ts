@@ -27,10 +27,11 @@ function escapeLike(value: string): string {
 
 function generateCode(): string {
   const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789' // omit ambiguous chars (O, 0, I, 1)
+  // A coupon code is a bearer credential for a discounted ticket, so draw it
+  // from the CSPRNG. 32 divides 256 exactly, so the modulo has no bias.
+  const bytes = crypto.getRandomValues(new Uint8Array(8))
   let suffix = ''
-  for (let i = 0; i < 8; i++) {
-    suffix += chars[Math.floor(Math.random() * chars.length)]
-  }
+  for (const b of bytes) suffix += chars[b % chars.length]
   return `TT-${suffix}`
 }
 
@@ -101,7 +102,7 @@ async function handler(req: Request) {
     // events_reserve_luma_code below.
     const { data: discount, error: discountError } = await supabase
       .from('events_discounts')
-      .select('id, luma_event_api_id, luma_percent_off')
+      .select('id, luma_event_api_id, luma_percent_off, max_codes')
       .eq('id', discount_id)
       .maybeSingle()
 
@@ -112,14 +113,27 @@ async function handler(req: Request) {
       })
     }
 
-    // The per-discount key lives off the public discount row. Fall back to the
-    // platform-wide key when the discount has none.
+    // Mint only with the key saved on THIS discount, as the original app did.
+    // No fallback to the platform-wide LUMA_API_KEY: an editor can set
+    // luma_event_api_id on a discount but cannot read or write keys, and a
+    // fallback would let them mint coupons on any event in the platform's
+    // Luma account.
     const { data: secret } = await supabase
       .from('events_discount_secrets')
       .select('luma_api_key')
       .eq('discount_id', discount.id)
       .maybeSingle()
-    const lumaApiKey = secret?.luma_api_key || Deno.env.get('LUMA_API_KEY') || ''
+    const lumaApiKey = secret?.luma_api_key || ''
+
+    // An uncapped Luma discount would mint coupons without limit. Where sign-up
+    // is open and new addresses are auto-confirmed, one person can hold many
+    // addresses, so the cap is the only bound on the loss. Require one.
+    if (discount.luma_event_api_id && discount.max_codes == null) {
+      return new Response(JSON.stringify({ success: false, error: 'This discount is not configured for dynamic code generation' }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      })
+    }
 
     if (!discount.luma_event_api_id || !lumaApiKey) {
       return new Response(JSON.stringify({ success: false, error: 'This discount is not configured for dynamic code generation' }), {

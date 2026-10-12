@@ -148,7 +148,8 @@ async function handler(req: Request) {
     return new Response(
       JSON.stringify({
         success: false,
-        error: error.message || 'Failed to track offer interaction',
+        // Internal error text stays in the logs; this endpoint is public.
+        error: 'Failed to track offer interaction',
       }),
       {
         status: 500,

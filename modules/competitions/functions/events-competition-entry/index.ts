@@ -252,9 +252,11 @@ Deno.serve(async (req) => {
 
   } catch (error) {
     console.error('❌ Competition entry error:', error)
+    // Internal error text (parse failures, DB errors) stays in the logs; this
+    // endpoint is public.
     return new Response(JSON.stringify({
       success: false,
-      error: error instanceof Error ? error.message : 'Unknown error'
+      error: 'Something went wrong. Please try again.'
     }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
