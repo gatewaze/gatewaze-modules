@@ -11,14 +11,14 @@ import { test, describe, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 
-import { FetchRefused, fetchImage, guardedFetch, isPrivateAddress } from '../guarded-fetch.js';
+import { FetchRefused, fetchImage, guardedFetch, isPrivateAddress, looksLikeImage } from '../guarded-fetch.js';
 
 describe('isPrivateAddress', () => {
   for (const ip of [
     '10.1.2.3', '127.0.0.1', '0.0.0.0', '172.16.0.1', '172.31.255.255', '192.168.1.1',
     '169.254.169.254', '100.64.0.1', '224.0.0.1', '255.255.255.255',
     '::1', '::', 'fd00::1', 'fe80::1', '::ffff:169.254.169.254', '::ffff:a9fe:a9fe',
-    '[::1]', 'not-an-ip',
+    '[::1]', 'not-an-ip', '::7f00:1', '2002:7f00:1::1', 'fec0::1', '64:ff9b::a9fe:a9fe',
   ]) {
     test(`refuses ${ip}`, () => assert.equal(isPrivateAddress(ip), true));
   }
@@ -66,5 +66,21 @@ describe('guardedFetch', () => {
   test('fetchImage surfaces the refusal rather than returning bytes', async () => {
     await assert.rejects(fetchImage(`http://127.0.0.1:${port}/a.png`), FetchRefused);
     assert.equal(hits, 0);
+  });
+});
+
+describe('looksLikeImage', () => {
+  const pad = (b) => Buffer.concat([Buffer.from(b), Buffer.alloc(16)]);
+  test('accepts JPEG, PNG, GIF, WebP and AVIF headers', () => {
+    assert.equal(looksLikeImage(pad([0xff, 0xd8, 0xff, 0xe0])), true);
+    assert.equal(looksLikeImage(pad([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])), true);
+    assert.equal(looksLikeImage(pad(Buffer.from('GIF89a'))), true);
+    assert.equal(looksLikeImage(pad(Buffer.from('RIFF\0\0\0\0WEBP'))), true);
+    assert.equal(looksLikeImage(pad(Buffer.from('\0\0\0\x1cftypavif'))), true);
+  });
+  test('refuses text, JSON and SVG', () => {
+    assert.equal(looksLikeImage(Buffer.from('{"AccessKeyId":"AKIA..."}')), false);
+    assert.equal(looksLikeImage(Buffer.from('<svg xmlns="http://www.w3.org/2000/svg"></svg>')), false);
+    assert.equal(looksLikeImage(Buffer.alloc(4)), false);
   });
 });
