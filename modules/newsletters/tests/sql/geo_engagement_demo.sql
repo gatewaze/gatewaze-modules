@@ -36,8 +36,8 @@ BEGIN
   DELETE FROM public.newsletters_edition_blocks WHERE id = v_hot;
   DELETE FROM public.newsletter_sends WHERE id = v_send;
 
-  INSERT INTO public.newsletter_sends (id, edition_id, subject, from_address, status)
-  VALUES (v_send, v_edition, 'Geo demo', 'news@example.test', 'sent');
+  INSERT INTO public.newsletter_sends (id, edition_id, subject, preheader, from_address, status)
+  VALUES (v_send, v_edition, 'Geo demo', 'Geo demo preview', 'news@example.test', 'sent');
 
   -- demo hot_take block + its two option links (enables R4 with real labels)
   INSERT INTO public.newsletters_edition_blocks (id, edition_id, block_type, templates_block_def_id, content, block_order, sort_order)

@@ -1017,6 +1017,7 @@ export default function EditionEditorPage() {
             editionId={edition.id}
             editionDate={edition.edition_date}
             subject={edition.subject || ''}
+            preheader={edition.preheader || ''}
             collection={collection}
             newsletterSlug={newsletterSlug}
             editionStatus={(edition as { status?: string }).status}
