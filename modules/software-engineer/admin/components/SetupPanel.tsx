@@ -529,6 +529,11 @@ export default function SetupPanel(
                           <option value="writable">writable</option>
                           <option value="read_only">read-only</option>
                         </select>
+                        <select aria-label={`Merge policy for ${r.repo_owner}/${r.repo_name}`} value={r.merge_policy ?? 'inherit'} onChange={(e) => patchRepo(r, { merge_policy: e.target.value })} className="rounded border px-1 py-0.5 text-xs">
+                          <option value="inherit">Use project merge policy</option>
+                          <option value="manual">Human merge</option>
+                          <option value="auto_merge_verified">Auto-merge verified changes</option>
+                        </select>
                         <input defaultValue={r.base_branch ?? ''} onBlur={(e) => { if ((e.target.value || null) !== (r.base_branch ?? null)) patchRepo(r, { base_branch: e.target.value || null }); }} placeholder="base" className="w-20 rounded border px-1 py-0.5 text-xs" />
                         <label className="inline-flex items-center gap-1"><input type="checkbox" checked={r.enabled} onChange={() => toggleRepo(r)} className="size-3.5" />on</label>
                         <Button variant="ghost" color="red" size="xs" onClick={() => delRepo(r)}><TrashIcon className="size-4" /></Button>

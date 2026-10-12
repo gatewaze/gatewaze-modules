@@ -69,6 +69,7 @@ const softwareEngineerModule: GatewazeModule = {
     // Renumbered from 029. This branch was cut before 029_reporter_feedback.sql
     // landed on main with the feedback inbox, and the two would have collided.
     'migrations/030_workspace_base.sql',
+    'migrations/031_repo_merge_policy.sql',
   ],
   // This array is the ONLY thing the platform runner reads. It does not glob
   // migrations/ — applyModuleMigrations() iterates these entries, so a .sql on

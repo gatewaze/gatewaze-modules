@@ -96,6 +96,7 @@ export interface CodeRepo {
   baseBranch: string | null;
   checkoutRef?: string;
   enabled: boolean;
+  mergePolicy?: 'inherit' | 'manual' | 'auto_merge_verified';
   mergeEligible: boolean;
   contractOk: boolean;
   branchProtectionOk: boolean;
@@ -153,7 +154,7 @@ export async function resolveCodeRepoProject(sb: unknown, owner: string, name: s
 export async function getCodeRepos(sb: unknown, projectId: string): Promise<CodeRepo[]> {
   const { data } = await sb
     .from('se_repos')
-    .select('repo_owner, repo_name, write_mode, base_branch, preview_ref, enabled, merge_eligible, contract_ok, branch_protection_ok')
+    .select('repo_owner, repo_name, write_mode, base_branch, preview_ref, merge_policy, enabled, merge_eligible, contract_ok, branch_protection_ok')
     .eq('project_id', projectId)
     .eq('enabled', true)
     .order('repo_owner');
@@ -164,6 +165,7 @@ export async function getCodeRepos(sb: unknown, projectId: string): Promise<Code
     baseBranch: r.base_branch ?? null,
     checkoutRef: ((r.repo_owner === 'danthebaker' && r.repo_name === 'gatewaze-modules' && /^staging\/helf-preview\/[0-9a-f]{40}$/.test(r.preview_ref ?? '')) || (r.repo_owner === 'gatewaze' && r.repo_name === 'gatewaze' && /^staging\/helf-app-shell\/[0-9a-f]{40}$/.test(r.preview_ref ?? ''))) ? r.preview_ref : undefined,
     enabled: r.enabled,
+    mergePolicy: r.merge_policy ?? 'inherit',
     mergeEligible: r.merge_eligible,
     contractOk: r.contract_ok,
     branchProtectionOk: r.branch_protection_ok,

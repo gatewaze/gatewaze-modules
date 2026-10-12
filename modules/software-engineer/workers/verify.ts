@@ -5,6 +5,8 @@
  * NOTE: a deeper per-repo pragma validator pass is a follow-up; this does a focused security review
  * of the run's diff via the model and gates on its verdict.
  */
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { createClient } from '@supabase/supabase-js';
 import { getProject, getCodeRepos } from '../lib/credentials.js';
 import { enqueuePhase } from '../lib/enqueue.js';
@@ -41,9 +43,14 @@ export default async function verify(job, ctx) {
     const changedRepos = prs.filter((p) => p.state !== 'error');
     const codeRepos = (await getCodeRepos(supabase, run.project_id))
       .filter((r) => changedRepos.some((p) => p.repo_owner === r.repoOwner && p.repo_name === r.repoName))
-      .map((r) => ({ ...r, writeMode: 'read_only', baseBranch: run.branch_name }));
+      .map((r) => ({ ...r, checkoutRef: undefined, writeMode: 'read_only', baseBranch: run.branch_name }));
     ws = codeRepos.length ? await makeMultiWorkspace(codeRepos, token, run.branch_name) : { repos: [], root: '/tmp', cleanup: async () => {} };
 
+    const verifiedHeads = new Map();
+    for (const r of ws.repos) {
+      const {stdout} = await promisify(execFile)('git',['-C',r.dir,'rev-parse','HEAD']);
+      verifiedHeads.set(`${r.repoOwner}/${r.repoName}`,stdout.trim());
+    }
     // Compute the ACTUAL diff (base...run-branch) per changed repo and hand it to the reviewer. The
     // reviewer only has Read/Grep/Glob (no git), so without this it greps the whole checked-out repo
     // and blocks on PRE-EXISTING codebase debt unrelated to this run. Scope the review to the diff.
@@ -104,6 +111,12 @@ export default async function verify(job, ctx) {
         });
       } catch { /* best-effort — the Overview panel falls back to classifyDecision() if this row is missing */ }
       return { blocked: reason };
+    }
+    for (const p of changedRepos) {
+      const sha=verifiedHeads.get(`${p.repo_owner}/${p.repo_name}`);
+      if (!sha) throw new Error('Verified repository revision is missing');
+      const {error}=await supabase.from('se_run_prs').update({verified_sha:sha}).eq('run_id',run.id).eq('repo_owner',p.repo_owner).eq('repo_name',p.repo_name);
+      if(error) throw new Error('Could not save verified repository revision');
     }
     await writeGate(supabase, run, 'security', 'pass', {});
     await recordPhaseEnd(supabase, run, 'verify', 'passed', 'security review clean', { model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude', input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD, modelUsage: result.modelUsage });
