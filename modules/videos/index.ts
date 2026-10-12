@@ -21,7 +21,7 @@ const videosModule: GatewazeModule = {
   description:
     'Video masters, shorts and scheduled publication. Editors upload against a talk or episode; '
     + 'Gatewaze holds the file and publishes on a schedule.',
-  version: '1.3.0',
+  version: '1.9.0',
   features: ['videos', 'videos.manage', 'videos.edit'],
 
   dependencies: ['content-platform'],
@@ -38,6 +38,24 @@ const videosModule: GatewazeModule = {
     // lf-agents recipes. The two AAIF YouTube channels publish measurably
     // different copy, so one set of words per video is the wrong unit.
     'migrations/008_publication_copy.sql',
+    // 009 adds the publishing accounts themselves: credentials, collection
+    // state, and the metrics they produce. Closes the FK that
+    // video_publications.connection_id had pointed at nothing since 007.
+    'migrations/009_platform_connections.sql',
+    // 010 adopts a connected account's whole back catalogue, not only what
+    // Gatewaze published, and gives videos belonging to no event or podcast
+    // somewhere to wait. Unassigned is the ABSENCE of a video_subjects row.
+    'migrations/010_video_discovery.sql',
+    // 011 adds followers per account over time, and the cross-platform
+    // rollups: one video across platforms, one episode or talk, one event.
+    'migrations/011_audience_and_rollups.sql',
+    // 012 gives a connection non-secret settings (a feed URL, an OP3 show
+    // uuid), with a CHECK that refuses anything that looks like a token.
+    'migrations/012_connection_config.sql',
+    // 013 lets a video belong to a whole podcast. assign_video_subject() has
+    // accepted 'podcast' since 010 while the table's CHECK rejected it, so
+    // the function accepted the value and the INSERT then failed.
+    'migrations/013_podcast_subject.sql',
   ],
 
   apiRoutes: async (app: unknown, ctx?: unknown) => {
@@ -47,6 +65,13 @@ const videosModule: GatewazeModule = {
   },
 
   adminRoutes: [
+    {
+      // Before 'videos', so a future 'videos/:id' cannot swallow it.
+      path: 'videos/unassigned',
+      component: () => import('./admin/components/UnassignedVideos'),
+      requiredFeature: 'videos.edit',
+      guard: 'none',
+    },
     {
       // guard 'none' puts this at /videos rather than /admin/videos, so a
       // third-party editor lands on their own workspace rather than inside the
@@ -71,6 +96,16 @@ const videosModule: GatewazeModule = {
       defaultLocation: 'sidebar',
       // conference-recap is 63 and vehicle-video 64; this sits with them.
       order: 65,
+    },
+    {
+      path: '/videos/unassigned',
+      label: 'Unassigned videos',
+      // InboxStackIcon.
+      icon: 'InboxStack',
+      requiredFeature: 'videos.edit',
+      defaultSection: 'Content',
+      defaultLocation: 'sidebar',
+      order: 66,
     },
   ],
 
