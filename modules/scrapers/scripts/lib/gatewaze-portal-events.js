@@ -151,31 +151,25 @@ function decodeHtmlEntities(input) {
  * no surface should ever receive (scripts, styles, inline handlers, and
  * javascript:/data: links) and caps the length.
  */
-function cleanEventHtmlOnce(html) {
-  return html
-    .replace(/<(script|style|iframe|object|embed|noscript)\b[\s\S]*?<\/\1\s*>/gi, '')
-    .replace(/<\/?(script|style|iframe|object|embed|noscript|link|meta|base|form)\b[^>]*>/gi, '')
-    .replace(/\son[a-z]+\s*=\s*"[^"]*"/gi, '')
-    .replace(/\son[a-z]+\s*=\s*'[^']*'/gi, '')
-    .replace(/\son[a-z]+\s*=\s*[^\s>]+/gi, '')
-    .replace(/\s(href|src)\s*=\s*(["'])\s*(javascript|data|vbscript):[^"']*\2/gi, '')
-    .replace(/\s(href|src)\s*=\s*(javascript|data|vbscript):[^\s>]*/gi, '');
-}
-
 export function cleanEventHtml(html) {
   if (typeof html !== 'string' || !html.trim()) return '';
   // Cap first so the passes below work on bounded input; they only shrink it.
   let out = html.length > MAX_PAGE_CONTENT ? html.slice(0, MAX_PAGE_CONTENT) : html;
   // Repeat until nothing changes: removing one fragment can join the text
-  // around it into a new one, e.g. "<scr<script>…</script>ipt>".
-  for (let i = 0; i < 20; i++) {
-    const next = cleanEventHtmlOnce(out);
-    if (next === out) break;
-    out = next;
-  }
-  // Still changing after 20 passes means the input was built to defeat the
-  // cleanup; store no body at all.
-  if (cleanEventHtmlOnce(out) !== out) return '';
+  // around it into a new one, e.g. "<scr<script>…</script>ipt>". Every pass
+  // removes at least one character, so this ends.
+  let previous;
+  do {
+    previous = out;
+    out = out
+      .replace(/<(script|style|iframe|object|embed|noscript)\b[\s\S]*?<\/\1\s*>/gi, '')
+      .replace(/<\/?(script|style|iframe|object|embed|noscript|link|meta|base|form)\b[^>]*>/gi, '')
+      .replace(/\son[a-z]+\s*=\s*"[^"]*"/gi, '')
+      .replace(/\son[a-z]+\s*=\s*'[^']*'/gi, '')
+      .replace(/\son[a-z]+\s*=\s*[^\s>]+/gi, '')
+      .replace(/\s(href|src)\s*=\s*(["'])\s*(javascript|data|vbscript):[^"']*\2/gi, '')
+      .replace(/\s(href|src)\s*=\s*(javascript|data|vbscript):[^\s>]*/gi, '');
+  } while (out !== previous);
   return out.trim();
 }
 
