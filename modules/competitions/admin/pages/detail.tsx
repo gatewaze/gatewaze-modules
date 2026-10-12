@@ -23,8 +23,12 @@ interface EntryData {
   cumulative: number;
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export default function CompetitionDetailPage() {
-  const { eventId } = useParams<{ eventId: string }>();
+  // The route is competitions/:competitionId/detail and the list links here
+  // with the competition id. Older links used the event id, which still works.
+  const { competitionId: eventId } = useParams<{ competitionId: string }>();
   const navigate = useNavigate();
 
   const [competition, setCompetition] = useState<Event | null>(null);
@@ -42,14 +46,27 @@ export default function CompetitionDetailPage() {
   const loadCompetitionDetails = async () => {
     setLoading(true);
     try {
+      // Resolve a competition id to its event (events_competitions.event_id
+      // is the event uuid) and fall back to treating the param as an event id.
+      let competitionRow: { event_id: string | null; slug: string | null } | null = null;
+      if (UUID_RE.test(eventId!)) {
+        const { data } = await supabase
+          .from('events_competitions')
+          .select('event_id, slug')
+          .eq('id', eventId!)
+          .maybeSingle();
+        competitionRow = data;
+      }
+
       // Load competition event
-      const eventResult = await EventService.getEventById(eventId!);
+      const eventResult = await EventService.getEventById(competitionRow?.event_id || eventId!);
       if (eventResult.success && eventResult.data) {
         setCompetition(eventResult.data);
 
         // Load entry timeline data
-        if (eventResult.data.offerSlug) {
-          await loadEntryTimeline(eventResult.data.offerSlug);
+        const offerSlug = competitionRow?.slug || eventResult.data.offerSlug;
+        if (offerSlug) {
+          await loadEntryTimeline(offerSlug);
         }
 
         // Load winner count

@@ -36,6 +36,8 @@ interface AcceptanceData {
   cumulative: number;
 }
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export default function DiscountDetailPage() {
   const { eventId } = useParams<{ eventId: string }>();
   const navigate = useNavigate();
@@ -67,30 +69,47 @@ export default function DiscountDetailPage() {
   const loadDiscountDetails = async () => {
     setLoading(true);
     try {
+      // The discounts list links here with the discount id; older links used
+      // the event id. Resolve a discount id to its event (events_discounts.event_id
+      // is the event uuid) and fall back to treating the param as an event id.
+      let discountRow: { event_id: string | null; slug: string | null } | null = null;
+      if (UUID_RE.test(eventId!)) {
+        const { data } = await supabase
+          .from('events_discounts')
+          .select('event_id, slug')
+          .eq('id', eventId!)
+          .maybeSingle();
+        discountRow = data;
+      }
+
       // Load discount event
-      const eventResult = await EventService.getEventById(eventId!);
+      const eventResult = await EventService.getEventById(discountRow?.event_id || eventId!);
       if (eventResult.success && eventResult.data) {
         setDiscount(eventResult.data);
 
+        // events_discount_codes.event_id is the event uuid, not the short event id
+        const eventUuid = eventResult.data.id!;
+
         // Load codes stats
-        const stats = await DiscountService.getDiscountCodesStats(eventResult.data.eventId);
+        const stats = await DiscountService.getDiscountCodesStats(eventUuid);
         setCodesStats(stats);
 
         // Load registration and attendance stats
-        const regStats = await DiscountService.getRegistrationAttendanceStats(eventResult.data.eventId);
+        const regStats = await DiscountService.getRegistrationAttendanceStats(eventUuid);
         setRegistrationStats(regStats);
 
         // Load geographic distribution
-        const geoData = await DiscountService.getGeographicDistribution(eventResult.data.eventId);
+        const geoData = await DiscountService.getGeographicDistribution(eventUuid);
         console.log('Geographic data loaded:', geoData);
         setGeographicData(geoData);
 
         // Load claim timeline data (discount codes)
-        await loadClaimTimeline(eventResult.data.eventId);
+        await loadClaimTimeline(eventUuid);
 
         // Load acceptance timeline data (traditional offer acceptance)
-        if (eventResult.data.offerSlug) {
-          await loadAcceptanceTimeline(eventResult.data.offerSlug);
+        const offerSlug = discountRow?.slug || eventResult.data.offerSlug;
+        if (offerSlug) {
+          await loadAcceptanceTimeline(offerSlug);
         }
       }
     } catch (error) {
@@ -228,7 +247,7 @@ export default function DiscountDetailPage() {
   };
 
   const handleDownloadClaimantsCSV = async () => {
-    if (!discount?.eventId) {
+    if (!discount?.id) {
       console.error('No event ID available for this discount');
       return;
     }
@@ -245,7 +264,7 @@ export default function DiscountDetailPage() {
         const { data, error } = await supabase
           .from('events_discount_codes')
           .select('code, issued_to, issued_at')
-          .eq('event_id', discount.eventId)
+          .eq('event_id', discount.id)
           .eq('issued', true)
           .not('issued_to', 'is', null)
           .range(from, from + pageSize - 1);

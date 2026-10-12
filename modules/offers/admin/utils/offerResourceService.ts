@@ -216,7 +216,7 @@ export class OfferResourceService {
   }> {
     // Get total download count
     const { count: totalDownloads, error: countError } = await supabase
-      .from('download_logs')
+      .from('integrations_download_logs')
       .select('*', { count: 'exact', head: true })
       .eq('resource_id', resourceId);
 
@@ -226,7 +226,7 @@ export class OfferResourceService {
 
     // Get unique email count
     const { data: uniqueEmailsData, error: uniqueError } = await supabase
-      .from('download_logs')
+      .from('integrations_download_logs')
       .select('email')
       .eq('resource_id', resourceId);
 
@@ -238,7 +238,7 @@ export class OfferResourceService {
 
     // Get recent downloads
     const { data: recentDownloads, error: recentError } = await supabase
-      .from('download_logs')
+      .from('integrations_download_logs')
       .select('email, downloaded_at')
       .eq('resource_id', resourceId)
       .order('downloaded_at', { ascending: false })
@@ -260,7 +260,7 @@ export class OfferResourceService {
    */
   static async getOfferDownloadStats(offerId: string): Promise<Map<string, number>> {
     const { data, error } = await supabase
-      .from('download_logs')
+      .from('integrations_download_logs')
       .select('file_id')
       .eq('offer_id', offerId);
 

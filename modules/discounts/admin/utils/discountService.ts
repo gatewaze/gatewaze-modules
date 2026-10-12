@@ -1,10 +1,12 @@
 import { supabase } from '@/lib/supabase';
 
-// Discount code interface matching the discount_codes table
+// Discount code interface matching the events_discount_codes table
 export interface DiscountCode {
   id?: string;
   code: string;
-  event_id: string;
+  event_id: string | null; // events.id (uuid)
+  discount_id?: string | null;
+  source?: string | null;
   issued: boolean;
   issued_to?: string | null;
   issued_at?: string | null;
@@ -16,9 +18,10 @@ export interface DiscountCode {
   updated_at?: string;
 }
 
-// Discount claimant interface (from discount_interactions table)
+// Discount claimant interface (from events_discount_interactions)
 export interface DiscountClaimant {
-  customer_cio_id: string;
+  email?: string | null;
+  customer_cio_id: string | null;
   offer_id: string;
   offer_status: string;
   offer_referrer?: string | null;
@@ -34,18 +37,47 @@ export interface DiscountCodesStats {
   claimed: number;
 }
 
-// Service class for discount operations
+const PAGE_SIZE = 1000;
+
+// Service class for discount operations.
+// Every eventId parameter here is the event uuid (events.id), which is what
+// events_discount_codes.event_id holds, not the short text events.event_id.
 export class DiscountService {
+
+  /**
+   * All codes for an event, paginated past the 1000 row limit
+   */
+  private static async fetchCodesForEvent<T>(eventId: string, columns: string): Promise<{ data: T[]; error: any }> {
+    let rows: T[] = [];
+    let from = 0;
+    let hasMore = true;
+    while (hasMore) {
+      const { data, error } = await supabase
+        .from('events_discount_codes')
+        .select(columns)
+        .eq('event_id', eventId)
+        .order('id', { ascending: true })
+        .range(from, from + PAGE_SIZE - 1);
+      if (error) {
+        return { data: rows, error };
+      }
+      if (data && data.length > 0) {
+        rows = rows.concat(data as unknown as T[]);
+        from += PAGE_SIZE;
+        hasMore = data.length === PAGE_SIZE;
+      } else {
+        hasMore = false;
+      }
+    }
+    return { data: rows, error: null };
+  }
 
   /**
    * Get discount codes statistics for a specific event
    */
   static async getDiscountCodesStats(eventId: string): Promise<DiscountCodesStats> {
     try {
-      const { data, error } = await supabase
-        .from('events_discount_codes')
-        .select('issued')
-        .eq('event_id', eventId);
+      const { data, error } = await this.fetchCodesForEvent<{ issued: boolean }>(eventId, 'issued');
 
       if (error) {
         console.error('Error fetching discount codes stats:', error);
@@ -184,7 +216,7 @@ export class DiscountService {
       // Get all accepted interactions for these offers
       const { data, error } = await supabase
         .from('events_discount_interactions')
-        .select('offer_id, customer_cio_id')
+        .select('offer_id, email, customer_cio_id')
         .in('offer_id', offerSlugs)
         .eq('offer_status', 'accepted');
 
@@ -199,7 +231,8 @@ export class DiscountService {
         if (!offerClaimants.has(interaction.offer_id)) {
           offerClaimants.set(interaction.offer_id, new Set());
         }
-        offerClaimants.get(interaction.offer_id)?.add(interaction.customer_cio_id);
+        const identity = interaction.email ? interaction.email.toLowerCase() : interaction.customer_cio_id;
+        if (identity) offerClaimants.get(interaction.offer_id)?.add(identity);
       });
 
       // Convert to counts
@@ -240,44 +273,84 @@ export class DiscountService {
   }
 
   /**
-   * Get claimants for a specific offer (from discount_interactions)
-   * This returns enriched customer profiles from the database
+   * Get claimants for a specific offer (from events_discount_interactions)
+   * This returns enriched customer profiles from the database.
+   * Interactions are matched to people by email, or by Customer.io id when a
+   * row has no email (migrated rows may carry either).
    */
   static async getClaimantsForOffer(offerSlug: string): Promise<any[]> {
     try {
       // Get all customers who accepted this discount offer
-      const { data: interactions, error } = await supabase
-        .from('events_discount_interactions')
-        .select('customer_cio_id, timestamp')
-        .eq('offer_id', offerSlug)
-        .eq('offer_status', 'accepted')
-        .order('timestamp', { ascending: true });
+      let interactions: Array<{ email: string | null; customer_cio_id: string | null; timestamp: string }> = [];
+      let from = 0;
+      let hasMore = true;
+      while (hasMore) {
+        const { data, error } = await supabase
+          .from('events_discount_interactions')
+          .select('email, customer_cio_id, timestamp')
+          .eq('offer_id', offerSlug)
+          .eq('offer_status', 'accepted')
+          .order('timestamp', { ascending: true })
+          .order('id', { ascending: true })
+          .range(from, from + PAGE_SIZE - 1);
 
-      if (error) {
-        console.error('Error getting claimants:', error);
+        if (error) {
+          console.error('Error getting claimants:', error);
+          return [];
+        }
+        if (data && data.length > 0) {
+          interactions = interactions.concat(data);
+          from += PAGE_SIZE;
+          hasMore = data.length === PAGE_SIZE;
+        } else {
+          hasMore = false;
+        }
+      }
+
+      if (interactions.length === 0) {
         return [];
       }
 
-      if (!interactions || interactions.length === 0) {
-        return [];
+      // Unique identities (in case there are duplicate entries)
+      const emails = [...new Set(interactions.map(i => i.email?.toLowerCase()).filter((e): e is string => !!e))];
+      const cioIds = [...new Set(
+        interactions.filter(i => !i.email && i.customer_cio_id).map(i => i.customer_cio_id as string)
+      )];
+
+      // Fetch customer data from the database in batches
+      const BATCH_SIZE = 500;
+      const customers: any[] = [];
+      for (let i = 0; i < emails.length; i += BATCH_SIZE) {
+        const { data, error: customerError } = await supabase
+          .from('people')
+          .select('*')
+          .in('email', emails.slice(i, i + BATCH_SIZE));
+        if (customerError) {
+          console.error('Error fetching customer data:', customerError);
+          continue;
+        }
+        customers.push(...(data || []));
       }
-
-      // Get unique customer IDs (in case there are duplicate entries)
-      const cioIds = [...new Set(interactions.map(i => i.customer_cio_id))];
-
-      // Fetch customer data from the database
-      const { data: customers, error: customerError } = await supabase
-        .from('people')
-        .select('*')
-        .in('cio_id', cioIds);
-
-      if (customerError) {
-        console.error('Error fetching customer data:', customerError);
-        return [];
+      for (let i = 0; i < cioIds.length; i += BATCH_SIZE) {
+        const { data, error: customerError } = await supabase
+          .from('people')
+          .select('*')
+          .in('cio_id', cioIds.slice(i, i + BATCH_SIZE));
+        if (customerError) {
+          console.error('Error fetching customer data:', customerError);
+          continue;
+        }
+        customers.push(...(data || []));
       }
 
       // Map customer data to profiles
-      const profiles = customers?.map(customer => ({
+      const seen = new Set<string>();
+      const profiles = customers.filter(customer => {
+        const key = String(customer.id);
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      }).map(customer => ({
         email: customer.email || customer.cio_id,
         first_name: customer.attributes?.first_name,
         last_name: customer.attributes?.last_name,
@@ -289,7 +362,15 @@ export class DiscountService {
         continent: customer.attributes?.continent,
         cio_id: customer.cio_id,
         id: customer.id
-      })) || [];
+      }));
+
+      // Claimants with no people row still appear, with the interaction's email
+      const foundEmails = new Set(profiles.map(p => (p.email || '').toLowerCase()));
+      emails.forEach(email => {
+        if (!foundEmails.has(email)) {
+          profiles.push({ email, first_name: undefined, last_name: undefined, job_title: undefined, company: undefined, linkedin_url: undefined, city: undefined, country: undefined, continent: undefined, cio_id: null, id: null });
+        }
+      });
 
       return profiles;
 
@@ -301,7 +382,7 @@ export class DiscountService {
 
   /**
    * Upload discount codes for a specific event
-   * @param eventId - The event ID to associate codes with
+   * @param eventId - The event uuid (events.id) to associate codes with
    * @param codes - Array of discount code strings
    * @param onProgress - Optional callback for upload progress
    */
@@ -570,10 +651,10 @@ export class DiscountService {
     attended: number;
   }> {
     try {
-      const { data, error } = await supabase
-        .from('events_discount_codes')
-        .select('issued, registered, attended')
-        .eq('event_id', eventId);
+      const { data, error } = await this.fetchCodesForEvent<{ issued: boolean; registered: boolean; attended: boolean }>(
+        eventId,
+        'issued, registered, attended'
+      );
 
       if (error) {
         console.error('Error fetching registration/attendance stats:', error);
@@ -603,10 +684,13 @@ export class DiscountService {
   }> {
     try {
       // Get all discount codes with their status
-      const { data: codes, error: codesError } = await supabase
-        .from('events_discount_codes')
-        .select('code, issued, issued_to, registered, attended')
-        .eq('event_id', eventId);
+      const { data: codes, error: codesError } = await this.fetchCodesForEvent<{
+        code: string;
+        issued: boolean;
+        issued_to: string | null;
+        registered: boolean;
+        attended: boolean;
+      }>(eventId, 'code, issued, issued_to, registered, attended');
 
       if (codesError || !codes) {
         console.error('Error fetching codes:', codesError);

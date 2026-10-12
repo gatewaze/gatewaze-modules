@@ -31,7 +31,6 @@ interface EventDiscount {
   created_at: string;
   updated_at: string | null;
   luma_event_api_id: string | null;
-  luma_api_key: string | null;
   luma_percent_off: number | null;
   max_codes: number | null;
   hidden: boolean;
@@ -66,7 +65,9 @@ interface DiscountFormData {
   is_beta: boolean;
   hidden: boolean;
   luma_event_api_id: string;
+  // Write-only: never loaded back from the database. Blank keeps the saved key.
   luma_api_key: string;
+  clear_luma_api_key: boolean;
   luma_percent_off: string;
   max_codes: string;
 }
@@ -85,6 +86,7 @@ const emptyForm: DiscountFormData = {
   hidden: false,
   luma_event_api_id: '',
   luma_api_key: '',
+  clear_luma_api_key: false,
   luma_percent_off: '100',
   max_codes: '',
 };
@@ -99,6 +101,9 @@ export const EventDiscountsTab = ({ eventId }: EventDiscountsTabProps) => {
   const [saving, setSaving] = useState(false);
   const [claimCounts, setClaimCounts] = useState<Record<string, number>>({});
   const [codeCounts, setCodeCounts] = useState<Record<string, number>>({});
+  // Which discounts have a Luma API key saved in events_discount_secrets.
+  // Only the presence is loaded, never the key itself.
+  const [lumaKeySet, setLumaKeySet] = useState<Record<string, boolean>>({});
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const [claimsMap, setClaimsMap] = useState<Record<string, DiscountClaim[]>>({});
   const [codesMap, setCodesMap] = useState<Record<string, DiscountCode[]>>({});
@@ -153,21 +158,40 @@ export const EventDiscountsTab = ({ eventId }: EventDiscountsTabProps) => {
       const discountList = data || [];
       setDiscounts(discountList);
 
+      // Which discounts have a per-discount Luma key (the key lives off the
+      // publicly readable discount row, in events_discount_secrets)
+      const keySetResult: Record<string, boolean> = {};
+      if (discountList.length > 0) {
+        const { data: secrets, error: secretsError } = await supabase
+          .from('events_discount_secrets')
+          .select('discount_id')
+          .in('discount_id', discountList.map((d) => d.id))
+          .not('luma_api_key', 'is', null);
+        if (secretsError) {
+          console.error('Error loading discount key status:', secretsError);
+        } else {
+          (secrets || []).forEach((row) => {
+            keySetResult[row.discount_id] = true;
+          });
+        }
+      }
+      setLumaKeySet(keySetResult);
+
       // Load counts for each discount
       const claimCountsResult: Record<string, number> = {};
       const codeCountsResult: Record<string, number> = {};
       await Promise.all(
         discountList.map(async (discount) => {
           if (discount.luma_event_api_id) {
-            // Dynamic: count issued discount_codes for this event
+            // Dynamic: count codes issued for this discount
             const { count } = await supabase
               .from('events_discount_codes')
               .select('*', { count: 'exact', head: true })
-              .eq('event_id', discount.event_id)
+              .eq('discount_id', discount.id)
               .eq('issued', true);
             codeCountsResult[discount.id] = count || 0;
           } else {
-            // Legacy: count discount_claims
+            // Legacy: count events_discount_claims
             const { count } = await supabase
               .from('events_discount_claims')
               .select('*', { count: 'exact', head: true })
@@ -221,7 +245,7 @@ export const EventDiscountsTab = ({ eventId }: EventDiscountsTabProps) => {
       const { data, error } = await supabase
         .from('events_discount_codes')
         .select('id, code, issued_to, issued_at')
-        .eq('event_id', discount.event_id)
+        .eq('discount_id', discount.id)
         .eq('issued', true)
         .order('issued_at', { ascending: false });
 
@@ -275,7 +299,8 @@ export const EventDiscountsTab = ({ eventId }: EventDiscountsTabProps) => {
       is_beta: discount.is_beta || false,
       hidden: discount.hidden || false,
       luma_event_api_id: discount.luma_event_api_id || '',
-      luma_api_key: discount.luma_api_key || '',
+      luma_api_key: '',
+      clear_luma_api_key: false,
       luma_percent_off: discount.luma_percent_off != null ? String(discount.luma_percent_off) : '100',
       max_codes: discount.max_codes != null ? String(discount.max_codes) : '',
     });
@@ -360,6 +385,26 @@ export const EventDiscountsTab = ({ eventId }: EventDiscountsTabProps) => {
     }
   };
 
+  // The Luma API key is stored in events_discount_secrets (admin-only), never
+  // on events_discounts, which anonymous portal visitors can read.
+  const saveLumaApiKey = async (discountId: string) => {
+    const newKey = formData.luma_api_key.trim();
+    if (newKey) {
+      const { error } = await supabase
+        .from('events_discount_secrets')
+        .upsert({ discount_id: discountId, luma_api_key: newKey }, { onConflict: 'discount_id' });
+      if (error) throw error;
+      setLumaKeySet((prev: Record<string, boolean>) => ({ ...prev, [discountId]: true }));
+    } else if (formData.clear_luma_api_key) {
+      const { error } = await supabase
+        .from('events_discount_secrets')
+        .delete()
+        .eq('discount_id', discountId);
+      if (error) throw error;
+      setLumaKeySet((prev: Record<string, boolean>) => ({ ...prev, [discountId]: false }));
+    }
+  };
+
   const handleSave = async () => {
     if (!formData.title.trim()) {
       toast.error('Title is required');
@@ -385,7 +430,6 @@ export const EventDiscountsTab = ({ eventId }: EventDiscountsTabProps) => {
         is_beta: formData.is_beta,
         hidden: formData.hidden,
         luma_event_api_id: formData.luma_event_api_id.trim() || null,
-        luma_api_key: formData.luma_api_key.trim() || null,
         luma_percent_off: formData.luma_event_api_id.trim()
           ? (parseInt(formData.luma_percent_off, 10) || 100)
           : null,
@@ -402,6 +446,8 @@ export const EventDiscountsTab = ({ eventId }: EventDiscountsTabProps) => {
 
         if (error) throw error;
 
+        await saveLumaApiKey(editingDiscount.id);
+
         setDiscounts(
           discounts.map((d) => (d.id === editingDiscount.id ? data : d))
         );
@@ -414,6 +460,8 @@ export const EventDiscountsTab = ({ eventId }: EventDiscountsTabProps) => {
           .single();
 
         if (error) throw error;
+
+        await saveLumaApiKey(data.id);
 
         setDiscounts([...discounts, data]);
         setClaimCounts({ ...claimCounts, [data.id]: 0 });
@@ -884,14 +932,28 @@ export const EventDiscountsTab = ({ eventId }: EventDiscountsTabProps) => {
                 placeholder="evt-xxxxxxxxxxxxxxxx"
               />
               <Input
-                label="Luma API Key"
+                label={
+                  editingDiscount && lumaKeySet[editingDiscount.id]
+                    ? 'Luma API Key (saved; leave blank to keep it)'
+                    : 'Luma API Key (leave blank to use the platform key)'
+                }
                 type="password"
+                autoComplete="new-password"
                 value={formData.luma_api_key}
                 onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
                   setFormData({ ...formData, luma_api_key: e.target.value })
                 }
                 placeholder="secret-xxxxxxxxxxxxxxxx"
               />
+              {editingDiscount && lumaKeySet[editingDiscount.id] && (
+                <Checkbox
+                  label="Remove the saved Luma API key"
+                  checked={formData.clear_luma_api_key}
+                  onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
+                    setFormData({ ...formData, clear_luma_api_key: e.target.checked })
+                  }
+                />
+              )}
               <Input
                 label="Discount % (default 100)"
                 type="number"

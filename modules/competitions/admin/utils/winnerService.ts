@@ -1,5 +1,5 @@
 // Competition Winners Service
-// Fetches winner counts from Supabase competition_winners table
+// Fetches winner counts from Supabase events_competition_winners table
 
 import { supabase } from '@/lib/supabase';
 

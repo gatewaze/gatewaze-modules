@@ -93,12 +93,12 @@ async function handler(req: Request) {
     console.log(`✅ Found person with id: ${person.id}, cio_id: ${person.cio_id}`)
 
     // Step 2: Insert the offer interaction record
-    // Use customer_id as the primary foreign key, keep customer_cio_id for backward compatibility
+    // customer_id is the legacy gatewaze-admin customers.id (bigint) and is
+    // left null; people.id is a uuid. email and customer_cio_id identify the person.
     const normalizedEmail = email.toLowerCase().trim()
     const { data: interaction, error: insertError } = await supabaseClient
       .from('integrations_offer_interactions')
       .insert([{
-        customer_id: person.id,
         customer_cio_id: person.cio_id,
         email: normalizedEmail,
         offer_id: offer_id,
@@ -148,7 +148,8 @@ async function handler(req: Request) {
     return new Response(
       JSON.stringify({
         success: false,
-        error: error.message || 'Failed to track offer interaction',
+        // Internal error text stays in the logs; this endpoint is public.
+        error: 'Failed to track offer interaction',
       }),
       {
         status: 500,
