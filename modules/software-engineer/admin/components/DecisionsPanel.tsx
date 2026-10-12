@@ -1,3 +1,4 @@
+import { createRealtimeRefresh } from '../lib/realtime-refresh';
 // @ts-nocheck
 /**
  * "Decisions needed" panel (issue #49) — one place on the Overview dashboard to see every run
@@ -192,11 +193,12 @@ export default function DecisionsPanel({ projectFilter, onOpenRun }: {
   }, [projectFilter]);
 
   useEffect(() => {
-    load();
+    const refresh=createRealtimeRefresh(load);
+    refresh.refresh();
     const ch = supabase.channel('se-overview-decisions')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'se_runs' }, () => load())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'se_runs' }, refresh.refresh)
       .subscribe();
-    return () => { supabase.removeChannel(ch); };
+    return () => { refresh.dispose(); supabase.removeChannel(ch); };
   }, [load]);
 
   if (decisions.length === 0) return null;

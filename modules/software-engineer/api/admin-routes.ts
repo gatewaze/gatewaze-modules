@@ -86,11 +86,11 @@ export function mountAdminRoutes(router, deps) {
 
   // Admin gate — runs BEFORE body parsing so unauthorized requests are rejected before we read a body.
   router.use(async (req, res, next) => {
-    if (!rateLimit(`se-admin:${clientIp(req)}`, 240, 60_000)) {
+    const userId = req.userId ?? req.auth?.userId ?? req.user?.id ?? null;
+    if (!rateLimit(`se-admin:${userId ? 'user:'+userId : 'ip:'+clientIp(req)}`, 240, 60_000)) {
       return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
     }
     if (testAuthBypass()) return next(); // parity with platform requireJwt test bypass
-    const userId = req.userId ?? req.auth?.userId ?? req.user?.id ?? null;
     if (!userId) return res.status(401).json({ error: { code: 'unauthenticated', message: 'Missing user context' } });
     try {
       const { data, error } = await supabase
@@ -1154,7 +1154,7 @@ export function mountAdminRoutes(router, deps) {
   // "who acts next" status (lib/pr-status.ts) so the dashboard answers it without opening the PR.
   // ~3 GitHub calls per PR → cached per scope for PR_BOARD_TTL_MS; ?refresh=1 busts the cache.
   const prBoardCache = new Map<string, { at: number; payload: unknown }>();
-  const PR_BOARD_TTL_MS = 60_000;
+  const PR_BOARD_TTL_MS = 5 * 60_000;
 
   router.get('/overview/prs', async (req, res) => {
     if (!rateLimit(`se-admin:pr-board:${clientIp(req)}`, 60, 60_000)) {

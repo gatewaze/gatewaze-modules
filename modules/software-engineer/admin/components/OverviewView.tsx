@@ -1,3 +1,4 @@
+import { createRealtimeRefresh } from '../lib/realtime-refresh';
 // @ts-nocheck
 /**
  * Software Engineer — Overview tab (SPEC.md §14). Read-only, at-a-glance health of the agent fleet:
@@ -186,12 +187,12 @@ export default function OverviewView({ onGoToSetup, onOpenRuns, onOpenRun }: {
   }, [projectFilter]);
 
   useEffect(() => {
-    load();
-    loadRunLists();
+    const refresh=createRealtimeRefresh(() => Promise.all([load(),loadRunLists()]));
+    refresh.refresh();
     const ch = supabase.channel('se-overview')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'se_runs' }, () => { load(); loadRunLists(); })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'se_runs' }, refresh.refresh)
       .subscribe();
-    return () => { supabase.removeChannel(ch); };
+    return () => { refresh.dispose(); supabase.removeChannel(ch); };
   }, [load, loadRunLists]);
 
   // Realtime is the primary update mechanism and already works; this is the backstop for a
