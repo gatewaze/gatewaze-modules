@@ -12,6 +12,9 @@ vi.mock('../../lib/merge-prs.js', () => ({
   mergeRunPrs: async (_sb: unknown, run: any, project: any) => { mp.calls.push({ run, project }); return mp.result; },
 }));
 
+vi.mock('@anthropic-ai/claude-agent-sdk',()=>({query:vi.fn()}));
+vi.mock('@gatewaze/shared/modules',()=>({decryptSecret:(s)=>s?.replace(/^enc:/,''),encryptSecret:s=>'enc:'+s,getLast4:s=>s?.slice(-4)}));
+
 import { mountAdminRoutes } from '../../api/admin-routes.js';
 
 function recorderRouter() {
@@ -155,4 +158,19 @@ describe('POST /runs/:id/merge', () => {
     expect(res.statusCode).toBe(200);
     expect(enqueued).toEqual([['se', 'software-engineer:pr-monitor', { runId: RID }]]);
   });
+});
+
+describe('repository merge policy settings',()=>{
+ it('rejects an invalid merge policy before writing',async()=>{
+  const {router}=mount(mockSupabase());const res=mockRes();
+  await router.handler('PATCH /projects/:id/repos/:repoId')({params:{id:PID,repoId:RID},body:{merge_policy:'bypass_checks'}},res);
+  expect(res.statusCode).toBe(400);
+ });
+ it('accepts human and verified automatic repository policies',async()=>{
+  for(const merge_policy of ['manual','auto_merge_verified','inherit']){
+   const {router}=mount(mockSupabase());const res=mockRes();
+   await router.handler('PATCH /projects/:id/repos/:repoId')({params:{id:PID,repoId:RID},body:{merge_policy}},res);
+   expect(res.statusCode).toBe(200);
+  }
+ });
 });

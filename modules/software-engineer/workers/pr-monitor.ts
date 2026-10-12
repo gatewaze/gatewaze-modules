@@ -8,6 +8,7 @@
  *   - otherwise                 → watching, re-assert agent:in-review.
  * Runs on a cron (scan all) or for a single run (webhook nudge).
  */
+import { canAutoMergeRepo } from '../lib/repo-merge-policy.js';
 import { createClient } from '@supabase/supabase-js';
 import { getProject, getCodeRepos } from '../lib/credentials.js';
 import { enqueuePhase } from '../lib/enqueue.js';
@@ -176,6 +177,8 @@ async function reconcile(supabase, ctx, run) {
     let allMerged = true, anyClosedUnmerged = false, firstUrl = null;
     let latestActionable = 0;
     let anyFailingCi = false;   // any open PR whose checks have SETTLED red (→ candidate for a CI-fix pass)
+    const mergeRepos = await getCodeRepos(supabase,run.project_id);
+    let autoConflict = false;
     const failingChecks = [];  // raw failing check-runs across all open PRs, for classifyCiFailure
     for (const p of prs) {
       firstUrl = firstUrl || p.pr_url;
@@ -188,6 +191,7 @@ async function reconcile(supabase, ctx, run) {
         if (state !== 'merged') allMerged = false;
         if (state === 'closed_unmerged') anyClosedUnmerged = true;
         if (state === 'open') {
+          if (pr.mergeable_state === 'dirty' && canAutoMergeRepo(mergeRepos.find(r => r.repoOwner === p.repo_owner && r.repoName === p.repo_name),project,run)) autoConflict = true;
           const [reviews, inline] = await Promise.all([
             gh.listReviews(p.repo_owner, p.repo_name, p.pr_number).catch(() => []),
             gh.listReviewComments(p.repo_owner, p.repo_name, p.pr_number).catch(() => []),
@@ -292,13 +296,18 @@ async function reconcile(supabase, ctx, run) {
       return { runId: run.id, action: 'ci-fix' };
     }
 
+    if (autoConflict && (run.merge_conflict_attempts ?? 0) < 3 && project.intakeEnabled) {
+      await supabase.from('se_runs').update({...patch,status:'changes_requested',current_phase:'revise',merge_conflict_attempts:(run.merge_conflict_attempts ?? 0)+1}).eq('id',run.id);
+      await enqueuePhase(ctx,run.id,'revise',{reason:'merge_conflict'});
+      return {runId:run.id,action:'resolve-merge-conflict'};
+    }
     // Still open, no new changes → watching; re-assert the single status label (§1a drift-correct).
     if (managesIssue) { try { await gh.setStatusLabel(run.repo_owner, run.repo_name, run.issue_number, 'agent:in-review'); } catch { /* */ } }
     await supabase.from('se_runs').update({ ...patch, status: 'watching', pr_state: 'open', pr_url: firstUrl }).eq('id', run.id);
     // Auto-merge safe changes without human review when the project allows it (merge.ts only merges
     // PRs GitHub reports mergeable_state=clean; idempotent, so re-enqueuing each tick is fine).
     // NEVER for external PRs (Connect) — the platform watches + revises them but a human always merges.
-    if (run.kind !== 'external_pr' && project.autonomyMode === 'auto_merge_safe' && run.blast_radius === 'safe') {
+    if (mergeRepos.some(repo => canAutoMergeRepo(repo,project,run))) {
       await ctx?.enqueueJob?.('se', 'software-engineer:merge', { runId: run.id });
     }
     return { runId: run.id, action: 'watch' };

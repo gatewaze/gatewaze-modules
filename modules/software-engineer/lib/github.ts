@@ -25,6 +25,7 @@ export function githubClient(token: string) {
     getAuthenticatedUser() {
       return j(`/user`);
     },
+    getCommit(owner: string, name: string, sha: string) { return j(`/repos/${owner}/${name}/commits/${sha}`); },
     getIssue(owner: string, name: string, number: number) {
       return j(`/repos/${owner}/${name}/issues/${number}`);
     },
