@@ -8,7 +8,7 @@
  *   - otherwise                 → watching, re-assert agent:in-review.
  * Runs on a cron (scan all) or for a single run (webhook nudge).
  */
-import { canAutoMergeRepo } from '../lib/repo-merge-policy.js';
+import { canAutoMergeRepo, canRepairRepo, actionableReview } from '../lib/repo-merge-policy.js';
 import { createClient } from '@supabase/supabase-js';
 import { getProject, getCodeRepos } from '../lib/credentials.js';
 import { enqueuePhase } from '../lib/enqueue.js';
@@ -191,7 +191,7 @@ async function reconcile(supabase, ctx, run) {
         if (state !== 'merged') allMerged = false;
         if (state === 'closed_unmerged') anyClosedUnmerged = true;
         if (state === 'open') {
-          if (pr.mergeable_state === 'dirty' && canAutoMergeRepo(mergeRepos.find(r => r.repoOwner === p.repo_owner && r.repoName === p.repo_name),project,run)) autoConflict = true;
+          if (pr.mergeable_state === 'dirty' && canRepairRepo(mergeRepos.find(r => r.repoOwner === p.repo_owner && r.repoName === p.repo_name),run)) autoConflict = true;
           const [reviews, inline] = await Promise.all([
             gh.listReviews(p.repo_owner, p.repo_name, p.pr_number).catch(() => []),
             gh.listReviewComments(p.repo_owner, p.repo_name, p.pr_number).catch(() => []),
@@ -199,8 +199,8 @@ async function reconcile(supabase, ctx, run) {
           // Only feedback from a TRUSTED author is actionable. Anyone with a
           // GitHub account can review/comment a public PR; treating that as a
           // trigger would feed unauthenticated text into the revise agent.
-          for (const r of reviews ?? []) if (r.state === 'CHANGES_REQUESTED' && r.submitted_at && isTrustedFeedbackAuthor(r.user?.login, project, run)) latestActionable = Math.max(latestActionable, new Date(r.submitted_at).getTime());
-          for (const c of inline ?? []) if (c.created_at && isTrustedFeedbackAuthor(c.user?.login, project, run)) latestActionable = Math.max(latestActionable, new Date(c.created_at).getTime());
+          for (const r of reviews ?? []) if (actionableReview(r) && r.submitted_at && isTrustedFeedbackAuthor(r.user?.login, project, run)) latestActionable = Math.max(latestActionable, new Date(r.submitted_at).getTime());
+          for (const c of inline ?? []) if (c.created_at && c.body?.trim() && isTrustedFeedbackAuthor(c.user?.login, project, run)) latestActionable = Math.max(latestActionable, new Date(c.created_at).getTime());
           // CI health — settled-red counts (still-running does not, to avoid churn).
           if (pr.head?.sha) {
             const checkRunsResult = await gh.listCheckRuns(p.repo_owner, p.repo_name, pr.head.sha).catch(() => null);
