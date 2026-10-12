@@ -201,6 +201,12 @@ describe('cleanEventHtml', () => {
     assert.ok(!/onclick|onerror|javascript:|data:|<style|<iframe/i.test(out), out);
     assert.ok(out.includes('Hi'));
   });
+
+  test('removes fragments that join into a tag after one pass', () => {
+    const out = cleanEventHtml('<p>a</p><scr<script>x</script>ipt>alert(1)</script><a o<b onclick="y">nclick="z">c</a>');
+    assert.ok(!/<script/i.test(out), out);
+    assert.ok(!/\son[a-z]+\s*=/i.test(out), out);
+  });
 });
 
 describe('isPublicHttpsUrl', () => {
