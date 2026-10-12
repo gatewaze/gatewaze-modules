@@ -7,7 +7,7 @@ const newslettersModule: GatewazeModule = {
   visibility: 'public',
   name: 'Newsletters',
   description: 'Create, edit, and distribute newsletters with edition management and subscriber tracking',
-  version: '1.0.2',
+  version: '1.0.3',
   features: [
     'newsletters',
     'newsletters.editor',
@@ -253,7 +253,7 @@ const newslettersModule: GatewazeModule = {
     // filters out (blocks whose block_type starts with `email_only_`).
     // Use case: apology / correction headers on a re-send that should
     // not appear in the public archive. Paired with EmailOnlyIntro.tsx
-    // (admin component) + the portal filter in [edition].tsx.
+    // (admin component) + the portal filter on the edition page (portal/pages/.../edition).
     'migrations/058_email_only_intro_block_def.sql',
     // 059 attaches statement_timeout=10min to the fanout fn via
     // ALTER FUNCTION ... SET. The earlier `SET LOCAL` inside the body
@@ -364,6 +364,8 @@ const newslettersModule: GatewazeModule = {
     'migrations/088_drop_snapshot_finder_overload.sql',
     // Snapshot editions whose send has started, not only completed ones.
     'migrations/089_snapshot_in_progress_sends.sql',
+    // Reject a newsletter_sends insert without a preheader (Gmail spams mail without one).
+    'migrations/090_require_send_preheader.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes

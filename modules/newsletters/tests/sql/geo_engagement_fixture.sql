@@ -55,8 +55,8 @@ BEGIN
   INSERT INTO public.newsletters_editions (id, title, edition_date)
   VALUES (v_edition, 'Geo Fixture Edition', '2026-06-10');
 
-  INSERT INTO public.newsletter_sends (id, edition_id, subject, from_address, status)
-  VALUES (v_send, v_edition, 'Geo fixture', 'news@example.test', 'sent');
+  INSERT INTO public.newsletter_sends (id, edition_id, subject, preheader, from_address, status)
+  VALUES (v_send, v_edition, 'Geo fixture', 'Geo fixture preview', 'news@example.test', 'sent');
 
   INSERT INTO public.newsletters_edition_blocks (id, edition_id, block_type, templates_block_def_id, content, block_order, sort_order)
   VALUES
@@ -190,8 +190,8 @@ BEGIN
 
     INSERT INTO public.newsletters_editions (id, title, edition_date)
     VALUES (v_ed2, 'Geo Fixture (imported)', '2026-06-11');
-    INSERT INTO public.newsletter_sends (id, edition_id, subject, from_address, status)
-    VALUES (v_snd2, v_ed2, 'Imported', 'news@example.test', 'sent');
+    INSERT INTO public.newsletter_sends (id, edition_id, subject, preheader, from_address, status)
+    VALUES (v_snd2, v_ed2, 'Imported', 'Imported preview', 'news@example.test', 'sent');
 
     FOR e2 IN
       SELECT * FROM (VALUES
