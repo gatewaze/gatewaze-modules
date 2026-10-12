@@ -7,7 +7,7 @@ const competitionsModule: GatewazeModule = {
   visibility: 'public',
   name: 'Competitions',
   description: 'Run competitions with entry submissions, judging workflows, and winner selection',
-  version: '1.0.0',
+  version: '1.1.0',
   features: [
     'competitions',
     'competitions.entries',
@@ -73,6 +73,7 @@ const competitionsModule: GatewazeModule = {
     'migrations/005_keyword_adapter.sql',
     'migrations/006_register_with_platform.sql',
     'migrations/007_register_category_adapter.sql',
+    'migrations/008_legacy_parity.sql',
   ],
 
   dependencies: ['content-platform', 'events', 'event-sponsors', 'discounts'],

@@ -7,7 +7,7 @@ const discountsModule: GatewazeModule = {
   visibility: 'public',
   name: 'Discounts',
   description: 'Create, distribute, and track discount codes for events and products',
-  version: '1.0.0',
+  version: '1.1.0',
   features: [
     'discounts',
     'discounts.manage',
@@ -60,6 +60,7 @@ const discountsModule: GatewazeModule = {
   migrations: [
     'migrations/000_discounts_core_tables.sql',
     'migrations/001_discounts_tables.sql',
+    'migrations/002_legacy_parity.sql',
   ],
 
   configSchema: {},

@@ -7,7 +7,7 @@ const offersModule: GatewazeModule = {
   visibility: 'public',
   name: 'Offers',
   description: 'Create and distribute offers with acceptance tracking and conversion analytics',
-  version: '1.0.0',
+  version: '1.1.0',
   features: [
     'offers',
     'offers.manage',
@@ -51,6 +51,7 @@ const offersModule: GatewazeModule = {
 
   migrations: [
     'migrations/001_offers_tables.sql',
+    'migrations/002_legacy_parity.sql',
   ],
 
   configSchema: {},
