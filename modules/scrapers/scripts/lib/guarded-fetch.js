@@ -49,9 +49,11 @@ export function isPrivateAddress(ip) {
       const b = parseInt(hex[2], 16);
       v = [(a >> 8) & 255, a & 255, (b >> 8) & 255, b & 255].join('.');
     } else {
-      return s === '::1' || s === '::' || s.startsWith('fc') || s.startsWith('fd') ||
-        s.startsWith('fe8') || s.startsWith('fe9') || s.startsWith('fea') || s.startsWith('feb') ||
-        s.startsWith('ff') || s.startsWith('64:ff9b:');
+      // "::" prefix covers ::1, :: and the IPv4-compatible ::a.b.c.d forms;
+      // 2002: (6to4) and 64:ff9b: (NAT64) embed an IPv4 address too.
+      return s.startsWith('::') || s.startsWith('fc') || s.startsWith('fd') ||
+        /^fe[89a-f]/.test(s) || s.startsWith('ff') ||
+        s.startsWith('64:ff9b:') || s.startsWith('2002:');
     }
   }
   const parts = v.split('.').map(Number);
@@ -173,6 +175,18 @@ export async function guardedFetch(rawUrl, options = {}) {
 
 const IMAGE_TYPES = /^(image\/[a-z0-9.+-]+|application\/octet-stream|binary\/octet-stream)$/;
 
+/** True when the bytes start like a JPEG, PNG, GIF, WebP or AVIF/HEIF file. */
+export function looksLikeImage(buf) {
+  if (!buf || buf.length < 12) return false;
+  if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return true; // JPEG
+  if (buf.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return true; // PNG
+  const head = buf.subarray(0, 12).toString('latin1');
+  if (head.startsWith('GIF87a') || head.startsWith('GIF89a')) return true;
+  if (head.startsWith('RIFF') && head.slice(8, 12) === 'WEBP') return true;
+  if (head.slice(4, 8) === 'ftyp') return true; // AVIF / HEIF
+  return false;
+}
+
 /**
  * Download a cover image through the guard. Returns { buffer, contentType }
  * or null when the URL does not serve an image.
@@ -181,5 +195,8 @@ export async function fetchImage(rawUrl, options = {}) {
   const r = await guardedFetch(rawUrl, { maxBytes: 15 * 1024 * 1024, ...options });
   if (r.status < 200 || r.status >= 300 || r.buffer.length === 0) return null;
   if (r.contentType && !IMAGE_TYPES.test(r.contentType)) return null;
+  // The bytes are republished from a public bucket, so check them as well as
+  // the header a server chose to send.
+  if (!looksLikeImage(r.buffer)) return null;
   return { buffer: r.buffer, contentType: r.contentType };
 }
