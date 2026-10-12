@@ -32,6 +32,7 @@ import {
   parseEventTypeMap,
   resolveSource,
 } from '../lib/gatewaze-portal-events.js';
+import { guardedFetch } from '../lib/guarded-fetch.js';
 
 const PAGE_SIZE = 1000;
 const MAX_PAGES = 20;
@@ -56,22 +57,18 @@ export class GatewazePortalEventsScraper extends BaseScraper {
   }
 
   async _fetchJson(url, maxBytes) {
-    const res = await fetch(url, {
-      headers: {
-        Accept: 'application/json',
-        'User-Agent': 'GatewazeBot/1.0 (portal-events)',
-      },
-      // The public API answers directly; a redirect would mean the source
-      // moved, and following it blindly could leave the allowed origin.
-      redirect: 'error',
-      signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+    // Guarded: https only, the host must resolve to public addresses, the body
+    // is capped while streaming. The public API answers directly, so any
+    // redirect is refused rather than followed off the configured origin.
+    const res = await guardedFetch(url, {
+      maxBytes,
+      timeoutMs: REQUEST_TIMEOUT_MS,
+      maxRedirects: 0,
+      allowHttp: false,
+      headers: { Accept: 'application/json', 'User-Agent': 'GatewazeBot/1.0 (portal-events)' },
     });
-    if (!res.ok) throw new Error(`upstream ${res.status} for ${url}`);
-    const declared = Number(res.headers.get('content-length') || 0);
-    if (declared > maxBytes) throw new Error(`response too large (${declared} bytes) for ${url}`);
-    const text = await res.text();
-    if (text.length > maxBytes) throw new Error(`response too large (${text.length} chars) for ${url}`);
-    return JSON.parse(text);
+    if (res.status < 200 || res.status >= 300) throw new Error(`upstream ${res.status} for ${url}`);
+    return JSON.parse(res.buffer.toString('utf8'));
   }
 
   async _listEvents(apiOrigin, direction, maxEvents) {
