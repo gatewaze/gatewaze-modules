@@ -50,8 +50,9 @@ export function UploadDiscountCodesModal({
 
       setUploadProgress({ total: cleanCodes.length, uploaded: 0, failed: 0 });
 
+      // events_discount_codes.event_id is the event uuid (events.id)
       const result = await DiscountService.uploadDiscountCodes(
-        discount.eventId,
+        discount.id!,
         cleanCodes,
         (progress) => setUploadProgress(progress)
       );

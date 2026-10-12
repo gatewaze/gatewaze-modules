@@ -3,10 +3,10 @@ import { ArrowUpTrayIcon, DocumentTextIcon, CheckCircleIcon, UserGroupIcon, Tick
 import { Modal, Button } from '@/components/ui';
 import { supabase } from '@/lib/supabase';
 
-// Flexible discount type that works with the new event_discounts table
+// Flexible discount type that works with the events_discounts table
 interface DiscountForModal {
-  id: string;       // UUID from event_discounts
-  eventId: string;  // event_id (TEXT) for backwards compat
+  id: string;       // UUID from events_discounts
+  eventId: string | null;  // events.id (uuid) of the discount's event, null for a standalone discount
   title: string;
   slug: string;
 }

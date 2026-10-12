@@ -1,6 +1,21 @@
 import { supabase } from '@/lib/supabase';
-import { SegmentMappingService } from './segmentMappingService';
-import { SegmentInteractionReconciler } from './segmentInteractionReconciler';
+
+// Interaction table that records each kind of offer, chosen by the offer slug
+// prefix (the same routing the original app used).
+type InteractionTable =
+  | 'events_competition_interactions'
+  | 'events_discount_interactions'
+  | 'integrations_offer_interactions';
+
+function getInteractionTable(offerId: string): InteractionTable {
+  if (offerId.startsWith('win-')) {
+    return 'events_competition_interactions';
+  }
+  if (offerId.startsWith('discount-') || offerId.startsWith('free-tickets-')) {
+    return 'events_discount_interactions';
+  }
+  return 'integrations_offer_interactions';
+}
 
 // Offer summary interface for listing offers
 export interface OfferSummary {
@@ -15,17 +30,45 @@ export interface OfferSummary {
 }
 
 /**
- * Hybrid Offer Service that combines:
- * 1. Segment membership as source of truth for WHO accepted
- * 2. Interaction tables for WHEN they accepted (timestamps)
+ * Offer service backed by the interaction tables.
  *
- * This provides accurate counts from segments while maintaining timeline data
+ * The original app ran a "hybrid" mode: Customer.io segment mirrors
+ * (customer_segments / customer_segment_memberships, segments named
+ * "Offer // <slug> // Accepted|Completed") said WHO accepted, and the
+ * interaction tables said WHEN. This platform has no Customer.io segment
+ * mirror, and the interaction tables hold the migrated history and every new
+ * interaction, so they are the single source of truth here: WHO and WHEN both
+ * come from them. "Completed" is preferred over "accepted" when an offer has
+ * any completed interactions, which is what the Completed segment used to do.
  */
 export class HybridOfferService {
 
   /**
+   * Which offer_status counts as an acceptance for this offer: 'completed'
+   * when the offer has any completed interactions, otherwise 'accepted'.
+   */
+  private static async getAcceptanceStatus(offerId: string): Promise<'accepted' | 'completed'> {
+    try {
+      const { count, error } = await supabase
+        .from(getInteractionTable(offerId))
+        .select('id', { count: 'exact', head: true })
+        .eq('offer_id', offerId)
+        .eq('offer_status', 'completed');
+
+      if (error) {
+        console.error('Error checking completed interactions:', error);
+        return 'accepted';
+      }
+      return (count || 0) > 0 ? 'completed' : 'accepted';
+    } catch (error) {
+      console.error('Unexpected error checking completed interactions:', error);
+      return 'accepted';
+    }
+  }
+
+  /**
    * Get all unique offers with statistics
-   * Combines segments AND offer_interactions table (for API submissions)
+   * Read from the offer interactions table
    * Deduplicates by offer_id
    * @param accountIds Optional array of account IDs to filter by. If provided, only offers belonging to these accounts are returned.
    */
@@ -33,96 +76,7 @@ export class HybridOfferService {
     try {
       const offerSummariesMap = new Map<string, OfferSummary>();
 
-      // 1. Get offers from segments - fetch BOTH "Accepted" and "Completed" segments
-      // "Completed" takes priority over "Accepted" for counts
-      const { data: allSegments, error } = await supabase
-        .from('segments')
-        .select('name, cio_segment_id, updated_at')
-        .or('name.like.Offer // % // Accepted,name.like.Offer // % // Completed')
-        .order('name');
-
-      if (error) {
-        console.error('Error fetching offer segments:', error);
-      }
-
-      if (allSegments && allSegments.length > 0) {
-        // Parse segments and group by offer ID
-        // Track both Accepted and Completed segments for each offer
-        const offerSegmentsMap = new Map<string, {
-          acceptedSegmentId?: number;
-          completedSegmentId?: number;
-          lastSyncedAt?: string;
-        }>();
-
-        allSegments.forEach(segment => {
-          const acceptedMatch = segment.name.match(/^Offer \/\/ (.+) \/\/ Accepted$/);
-          const completedMatch = segment.name.match(/^Offer \/\/ (.+) \/\/ Completed$/);
-
-          if (acceptedMatch) {
-            const offerId = acceptedMatch[1];
-            const existing = offerSegmentsMap.get(offerId) || {};
-            offerSegmentsMap.set(offerId, {
-              ...existing,
-              acceptedSegmentId: segment.cio_segment_id,
-              lastSyncedAt: existing.lastSyncedAt || segment.updated_at
-            });
-          } else if (completedMatch) {
-            const offerId = completedMatch[1];
-            const existing = offerSegmentsMap.get(offerId) || {};
-            offerSegmentsMap.set(offerId, {
-              ...existing,
-              completedSegmentId: segment.cio_segment_id,
-              lastSyncedAt: segment.updated_at || existing.lastSyncedAt
-            });
-          }
-        });
-
-        // For each offer, prefer Completed segment over Accepted
-        const segmentData: Array<{ offerId: string; segmentId: number; lastSyncedAt?: string }> = [];
-        offerSegmentsMap.forEach((segments, offerId) => {
-          // Prefer Completed segment if available, otherwise use Accepted
-          const segmentId = segments.completedSegmentId || segments.acceptedSegmentId;
-          if (segmentId) {
-            segmentData.push({
-              offerId,
-              segmentId,
-              lastSyncedAt: segments.lastSyncedAt
-            });
-          }
-        });
-
-        // Batch fetch all segment member counts at once
-        const segmentIds = segmentData.map(item => item.segmentId);
-        const memberCounts = await SegmentMappingService.getSegmentMemberCounts(segmentIds);
-
-        // Batch fetch timeline data for all offers
-        const offerIds = segmentData.map(item => item.offerId);
-        const timelineDataMap = await this.getOfferTimelineDataBatch(offerIds);
-
-        // Fetch account information for all offers
-        const accountDataMap = await this.getAccountDataForOffers(offerIds);
-
-        // Build offer summaries from segments
-        segmentData.forEach(({ offerId, segmentId, lastSyncedAt }) => {
-          const memberCount = memberCounts.get(segmentId) || 0;
-          const timelineData = timelineDataMap.get(offerId) || { first: null, last: null };
-          const accountData = accountDataMap.get(offerId) || { accountId: null, accountName: null };
-
-          offerSummariesMap.set(offerId, {
-            offer_id: offerId,
-            total_interactions: memberCount,
-            accepted_count: memberCount,
-            viewed_count: 0,
-            first_interaction: timelineData.first || lastSyncedAt || new Date().toISOString(),
-            last_interaction: timelineData.last || lastSyncedAt || new Date().toISOString(),
-            account_id: accountData.accountId,
-            account_name: accountData.accountName
-          });
-        });
-      }
-
-      // 2. Also get offers from offer_interactions table (API submissions)
-      // This catches offers that don't have a segment yet
+      // Get offers from the offer interactions table
       // Query for both 'accepted' and 'completed' statuses since some offers use 'completed'
       // Use pagination to avoid Supabase's 1000 row limit
       const PAGE_SIZE = 1000;
@@ -135,6 +89,7 @@ export class HybridOfferService {
           .from('integrations_offer_interactions')
           .select('offer_id, email, timestamp, offer_status')
           .in('offer_status', ['accepted', 'completed'])
+          .order('id', { ascending: true })
           .range(offset, offset + PAGE_SIZE - 1);
 
         if (interactionError) {
@@ -175,13 +130,16 @@ export class HybridOfferService {
           return acc;
         }, {} as Record<string, { acceptedEmails: Set<string>; completedEmails: Set<string>; timestamps: string[] }>);
 
+        // Account data comes from events.offer_slug
+        const accountDataMap = await this.getAccountDataForOffers(Object.keys(offerGroups));
+
         // For each offer in interactions, merge with existing or add new
-        // Use 'completed' count if available (matches detail page logic which prefers Completed segment)
+        // Use 'completed' count if available (matches detail page logic)
         Object.entries(offerGroups).forEach(([offerId, groupData]) => {
           const existingSummary = offerSummariesMap.get(offerId);
 
           // Prefer completed count if available, otherwise use accepted count
-          // This matches the detail page logic which uses getBestSegmentForOffer
+          // This matches the detail page logic (getAcceptanceStatus)
           const emailCount = groupData.completedEmails.size > 0
             ? groupData.completedEmails.size
             : groupData.acceptedEmails.size;
@@ -210,8 +168,8 @@ export class HybridOfferService {
               }
             }
           } else {
-            // New offer from API submissions only
             const sortedTimestamps = groupData.timestamps.sort();
+            const accountData = accountDataMap.get(offerId) || { accountId: null, accountName: null };
             offerSummariesMap.set(offerId, {
               offer_id: offerId,
               total_interactions: emailCount,
@@ -219,8 +177,8 @@ export class HybridOfferService {
               viewed_count: 0,
               first_interaction: sortedTimestamps[0] || new Date().toISOString(),
               last_interaction: sortedTimestamps[sortedTimestamps.length - 1] || new Date().toISOString(),
-              account_id: null,
-              account_name: null
+              account_id: accountData.accountId,
+              account_name: accountData.accountName
             });
           }
         });
@@ -238,7 +196,7 @@ export class HybridOfferService {
       }
 
       // For offers with 0 accepted count, get the actual count using getAcceptedCount
-      // This ensures we use the same logic as the detail page (which queries offer_interactions correctly)
+      // This ensures we use the same logic as the detail page (which queries integrations_offer_interactions correctly)
       const offersNeedingCount = offerSummaries.filter(o => o.accepted_count === 0);
       if (offersNeedingCount.length > 0) {
         const countPromises = offersNeedingCount.map(async (offer) => {
@@ -265,21 +223,17 @@ export class HybridOfferService {
   }
 
   /**
-   * Get a single offer by ID using hybrid approach
-   * Uses "Completed" segment if available, otherwise "Accepted"
-   * Also includes offer_interactions data
+   * Get a single offer by ID
+   * Uses "completed" interactions if the offer has any, otherwise "accepted"
    */
   static async getOfferById(offerId: string): Promise<OfferSummary | null> {
     try {
-      // Get the best segment (Completed if available, otherwise Accepted)
-      const { segmentId, status } = await SegmentMappingService.getBestSegmentForOffer(offerId);
+      const status = await this.getAcceptanceStatus(offerId);
 
-      // Get count using the same logic as getAcceptedCount (includes both segment and interactions)
       const acceptedCount = await this.getAcceptedCount(offerId);
 
-      // If no segment AND no interactions, return null
-      if (!segmentId && acceptedCount === 0) {
-        console.log(`No segment or interactions found for offer: ${offerId}`);
+      if (acceptedCount === 0) {
+        console.log(`No interactions found for offer: ${offerId}`);
         return null;
       }
 
@@ -302,20 +256,12 @@ export class HybridOfferService {
   }
 
   /**
-   * Get accepted/completed count for a specific offer
-   * Prefers interaction count to match what's shown in the detail page table
-   * Falls back to segment membership count if no interactions exist
+   * Get accepted/completed count (unique emails) for a specific offer
    */
   static async getAcceptedCount(offerSlug: string): Promise<number> {
     try {
-      // Get the best segment info (Completed if available, otherwise Accepted)
-      const { segmentId, status } = await SegmentMappingService.getBestSegmentForOffer(offerSlug);
+      const interactionStatus = await this.getAcceptanceStatus(offerSlug);
 
-      // Use 'completed' status if we're using a Completed segment, otherwise 'accepted'
-      const interactionStatus = status === 'completed' ? 'completed' : 'accepted';
-
-      // 1. First try to get count from offer_interactions table
-      // This matches what the detail page shows in the members table
       // Use pagination to avoid Supabase's 1000 row limit
       const PAGE_SIZE = 1000;
       let allEmails: string[] = [];
@@ -324,10 +270,11 @@ export class HybridOfferService {
 
       while (hasMore) {
         const { data: interactionEmails, error: interactionError } = await supabase
-          .from('integrations_offer_interactions')
+          .from(getInteractionTable(offerSlug))
           .select('email')
           .eq('offer_id', offerSlug)
           .eq('offer_status', interactionStatus)
+          .order('id', { ascending: true })
           .range(offset, offset + PAGE_SIZE - 1);
 
         if (interactionError) {
@@ -352,14 +299,6 @@ export class HybridOfferService {
         return uniqueEmails.size;
       }
 
-      // 2. Fall back to segment membership count if no interactions
-      if (segmentId) {
-        const segmentCount = await SegmentMappingService.getSegmentMemberCount(segmentId);
-        if (segmentCount > 0) {
-          return segmentCount;
-        }
-      }
-
       return 0;
     } catch (error) {
       console.error('Unexpected error getting accepted count:', error);
@@ -369,89 +308,35 @@ export class HybridOfferService {
 
   /**
    * Get all customers who accepted/completed a specific offer
-   * Uses "Completed" segment if available, otherwise "Accepted"
-   * Also includes customers from offer_interactions table (API submissions)
+   * Uses "completed" interactions if the offer has any, otherwise "accepted"
+   * Also includes customers from integrations_offer_interactions table (API submissions)
    * Deduplicates by email to avoid double-counting
    */
   static async getAcceptedForOffer(offerSlug: string): Promise<any[]> {
     try {
       const profilesMap = new Map<string, any>(); // Dedupe by email
 
-      // 1. Get customers from best segment (Completed if available, otherwise Accepted)
-      const { segmentId, status } = await SegmentMappingService.getBestSegmentForOffer(offerSlug);
+      const interactionStatus = await this.getAcceptanceStatus(offerSlug);
 
-      if (segmentId) {
-        // NOTE: Reconciliation is disabled because the offer_interactions table now requires
-        // customer_id (NOT NULL) which the reconciler doesn't have access to from segment data.
-        // Reconciliation should be done via a background job that can look up customer_id.
-        // const reconcileStatus = await SegmentInteractionReconciler.getReconciliationStatus(offerSlug, segmentId);
-        // if (reconcileStatus.pendingCount > 0) {
-        //   console.log(`Reconciling ${reconcileStatus.pendingCount} missing interactions for ${offerSlug}...`);
-        //   await SegmentInteractionReconciler.reconcileOfferSegment(offerSlug, segmentId);
-        // }
-
-        // Get all member CIO IDs from segment membership
-        const cioIds = await SegmentMappingService.getSegmentMembers(segmentId);
-
-        if (cioIds.length > 0) {
-          // Fetch customer data in batches
-          const BATCH_SIZE = 500;
-
-          for (let i = 0; i < cioIds.length; i += BATCH_SIZE) {
-            const batch = cioIds.slice(i, i + BATCH_SIZE);
-
-            const { data: customers, error: customerError } = await supabase
-              .from('people')
-              .select('*')
-              .in('cio_id', batch);
-
-            if (customerError) {
-              console.error('Error fetching customer batch:', customerError);
-              continue;
-            }
-
-            if (customers) {
-              customers.forEach(customer => {
-                const email = customer.email || customer.cio_id;
-                if (email && !profilesMap.has(email.toLowerCase())) {
-                  profilesMap.set(email.toLowerCase(), {
-                    email,
-                    first_name: customer.attributes?.first_name,
-                    last_name: customer.attributes?.last_name,
-                    job_title: customer.attributes?.job_title,
-                    company: customer.attributes?.company,
-                    linkedin_url: customer.attributes?.linkedin_url,
-                    city: customer.attributes?.city,
-                    country: customer.attributes?.country,
-                    continent: customer.attributes?.continent,
-                    location: customer.attributes?.location,
-                    cio_id: customer.cio_id,
-                    id: customer.id,
-                    source: 'segment'
-                  });
-                }
-              });
-            }
-          }
-        }
-      }
-
-      // 2. Also get customers from offer_interactions table (API submissions)
-      // Use 'completed' status if we're using a Completed segment, otherwise 'accepted'
-      const interactionStatus = status === 'completed' ? 'completed' : 'accepted';
-
+      // Get customers from the interaction table
       // Paginate through all interactions to avoid 1000 row limit
       const PAGE_SIZE = 1000;
-      let allInteractions: Array<{ email: string; customer_cio_id: string | null; customer_id: string | null; timestamp: string }> = [];
+      const interactionTable = getInteractionTable(offerSlug);
+      // customer_id (legacy customers.id) only exists on the offer interactions table
+      const interactionColumns = interactionTable === 'integrations_offer_interactions'
+        ? 'email, customer_cio_id, customer_id, timestamp'
+        : 'email, customer_cio_id, timestamp';
+      let allInteractions: Array<{ email: string; customer_cio_id: string | null; customer_id?: string | null; timestamp: string }> = [];
       let offset = 0;
       let hasMore = true;
 
       while (hasMore) {
         const { data: interactionPage, error: interactionError } = await supabase
-          .from('integrations_offer_interactions')
-          .select('email, customer_cio_id, customer_id, timestamp')
+          .from(interactionTable)
+          .select(interactionColumns)
           .eq('offer_id', offerSlug)
           .eq('offer_status', interactionStatus)
+          .order('id', { ascending: true })
           .range(offset, offset + PAGE_SIZE - 1);
 
         if (interactionError) {
@@ -462,7 +347,7 @@ export class HybridOfferService {
         if (!interactionPage || interactionPage.length === 0) {
           hasMore = false;
         } else {
-          allInteractions = allInteractions.concat(interactionPage);
+          allInteractions = allInteractions.concat(interactionPage as unknown as typeof allInteractions);
           offset += PAGE_SIZE;
           hasMore = interactionPage.length === PAGE_SIZE;
         }
@@ -531,7 +416,7 @@ export class HybridOfferService {
                 continent: null,
                 location: null,
                 cio_id: interaction.customer_cio_id,
-                id: interaction.customer_id,
+                id: interaction.customer_id ?? null,
                 source: 'api'
               });
             }
@@ -540,7 +425,7 @@ export class HybridOfferService {
       }
 
       const profiles = Array.from(profilesMap.values());
-      console.log(`Found ${profiles.length} accepted customers for ${offerSlug} (segment: ${segmentId ? 'yes' : 'no'}, from interactions: ${interactions?.length || 0})`);
+      console.log(`Found ${profiles.length} accepted customers for ${offerSlug} (from interactions: ${interactions?.length || 0})`);
 
       return profiles;
 
@@ -552,52 +437,44 @@ export class HybridOfferService {
 
   /**
    * Get timeline data for accepted/completed offer interactions
-   * Uses "Completed" segment if available, otherwise "Accepted"
-   * Uses interaction tables for granular timestamp data
+   * Uses "completed" interactions if the offer has any, otherwise "accepted"
    */
   static async getAcceptedTimeline(offerSlug: string): Promise<Array<{ date: string; count: number; cumulative: number }>> {
     try {
-      // Get the best segment (Completed if available, otherwise Accepted)
-      const { segmentId, status } = await SegmentMappingService.getBestSegmentForOffer(offerSlug);
+      const interactionStatus = await this.getAcceptanceStatus(offerSlug);
 
-      // Determine which table to use based on offer_id prefix
-      let tableName: string;
-      if (offerSlug.startsWith('win-')) {
-        tableName = 'competition_interactions';
-      } else if (offerSlug.startsWith('discount-') || offerSlug.startsWith('free-tickets-')) {
-        tableName = 'discount_interactions';
-      } else {
-        tableName = 'offer_interactions';
-      }
+      // Get timeline from the interactions table, paginated past the
+      // 1000 row limit
+      const PAGE_SIZE = 1000;
+      let data: Array<{ timestamp: string }> = [];
+      let offset = 0;
+      let hasMore = true;
 
-      // Use the correct offer_status based on the segment type
-      const interactionStatus = status === 'completed' ? 'completed' : 'accepted';
+      while (hasMore) {
+        const { data: page, error } = await supabase
+          .from(getInteractionTable(offerSlug))
+          .select('timestamp')
+          .eq('offer_id', offerSlug)
+          .eq('offer_status', interactionStatus)
+          .order('timestamp', { ascending: true })
+          .order('id', { ascending: true })
+          .range(offset, offset + PAGE_SIZE - 1);
 
-      // Get timeline from interactions table
-      const { data, error } = await supabase
-        .from(tableName)
-        .select('timestamp')
-        .eq('offer_id', offerSlug)
-        .eq('offer_status', interactionStatus)
-        .order('timestamp', { ascending: true });
-
-      if (error) {
-        console.error('Error loading accepted timeline:', error);
-        return [];
-      }
-
-      if (!data || data.length === 0) {
-        // If no interactions yet but we have a segment, return current segment count as a single point
-        if (segmentId) {
-          const currentCount = await SegmentMappingService.getSegmentMemberCount(segmentId);
-          if (currentCount > 0) {
-            return [{
-              date: new Date().toISOString(),
-              count: currentCount,
-              cumulative: currentCount
-            }];
-          }
+        if (error) {
+          console.error('Error loading accepted timeline:', error);
+          return [];
         }
+
+        if (!page || page.length === 0) {
+          hasMore = false;
+        } else {
+          data = data.concat(page);
+          offset += PAGE_SIZE;
+          hasMore = page.length === PAGE_SIZE;
+        }
+      }
+
+      if (data.length === 0) {
         return [];
       }
 
@@ -639,31 +516,33 @@ export class HybridOfferService {
    */
   private static async getOfferTimelineData(offerId: string, status: 'accepted' | 'completed' = 'accepted'): Promise<{ first: string | null; last: string | null }> {
     try {
-      // Determine which table to use based on offer_id prefix
-      let tableName: string;
-      if (offerId.startsWith('win-')) {
-        tableName = 'competition_interactions';
-      } else if (offerId.startsWith('discount-') || offerId.startsWith('free-tickets-')) {
-        tableName = 'discount_interactions';
-      } else {
-        tableName = 'offer_interactions';
-      }
+      const tableName = getInteractionTable(offerId);
 
-      // Query the interactions table for timeline data
-      const { data, error } = await supabase
-        .from(tableName)
-        .select('timestamp')
-        .eq('offer_id', offerId)
-        .eq('offer_status', status)
-        .order('timestamp', { ascending: true });
+      // Earliest and latest timestamps, one row each
+      const [firstRes, lastRes] = await Promise.all([
+        supabase
+          .from(tableName)
+          .select('timestamp')
+          .eq('offer_id', offerId)
+          .eq('offer_status', status)
+          .order('timestamp', { ascending: true })
+          .limit(1),
+        supabase
+          .from(tableName)
+          .select('timestamp')
+          .eq('offer_id', offerId)
+          .eq('offer_status', status)
+          .order('timestamp', { ascending: false })
+          .limit(1),
+      ]);
 
-      if (error || !data || data.length === 0) {
+      if (firstRes.error || lastRes.error || !firstRes.data?.length || !lastRes.data?.length) {
         return { first: null, last: null };
       }
 
       return {
-        first: data[0].timestamp,
-        last: data[data.length - 1].timestamp
+        first: firstRes.data[0].timestamp,
+        last: lastRes.data[0].timestamp
       };
 
     } catch (error) {
@@ -673,117 +552,8 @@ export class HybridOfferService {
   }
 
   /**
-   * Batch helper to get first and last interaction timestamps for multiple offers
-   * This is much more efficient than calling getOfferTimelineData for each offer
-   */
-  private static async getOfferTimelineDataBatch(offerIds: string[]): Promise<Map<string, { first: string | null; last: string | null }>> {
-    const timelineMap = new Map<string, { first: string | null; last: string | null }>();
-
-    if (offerIds.length === 0) {
-      return timelineMap;
-    }
-
-    try {
-      // Group offer IDs by table type
-      const competitionOffers = offerIds.filter(id => id.startsWith('win-'));
-      const discountOffers = offerIds.filter(id => id.startsWith('discount-') || id.startsWith('free-tickets-'));
-      const regularOffers = offerIds.filter(id =>
-        !id.startsWith('win-') &&
-        !id.startsWith('discount-') &&
-        !id.startsWith('free-tickets-')
-      );
-
-      // Batch query each table
-      const queries = [];
-
-      if (competitionOffers.length > 0) {
-        queries.push(
-          supabase
-            .from('events_competition_interactions')
-            .select('offer_id, timestamp')
-            .in('offer_id', competitionOffers)
-            .eq('offer_status', 'accepted')
-            .order('timestamp', { ascending: true })
-        );
-      }
-
-      if (discountOffers.length > 0) {
-        queries.push(
-          supabase
-            .from('events_discount_interactions')
-            .select('offer_id, timestamp')
-            .in('offer_id', discountOffers)
-            .eq('offer_status', 'accepted')
-            .order('timestamp', { ascending: true })
-        );
-      }
-
-      if (regularOffers.length > 0) {
-        queries.push(
-          supabase
-            .from('integrations_offer_interactions')
-            .select('offer_id, timestamp')
-            .in('offer_id', regularOffers)
-            .eq('offer_status', 'accepted')
-            .order('timestamp', { ascending: true })
-        );
-      }
-
-      // Execute all queries in parallel
-      const results = await Promise.all(queries);
-
-      // Process results from all tables
-      for (const result of results) {
-        const { data, error } = result;
-
-        if (error || !data) {
-          console.error('Error fetching timeline data:', error);
-          continue;
-        }
-
-        // Group by offer_id and get first/last timestamps
-        const offerGroups = data.reduce((acc, item) => {
-          if (!acc[item.offer_id]) {
-            acc[item.offer_id] = [];
-          }
-          acc[item.offer_id].push(item.timestamp);
-          return acc;
-        }, {} as Record<string, string[]>);
-
-        // Set first and last for each offer
-        Object.keys(offerGroups).forEach(offerId => {
-          const timestamps = offerGroups[offerId];
-          if (timestamps.length > 0) {
-            timelineMap.set(offerId, {
-              first: timestamps[0],
-              last: timestamps[timestamps.length - 1]
-            });
-          }
-        });
-      }
-
-      // Initialize missing offers with null values
-      offerIds.forEach(offerId => {
-        if (!timelineMap.has(offerId)) {
-          timelineMap.set(offerId, { first: null, last: null });
-        }
-      });
-
-      return timelineMap;
-
-    } catch (error) {
-      console.error('Error getting batch offer timeline data:', error);
-      // Initialize all offers with null values on error
-      offerIds.forEach(offerId => {
-        timelineMap.set(offerId, { first: null, last: null });
-      });
-      return timelineMap;
-    }
-  }
-
-  /**
    * Batch helper to get account data for multiple offers
-   * Maps offer IDs to their associated account information via events table and segment mappings
+   * Maps offer IDs to their associated account information via the events table
    */
   private static async getAccountDataForOffers(offerIds: string[]): Promise<Map<string, { accountId: string | null; accountName: string | null }>> {
     const accountMap = new Map<string, { accountId: string | null; accountName: string | null }>();
@@ -793,7 +563,7 @@ export class HybridOfferService {
     }
 
     try {
-      // First, try to get account data from events table (direct mapping)
+      // Account data from the events table (events.offer_slug)
       const { data: eventData, error: eventError } = await supabase
         .from('events')
         .select(`
@@ -817,36 +587,6 @@ export class HybridOfferService {
             });
           }
         });
-      }
-
-      // For offers not found in events, try segment_mappings table
-      const unmappedOfferIds = offerIds.filter(id => !accountMap.has(id));
-
-      if (unmappedOfferIds.length > 0) {
-        const { data: mappingData, error: mappingError } = await supabase
-          .from('segments_mappings')
-          .select(`
-            offer_id,
-            account_id,
-            accounts:account_id (
-              name
-            )
-          `)
-          .in('offer_id', unmappedOfferIds)
-          .not('account_id', 'is', null);
-
-        if (mappingError) {
-          console.error('Error fetching account data from segment_mappings:', mappingError);
-        } else if (mappingData) {
-          mappingData.forEach((row: any) => {
-            if (row.offer_id) {
-              accountMap.set(row.offer_id, {
-                accountId: row.account_id || null,
-                accountName: row.accounts?.name || null
-              });
-            }
-          });
-        }
       }
 
       // Initialize any remaining missing offers with null values
@@ -1037,21 +777,8 @@ export class HybridOfferService {
     accepted_at: string;
   }>> {
     try {
-      // Get the best segment (Completed if available, otherwise Accepted)
-      const { status } = await SegmentMappingService.getBestSegmentForOffer(offerId);
-
-      // Determine which table to use based on offer_id prefix
-      let tableName: string;
-      if (offerId.startsWith('win-')) {
-        tableName = 'competition_interactions';
-      } else if (offerId.startsWith('discount-') || offerId.startsWith('free-tickets-')) {
-        tableName = 'discount_interactions';
-      } else {
-        tableName = 'offer_interactions';
-      }
-
-      // Use the correct offer_status based on the segment type
-      const interactionStatus = status === 'completed' ? 'completed' : 'accepted';
+      const interactionStatus = await this.getAcceptanceStatus(offerId);
+      const tableName = getInteractionTable(offerId);
 
       // Get all interactions with timestamps and emails using pagination
       // Supabase has a default limit of 1000 rows, so we need to paginate
@@ -1067,6 +794,7 @@ export class HybridOfferService {
           .eq('offer_id', offerId)
           .eq('offer_status', interactionStatus)
           .order('timestamp', { ascending: false })
+          .order('id', { ascending: true })
           .range(offset, offset + PAGE_SIZE - 1);
 
         if (error) {
@@ -1163,48 +891,25 @@ export class HybridOfferService {
   }
 
   /**
-   * Get reconciliation status for an offer
-   * Shows how many records are in sync vs pending
+   * Get reconciliation status for an offer.
+   * Reconciliation compared Customer.io segment membership with the
+   * interaction tables. There is no segment mirror on this platform (the
+   * interaction tables are the source of truth), so there is nothing to
+   * reconcile and this always reports no segment data.
    */
-  static async getOfferReconciliationStatus(offerId: string): Promise<{
+  static async getOfferReconciliationStatus(_offerId: string): Promise<{
     isReconciled: boolean;
     segmentCount: number;
     interactionCount: number;
     pendingCount: number;
     syncedCount: number;
   }> {
-    try {
-      const segmentId = await SegmentMappingService.getSegmentIdForOffer(offerId);
-
-      if (!segmentId) {
-        return {
-          isReconciled: false,
-          segmentCount: 0,
-          interactionCount: 0,
-          pendingCount: 0,
-          syncedCount: 0
-        };
-      }
-
-      const status = await SegmentInteractionReconciler.getReconciliationStatus(offerId, segmentId);
-
-      return {
-        isReconciled: status.pendingCount === 0,
-        segmentCount: status.segmentCount,
-        interactionCount: status.interactionCount,
-        pendingCount: status.pendingCount,
-        syncedCount: status.syncedCount
-      };
-
-    } catch (error) {
-      console.error('Error getting reconciliation status:', error);
-      return {
-        isReconciled: false,
-        segmentCount: 0,
-        interactionCount: 0,
-        pendingCount: 0,
-        syncedCount: 0
-      };
-    }
+    return {
+      isReconciled: false,
+      segmentCount: 0,
+      interactionCount: 0,
+      pendingCount: 0,
+      syncedCount: 0
+    };
   }
 }

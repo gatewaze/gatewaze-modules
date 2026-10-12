@@ -1,6 +1,6 @@
 import { supabase } from '@/lib/supabase';
 
-// Offer interaction interface matching the offer_interactions table
+// Offer interaction interface matching the integrations_offer_interactions table
 export interface OfferInteraction {
   customer_cio_id: string;
   offer_id: string;
@@ -27,7 +27,7 @@ export interface OfferSummary {
 export class OfferService {
 
   /**
-   * Get all unique offers from offer_interactions table
+   * Get all unique offers from integrations_offer_interactions table
    * Returns a list of offers with their statistics
    * @param _accountIds Optional array of account IDs to filter by (not implemented in this version)
    */
@@ -227,7 +227,7 @@ export class OfferService {
   }
 
   /**
-   * Get all customers who accepted a specific offer (from offer_interactions)
+   * Get all customers who accepted a specific offer (from integrations_offer_interactions)
    * This returns enriched customer profiles from the database
    */
   static async getAcceptedForOffer(offerSlug: string): Promise<any[]> {

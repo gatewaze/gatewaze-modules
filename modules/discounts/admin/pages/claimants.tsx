@@ -13,6 +13,9 @@ import { EventService, Event } from '@/utils/eventService';
 import { ActiveDiscountService as DiscountService } from '@/utils/serviceSwitcher';
 import { PersonProfile } from '@/utils/winnerSelectionService';
 import { useAccountAccess } from '@/hooks/useAccountAccess';
+import { supabase } from '@/lib/supabase';
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export default function DiscountClaimantsPage() {
   const { eventId } = useParams<{ eventId: string }>();
@@ -33,10 +36,25 @@ export default function DiscountClaimantsPage() {
     }
   }, [eventId]);
 
+  // The discounts list links here with the discount id; older links used the
+  // event id. Resolve a discount id to its event uuid and offer slug.
+  const resolveDiscount = async (id: string): Promise<{ eventRef: string; slug: string | null }> => {
+    if (UUID_RE.test(id)) {
+      const { data } = await supabase
+        .from('events_discounts')
+        .select('event_id, slug')
+        .eq('id', id)
+        .maybeSingle();
+      if (data) return { eventRef: data.event_id || id, slug: data.slug };
+    }
+    return { eventRef: id, slug: null };
+  };
+
   const loadDiscount = async (id: string) => {
     try {
       console.log('Loading discount with UUID:', id);
-      const response = await EventService.getEventById(id);
+      const { eventRef } = await resolveDiscount(id);
+      const response = await EventService.getEventById(eventRef);
       console.log('Discount loaded:', response);
       if (response.success && response.data) {
         setDiscount(response.data);
@@ -57,18 +75,20 @@ export default function DiscountClaimantsPage() {
 
     try {
       console.log('📊 [1/2] Loading discount details...');
-      const response = await EventService.getEventById(id);
+      const { eventRef, slug } = await resolveDiscount(id);
+      const response = await EventService.getEventById(eventRef);
       const event = response.data;
-      if (!event || !event.offerSlug) {
+      const offerSlug = slug || event?.offerSlug;
+      if (!offerSlug) {
         console.error('❌ No offer slug found for discount');
         setIsLoadingClaimants(false);
         return;
       }
-      console.log('✅ Discount loaded:', event.eventTitle);
+      console.log('✅ Discount loaded:', event?.eventTitle);
 
-      // Get claimants from discount_interactions table
-      console.log('📊 [2/2] Fetching claimants from discount_interactions table...');
-      const customers = await DiscountService.getClaimantsForOffer(event.offerSlug);
+      // Get claimants from events_discount_interactions
+      console.log('📊 [2/2] Fetching claimants from events_discount_interactions...');
+      const customers = await DiscountService.getClaimantsForOffer(offerSlug);
       console.log(`✅ Fetched ${customers.length} claimants from database`);
 
       console.log(`🎉 Successfully loaded ${customers.length} claimants`);
