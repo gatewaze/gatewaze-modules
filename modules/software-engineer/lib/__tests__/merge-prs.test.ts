@@ -11,6 +11,7 @@ const hub = vi.hoisted(() => ({ prs: {} as Record<number, any>, merged: [] as nu
 vi.mock('../github.js', () => ({
   githubClient: () => ({
     getPullRequest: async (_o: string, _n: string, num: number) => hub.prs[num] ?? {},
+    getCommit: async () => ({commit:{committer:{date:'2026-10-10T00:00:00Z'}}}),
     mergePullRequest: async (_o: string, _n: string, num: number, _method: string, sha?: string) => {
       hub.expectedSha=sha;
       if (hub.mergeThrows) throw new Error(hub.mergeThrows);
@@ -22,6 +23,8 @@ vi.mock('../github.js', () => ({
 }));
 
 vi.mock('../decisions.js',()=>({createOrSupersedeDecision:vi.fn()}));
+vi.mock('../credentials.js', () => ({ getCodeRepos: async () => [{repoOwner:'acme',repoName:'app',enabled:true,writeMode:'writable',mergePolicy:'auto_merge_verified'},{repoOwner:'acme',repoName:'core',enabled:true,writeMode:'writable',mergePolicy:'manual'}] }));
+
 import { mergeRunPrs } from '../merge-prs.js';
 
 // Supabase double for listRunPrs (returns `rows`) + upsertRunPr (records the patch per repo).
@@ -129,4 +132,24 @@ describe('mergeRunPrs', () => {
     expect(hub.expectedSha).toBe('a'.repeat(40));
   });
 
+});
+
+it('autonomous multi-repo merge never merges a manual repository', async () => {
+ hub.prs[31]={mergeable_state:'clean',head:{sha:'a'.repeat(40)}};
+ hub.prs[32]={mergeable_state:'clean',head:{sha:'b'.repeat(40)}};
+ const supa=mockSupabase([pr(31,{verified_sha:'a'.repeat(40)}),pr(32,{repo_name:'core'})]);
+ const original=supa.from;supa.from=(table)=>table==='se_phases'?(()=>{const q={select:()=>q,eq:()=>q,order:()=>q,limit:()=>q,maybeSingle:async()=>({data:{status:'passed',finished_at:'2026-10-11T00:00:00Z'}})};return q;})():original();
+ hub.merged=[];const result=await mergeRunPrs(supa,RUN,PROJECT,{autonomous:true});
+ expect(hub.merged).toEqual([31]);expect(result.results[1].reason).toBe('repository_merge_policy');
+});
+it('external PR cannot automatically merge even with repo opt-in', async()=>{
+ hub.merged=[];const result=await mergeRunPrs(mockSupabase([pr(31)]),{...RUN,kind:'external_pr'},PROJECT,{autonomous:true});
+ expect(hub.merged).toEqual([]);expect(result.held).toBe(1);
+});
+
+it('holds a clean head changed after exact verification', async()=>{
+ hub.prs[41]={mergeable_state:'clean',head:{sha:'b'.repeat(40)}};hub.merged=[];
+ const supa=mockSupabase([pr(41,{verified_sha:'a'.repeat(40)})]);const original=supa.from;
+ supa.from=(table)=>table==='se_phases'?(()=>{const q={select:()=>q,eq:()=>q,order:()=>q,limit:()=>q,maybeSingle:async()=>({data:{status:'passed',finished_at:'2026-10-11T00:00:00Z'}})};return q;})():original();
+ const result=await mergeRunPrs(supa,RUN,PROJECT,{autonomous:true});expect(hub.merged).toEqual([]);expect(result.results[0].reason).toBe('verification_required');
 });
