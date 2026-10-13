@@ -71,6 +71,43 @@ describe('agent-session PreToolUse guards (issue #58 + Bash forbidden-flag)', ()
     expect(capturedOptions.disallowedTools).toContain('ScheduleWakeup');
   });
 
+  it('takes away the tools that outlive a phase turn or wait for a person', async () => {
+    await new InProcessRunner().runPhase({ cwd: dir, prompt: 'spec', model: 'claude-sonnet-5', credential: CRED });
+    for (const name of ['Monitor', 'Workflow', 'AskUserQuestion', 'ScheduleWakeup']) {
+      expect(capturedOptions.disallowedTools).toContain(name);
+    }
+  });
+
+  it('refuses background Agent, Task and Bash calls in a phase, which the permission callback never sees for Agent', async () => {
+    await new InProcessRunner().runPhase({ cwd: dir, prompt: 'spec', model: 'claude-sonnet-5', credential: CRED });
+    const fg = capturedOptions.hooks.PreToolUse.find((h: any) => h.matcher === 'Agent|Task|Bash');
+    for (const name of ['Agent', 'Task', 'Bash']) {
+      const res = await fg.hooks[0]({ tool_name: name, tool_input: { run_in_background: true, prompt: 'explore' } });
+      expect(res.hookSpecificOutput.permissionDecision).toBe('deny');
+      expect(res.hookSpecificOutput.permissionDecisionReason).toContain('run_in_background set to false');
+    }
+    expect(await fg.hooks[0]({ tool_name: 'Agent', tool_input: { prompt: 'explore', run_in_background: false } })).toEqual({});
+    expect(await fg.hooks[0]({ tool_name: 'Bash', tool_input: { command: 'ls', run_in_background: false } })).toEqual({});
+    expect(await fg.hooks[0]({ tool_name: 'Bash', tool_input: { command: 'ls' } })).toEqual({});
+  });
+
+  it('refuses an Agent or Task call that leaves run_in_background unset, because both default to the background', async () => {
+    // Run #100, spec attempt 3: Agent with no run_in_background returned "Async agent launched
+    // successfully", the main agent ended its turn to wait, and the session closed under it.
+    await new InProcessRunner().runPhase({ cwd: dir, prompt: 'spec', model: 'claude-sonnet-5', credential: CRED });
+    const fg = capturedOptions.hooks.PreToolUse.find((h: any) => h.matcher === 'Agent|Task|Bash');
+    for (const name of ['Agent', 'Task']) {
+      const res = await fg.hooks[0]({ tool_name: name, tool_input: { prompt: 'explore the repo' } });
+      expect(res.hookSpecificOutput.permissionDecision).toBe('deny');
+    }
+  });
+
+  it('leaves background work alone in an interactive session, which stays open across turns', async () => {
+    const runner = new InProcessRunner();
+    await runner.runInteractive({ cwd: dir, kickoff: 'hi', model: 'claude-sonnet-5', credential: CRED, inputSource: (async function* () {})() });
+    expect(capturedOptions.hooks.PreToolUse.find((h: any) => h.matcher === 'Agent|Task|Bash')).toBeUndefined();
+  });
+
   it('denies a Bash command with --no-verify', async () => {
     const hook = await bashHook();
     const res = await hook({ tool_input: { command: 'git push --no-verify' } });

@@ -18,8 +18,8 @@ INSERT INTO public.segments_memberships (segment_id, person_id) VALUES
 INSERT INTO public.broadcast_suppressions (email, topic, source) VALUES ('dave@example.com','broadcasts','manual');
 
 -- A tz_local broadcast send at 09:00, default UTC
-INSERT INTO public.broadcast_sends (id, name, brand, audience_type, segment_id, subject, rendered_html, suppression_topic, status, delivery_strategy, default_timezone, target_local, scheduled_at)
-VALUES ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','Test','aaif','segment','99999999-9999-9999-9999-999999999999','Hi','<html><body>Hello</body></html>','broadcasts','scheduled','tz_local','UTC','09:00','2026-06-19 00:00:00+00');
+INSERT INTO public.broadcast_sends (id, name, brand, audience_type, segment_id, subject, preheader, rendered_html, suppression_topic, status, delivery_strategy, default_timezone, target_local, scheduled_at)
+VALUES ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','Test','aaif','segment','99999999-9999-9999-9999-999999999999','Hi','Hello preview','<html><body>Hello</body></html>','broadcasts','scheduled','tz_local','UTC','09:00','2026-06-19 00:00:00+00');
 
 -- FAN OUT
 SELECT public.fanout_broadcast_send_recipients('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa') AS fanned_out;

@@ -22,6 +22,7 @@ import { parseSkillsConfig } from '../lib/skills.js';
 import { normalizeModel } from '../lib/model-select.js';
 import { isAllowedAttachmentUrl } from '../lib/attachments.js';
 import { rateLimit, clientIp } from '../lib/rate-limit.js';
+import { canAutoMergeRepo } from '../lib/repo-merge-policy.js';
 import { classifyPr, summarizeChecks, summarizeReviews } from '../lib/pr-status.js';
 import { connectExternalPr } from '../lib/connect-pr.js';
 import { runTriageTurn } from '../lib/triage.js';
@@ -85,11 +86,11 @@ export function mountAdminRoutes(router, deps) {
 
   // Admin gate — runs BEFORE body parsing so unauthorized requests are rejected before we read a body.
   router.use(async (req, res, next) => {
-    if (!rateLimit(`se-admin:${clientIp(req)}`, 240, 60_000)) {
+    const userId = req.userId ?? req.auth?.userId ?? req.user?.id ?? null;
+    if (!rateLimit(`se-admin:${userId ? 'user:'+userId : 'ip:'+clientIp(req)}`, 240, 60_000)) {
       return res.status(429).json({ error: { code: 'rate_limited', message: 'Too many requests' } });
     }
     if (testAuthBypass()) return next(); // parity with platform requireJwt test bypass
-    const userId = req.userId ?? req.auth?.userId ?? req.user?.id ?? null;
     if (!userId) return res.status(401).json({ error: { code: 'unauthenticated', message: 'Missing user context' } });
     try {
       const { data, error } = await supabase
@@ -1153,7 +1154,7 @@ export function mountAdminRoutes(router, deps) {
   // "who acts next" status (lib/pr-status.ts) so the dashboard answers it without opening the PR.
   // ~3 GitHub calls per PR → cached per scope for PR_BOARD_TTL_MS; ?refresh=1 busts the cache.
   const prBoardCache = new Map<string, { at: number; payload: unknown }>();
-  const PR_BOARD_TTL_MS = 60_000;
+  const PR_BOARD_TTL_MS = 5 * 60_000;
 
   router.get('/overview/prs', async (req, res) => {
     if (!rateLimit(`se-admin:pr-board:${clientIp(req)}`, 60, 60_000)) {
@@ -1183,7 +1184,7 @@ export function mountAdminRoutes(router, deps) {
     // SE-run linkage: open PR rows → their runs, keyed owner/name#number.
     const { data: linkRows } = await supabase
       .from('se_run_prs')
-      .select('repo_owner, repo_name, pr_number, se_runs(id, project_id, status, blast_radius, issue_number, engineer_name)')
+      .select('repo_owner, repo_name, pr_number, se_runs(id, project_id, status, kind, blast_radius, issue_number, engineer_name)')
       .not('pr_number', 'is', null)
       .eq('state', 'open');
     const runByPr = new Map<string, Record<string, unknown>>();
@@ -1281,7 +1282,7 @@ export function mountAdminRoutes(router, deps) {
               state: pull.state, merged: !!pull.merged, draft: !!pull.draft,
               mergeableState: String(pull.mergeable_state ?? 'unknown'),
               checks, reviews: reviewsSum, viewerIsAuthor, viewerCanMerge, viewerIsRequestedReviewer,
-              run: link ? { status: String(link.status), blastRadius: String(link.blast_radius), autonomyMode: String(p.autonomy_mode ?? 'pr_only') } : null,
+              run: link ? { status: String(link.status), blastRadius: 'safe', autonomyMode: canAutoMergeRepo(codeRepos.find(r => r.repoOwner === owner && r.repoName === name),proj,{...link,kind:link.kind}) ? 'auto_merge_safe' : 'pr_only' } : null,
             });
             seen.set(key, prs.length);
             prs.push({
@@ -2226,6 +2227,10 @@ export function mountAdminRoutes(router, deps) {
     const { id, repoId } = req.params;
     if (!UUID.test(id) || !UUID.test(repoId)) return res.status(400).json({ error: 'bad id' });
     const patch: any = {};
+    if (req.body?.merge_policy !== undefined) {
+      if (!['inherit','manual','auto_merge_verified'].includes(req.body.merge_policy)) return res.status(400).json({error:'invalid merge policy'});
+      patch.merge_policy = req.body.merge_policy;
+    }
     if (typeof req.body?.enabled === 'boolean') patch.enabled = req.body.enabled;
     if (req.body?.write_mode === 'writable' || req.body?.write_mode === 'read_only') patch.write_mode = req.body.write_mode;
     if (req.body?.base_branch !== undefined) patch.base_branch = sanitize(req.body.base_branch);

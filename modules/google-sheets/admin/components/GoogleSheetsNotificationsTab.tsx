@@ -23,6 +23,7 @@ import GoogleSheetsService, {
   type EventGoogleSheetsNotification,
   type GoogleSheetsNotificationType,
 } from '@/utils/googleSheetsService';
+import { startGoogleSheetsOAuth } from '../utils/googleSheetsOAuth';
 
 interface GoogleSheetsNotificationsTabProps {
   eventId: string;
@@ -363,6 +364,19 @@ function SheetsNotificationConfig({
   const [sheetName, setSheetName] = useState('Sheet1');
   const [sendHistoric, setSendHistoric] = useState(false);
   const [showColumns, setShowColumns] = useState(false);
+  // True while the authorize request is in flight, so a double click cannot
+  // start two OAuth flows.
+  const [connecting, setConnecting] = useState(false);
+
+  // Coming Back from Google restores this page from the back/forward cache
+  // with the button still disabled; re-enable it.
+  useEffect(() => {
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) setConnecting(false);
+    };
+    window.addEventListener('pageshow', onPageShow);
+    return () => window.removeEventListener('pageshow', onPageShow);
+  }, []);
 
   const isEnabled = notification?.enabled ?? false;
   const isConnected = GoogleSheetsService.hasValidOAuthCredentials(notification);
@@ -392,10 +406,18 @@ function SheetsNotificationConfig({
     onUpdate({ enabled: !isEnabled });
   };
 
-  const handleConnect = () => {
+  const handleConnect = async () => {
+    if (connecting) return;
+    setConnecting(true);
     const returnUrl = window.location.pathname + window.location.search;
-    const oauthUrl = GoogleSheetsService.getGoogleOAuthUrl(eventId, type, returnUrl);
-    window.location.href = oauthUrl;
+    const { url, error } = await startGoogleSheetsOAuth(eventId, type, returnUrl);
+    if (!url) {
+      setConnecting(false);
+      toast.error(`Failed to connect: ${error}`);
+      return;
+    }
+    // Left disabled: the page is navigating away.
+    window.location.href = url;
   };
 
   const handleUrlChange = (url: string) => {
@@ -483,7 +505,7 @@ function SheetsNotificationConfig({
                 variant="outline"
                 size="sm"
                 onClick={handleConnect}
-                disabled={saving}
+                disabled={saving || connecting}
                 className="flex items-center gap-2"
               >
                 <GoogleIcon className="h-4 w-4" />

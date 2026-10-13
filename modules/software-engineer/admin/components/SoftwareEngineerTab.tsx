@@ -1,3 +1,4 @@
+import { createRealtimeRefresh } from '../lib/realtime-refresh';
 // @ts-nocheck
 /**
  * Software Engineer dashboard (spec §14 / §14.1). Standard admin dashboard shell: Page + hero
@@ -126,7 +127,7 @@ function eventLabel(ev: any): string {
   }
 }
 
-const THROTTLE_MS = 500;   // coalesce bursts of realtime events into at most one detail refetch / window
+const THROTTLE_MS = 2000;   // coalesce bursts of realtime events into at most one detail refetch / window
 
 function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null; onSelect: (id: string | null) => void; onGoToSetup: () => void }) {
   const [runs, setRuns] = useState<any[]>([]);
@@ -184,39 +185,28 @@ function RunsView({ selected, onSelect, onGoToSetup }: { selected: string | null
   }, []);
 
   useEffect(() => {
-    loadRuns();
+    const refresh = createRealtimeRefresh(loadRuns);
+    refresh.refresh();
     const ch = supabase.channel('se-runs-board')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'se_runs' }, () => loadRuns())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'se_runs' }, refresh.refresh)
       .subscribe();
-    return () => { supabase.removeChannel(ch); };
+    return () => { refresh.dispose(); supabase.removeChannel(ch); };
   }, [loadRuns]);
 
   useEffect(() => {
     setChatAtts([]);   // don't carry a pending upload from one run into another
     if (!selected) { setDetail(null); return; }
     lastActivityRef.current = Date.now();
-    loadDetail(selected);
-    // Throttle refetches: se_events can burst (one row per tool call), and each realtime signal here
-    // triggers a *full* run refetch. Coalesce to a leading + trailing call per THROTTLE_MS window so a
-    // busy phase doesn't hammer /runs/:id. Any signal also refreshes the freshness clock below.
-    let timer: any = null;
-    let trailing = false;
-    const bump = () => {
-      lastActivityRef.current = Date.now();
-      if (timer) { trailing = true; return; }
-      loadDetail(selected);
-      timer = setTimeout(function fire() {
-        timer = null;
-        if (trailing) { trailing = false; loadDetail(selected); timer = setTimeout(fire, THROTTLE_MS); }
-      }, THROTTLE_MS);
-    };
+    const refresh = createRealtimeRefresh(() => loadDetail(selected), THROTTLE_MS);
+    refresh.refresh();
+    const bump = () => { lastActivityRef.current = Date.now(); refresh.refresh(); };
     const ch = supabase.channel(`se-run-${selected}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'se_events', filter: `run_id=eq.${selected}` }, bump)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'se_messages', filter: `run_id=eq.${selected}` }, bump)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'se_phases', filter: `run_id=eq.${selected}` }, bump)
       .on('postgres_changes', { event: 'UPDATE', schema: 'public', table: 'se_runs', filter: `id=eq.${selected}` }, bump)
       .subscribe();
-    return () => { if (timer) clearTimeout(timer); supabase.removeChannel(ch); };
+    return () => { refresh.dispose(); supabase.removeChannel(ch); };
   }, [selected, loadDetail]);
 
   // Opening a run (or switching to another) starts tailing the latest activity rather than the top.
@@ -942,10 +932,11 @@ function IssuesView() {
 
   // Live run-status badges: se_runs is in Supabase, so realtime keeps them current (mirrors RunsView).
   useEffect(() => {
+    const refresh = createRealtimeRefresh(load);
     const ch = supabase.channel('se-issues-runs')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'se_runs' }, () => load())
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'se_runs' }, refresh.refresh)
       .subscribe();
-    return () => { supabase.removeChannel(ch); };
+    return () => { refresh.dispose(); supabase.removeChannel(ch); };
   }, [load]);
 
   // The issue list itself lives on GitHub (no push to this client), so poll it — but only while the

@@ -119,7 +119,7 @@ export default function DiscountsPage() {
   const loadDiscounts = async () => {
     setLoading(true);
     try {
-      // Query event_discounts with a left join to events for metadata
+      // Query events_discounts with a left join to events for metadata
       const { data, error } = await supabase
         .from('events_discounts')
         .select(`
@@ -251,7 +251,7 @@ export default function DiscountsPage() {
 
       setDiscountCodesStats(statsMap);
 
-      // Load claimant counts from discount_claims table
+      // Load claimant counts from events_discount_claims table
       const counts = new Map<string, number>();
       await Promise.all(
         discountIds.map(async (discountId) => {

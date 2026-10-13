@@ -9,7 +9,7 @@ export type DiscountClaimStatus = 'viewed' | 'accepted' | 'code-issued' | 'depos
 
 export interface EventCompetition {
   id: string;
-  eventId: string;
+  eventId: string; // events.id (uuid); null in the database for a competition with no event
   title: string;
   slug: string;
   value: string;
@@ -27,7 +27,7 @@ export interface EventCompetition {
 
 export interface EventDiscount {
   id: string;
-  eventId: string;
+  eventId: string; // events.id (uuid); null in the database for a discount with no event
   title: string;
   slug: string;
   value: string;
@@ -72,6 +72,8 @@ export interface DiscountClaim {
 
 export interface EventCompetitionWithEvent extends EventCompetition {
   eventTitle: string;
+  // Short text event id (events.event_id); events_competition_winners is keyed by it
+  eventShortId?: string;
   eventCity?: string;
   eventCountryCode?: string;
   eventStart?: string;
@@ -172,7 +174,7 @@ function mapClaimFromDb(row: any): DiscountClaim {
 
 function competitionToDbInsert(data: CreateCompetitionData): Record<string, any> {
   return {
-    event_id: data.eventId,
+    event_id: data.eventId || null,
     title: data.title,
     slug: data.slug,
     value: data.value,
@@ -191,7 +193,7 @@ function competitionToDbUpdate(data: UpdateCompetitionData): Record<string, any>
   const update: Record<string, any> = {
     updated_at: new Date().toISOString(),
   };
-  if (data.eventId !== undefined) update.event_id = data.eventId;
+  if (data.eventId !== undefined) update.event_id = data.eventId || null;
   if (data.title !== undefined) update.title = data.title;
   if (data.slug !== undefined) update.slug = data.slug;
   if (data.value !== undefined) update.value = data.value;
@@ -208,7 +210,7 @@ function competitionToDbUpdate(data: UpdateCompetitionData): Record<string, any>
 
 function discountToDbInsert(data: CreateDiscountData): Record<string, any> {
   return {
-    event_id: data.eventId,
+    event_id: data.eventId || null,
     title: data.title,
     slug: data.slug,
     value: data.value,
@@ -227,7 +229,7 @@ function discountToDbUpdate(data: UpdateDiscountData): Record<string, any> {
   const update: Record<string, any> = {
     updated_at: new Date().toISOString(),
   };
-  if (data.eventId !== undefined) update.event_id = data.eventId;
+  if (data.eventId !== undefined) update.event_id = data.eventId || null;
   if (data.title !== undefined) update.title = data.title;
   if (data.slug !== undefined) update.slug = data.slug;
   if (data.value !== undefined) update.value = data.value;
@@ -273,7 +275,7 @@ export class CompetitionDiscountService {
     try {
       const { data, error } = await supabase
         .from('events_competitions')
-        .select('*, events!inner(event_title, event_city, event_country_code, event_start)')
+        .select('*, events(event_id, event_title, event_city, event_country_code, event_start)')
         .eq('id', id)
         .single();
 
@@ -285,6 +287,7 @@ export class CompetitionDiscountService {
       const competition: EventCompetitionWithEvent = {
         ...mapCompetitionFromDb(data),
         eventTitle: data.events?.event_title || '',
+        eventShortId: data.events?.event_id || undefined,
         eventCity: data.events?.event_city || undefined,
         eventCountryCode: data.events?.event_country_code || undefined,
         eventStart: data.events?.event_start || undefined,
@@ -365,7 +368,7 @@ export class CompetitionDiscountService {
     try {
       const { data, error } = await supabase
         .from('events_competitions')
-        .select('*, events!inner(event_title)')
+        .select('*, events(event_title)')
         .order('sort_order', { ascending: true });
 
       if (error) {
@@ -496,7 +499,7 @@ export class CompetitionDiscountService {
     try {
       const { data, error } = await supabase
         .from('events_discounts')
-        .select('*, events!inner(event_title)')
+        .select('*, events(event_title)')
         .order('sort_order', { ascending: true });
 
       if (error) {
@@ -563,7 +566,7 @@ export class CompetitionDiscountService {
       // First, get all competition entries
       const { data: entries, error: entriesError } = await supabase
         .from('events_competition_entries')
-        .select('id, email, entered_at, status, member_profile_id')
+        .select('id, email, entered_at, status, member_profile_id, person_id')
         .eq('competition_id', competitionId)
         .order('entered_at', { ascending: false });
 
@@ -580,6 +583,20 @@ export class CompetitionDiscountService {
       const memberProfileIds = entries
         .map((e: any) => e.member_profile_id)
         .filter((id: any) => id !== null);
+
+      // Entries carry person_id directly when the entrant has a people row;
+      // older entries only link through their member profile.
+      const directPersonIds = entries
+        .map((e: any) => e.person_id)
+        .filter((id: any) => id !== null && id !== undefined);
+      const directPeopleMap = new Map();
+      if (directPersonIds.length > 0) {
+        const { data: directPeople } = await supabase
+          .from('people')
+          .select('id, cio_id, attributes')
+          .in('id', [...new Set(directPersonIds)]);
+        (directPeople || []).forEach((c: any) => directPeopleMap.set(c.id, c));
+      }
 
       // Fetch member profiles with customer details if we have any
       const profilesMap = new Map();
@@ -621,9 +638,9 @@ export class CompetitionDiscountService {
       // Map entries to PersonProfile format
       const customerProfiles = entries.map((entry: any) => {
         const profile = entry.member_profile_id ? profilesMap.get(entry.member_profile_id) : null;
-        const customer = profile?.customer;
+        const customer = (entry.person_id ? directPeopleMap.get(entry.person_id) : null) || profile?.customer;
 
-        // Customer attributes may have profile data that member_profiles doesn't have
+        // Customer attributes may have profile data that people_profiles doesn't have
         const attrs = (customer?.attributes as Record<string, any>) || {};
 
         const mapped = {

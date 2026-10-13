@@ -220,6 +220,24 @@ const SCRAPER_TYPE_SPECS: ScraperTypeSpec[] = [
       // here if we expose toggles like "skip detail enrichment" later.
     ],
   },
+  {
+    value: 'GatewazePortalEventsScraper',
+    label: 'Gatewaze Portal Events',
+    description: 'Copies the public events of another Gatewaze brand into this one, e.g. every event on aaif.live. Reads that brand\'s public events API over plain HTTP, so it only receives what the other portal shows the public, and that brand keeps running the scrapers that find the events.',
+    objectType: 'events',
+    baseUrlLabel: 'Source API URL',
+    baseUrlPlaceholder: 'https://api.aaif.live',
+    baseUrlHelp: 'The other brand\'s API origin (https only). Events are read from /api/portal/events.',
+    requiresBaseUrl: true,
+    configFields: [
+      { key: 'portal_url', label: 'Source portal URL', type: 'url', placeholder: 'https://aaif.live', helpText: 'Used to link to events the source brand runs itself. Leave blank to use the API host without "api.".' },
+      { key: 'upcoming_only', label: 'Upcoming events only', type: 'boolean', default: false, helpText: 'When off, past events are copied too.' },
+      { key: 'event_type_mappings', label: 'Event type mappings', type: 'keyword-list', placeholder: 'community-event=meetup', helpText: 'Map the source brand\'s event types to this brand\'s, as source=target. Defaults: community-event=meetup, virtual=webinar, forum=conference. Unmapped types are kept as they are.' },
+      { key: 'exclude_event_types', label: 'Skip event types', type: 'keyword-list', placeholder: 'virtual', helpText: 'Source event types not to copy.' },
+      { key: 'request_delay_ms', label: 'Delay between requests (ms)', type: 'number', default: 250, min: 0, max: 10000, helpText: 'Pause between per-event requests to the source API.' },
+      { key: 'max_events', label: 'Max events per run', type: 'number', default: 2000, min: 1, max: 10000, helpText: 'Safety cap on how many events one run copies.' },
+    ],
+  },
 ];
 
 function getSpec(type: string): ScraperTypeSpec | undefined {

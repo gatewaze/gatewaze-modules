@@ -6,10 +6,13 @@ import { toPublicUrl } from '@gatewaze/shared';
 // handles for module-located files.
 import { ScreenshotService } from '@/utils/screenshotService';
 import { EventExportService } from '@/utils/eventExportService';
+import { publicSupabaseUrl } from './publicSupabaseUrl';
 
 // Default bucket URL derived from the Supabase project URL; storage paths stored
 // as relative values are resolved through this base at read time.
-const BUCKET_URL = `${import.meta.env.VITE_SUPABASE_URL}/storage/v1/object/public/media`;
+// The resolved URLs flow into the edit form and are saved back on update, so
+// they use the real Supabase URL, not the host-session admin origin.
+const BUCKET_URL = `${publicSupabaseUrl()}/storage/v1/object/public/media`;
 
 // The events table carries a legacy `custom_domain_status` column that nothing
 // keeps in sync — it gets stamped 'pending' on save and is never advanced. The

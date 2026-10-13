@@ -208,7 +208,7 @@ export function EventMatchingTab({ eventId }: Props) {
     setLoading(true);
     try {
       const [evRes, matchRes, csRes] = await Promise.all([
-        supabase.from('events').select('event_title, event_start, event_link').eq('event_id', eventId).single(),
+        supabase.from('events').select('event_title, event_start, event_link').eq('id', eventId).single(),
         supabase
           .from('events_attendee_matches')
           .select('id, event_id, registration_a_id, registration_b_id, match_score, match_reason, status, intro_email_sent_at, generated_at, preceding_word_a, preceding_word_b')

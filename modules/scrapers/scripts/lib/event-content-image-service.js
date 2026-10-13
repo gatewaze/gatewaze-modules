@@ -9,6 +9,8 @@
  * legacy `../supabase-client.js`).
  */
 
+import { guardedFetch } from './guarded-fetch.js';
+
 const CONTENT_IMAGES_BUCKET = 'event-content-images';
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
 const ALLOWED_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'];
@@ -38,8 +40,7 @@ export async function initializeBucket(supabase) {
   }
 }
 
-function getContentType(response, url) {
-  const headerType = response.headers.get('content-type');
+function getContentType(headerType, url) {
   if (headerType && headerType.startsWith('image/')) return headerType.split(';')[0];
   const ext = url.split('.').pop()?.toLowerCase();
   switch (ext) {
@@ -64,22 +65,28 @@ function getExtension(contentType) {
 
 export async function downloadAndUploadImage(supabase, imageUrl, eventId, imageIndex) {
   try {
-    const response = await fetch(imageUrl, {
+    // Image URLs come from event descriptions that organisers write, and the
+    // bytes are republished from a public bucket, so fetch through the guard:
+    // no internal addresses, every redirect re-checked, size capped.
+    const response = await guardedFetch(imageUrl, {
+      maxBytes: MAX_FILE_SIZE,
       headers: {
         'User-Agent':
           'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
       },
     });
-    if (!response.ok) {
-      return { success: false, error: `download ${response.status} ${response.statusText}` };
+    if (response.status < 200 || response.status >= 300) {
+      return { success: false, error: `download ${response.status}` };
     }
+    const blob = response.buffer;
 
-    const blob = await response.blob();
-    if (blob.size > MAX_FILE_SIZE) {
-      return { success: false, error: `too large: ${(blob.size / 1024 / 1024).toFixed(2)}MB` };
+    // Only fall back to the file extension when the server did not say what
+    // it sent; a declared non-image type is refused.
+    const declared = response.contentType;
+    if (declared && !declared.startsWith('image/') && declared !== 'application/octet-stream' && declared !== 'binary/octet-stream') {
+      return { success: false, error: `unsupported type: ${declared}` };
     }
-
-    const contentType = getContentType(response, imageUrl);
+    const contentType = getContentType(declared, imageUrl);
     if (!ALLOWED_TYPES.includes(contentType)) {
       return { success: false, error: `unsupported type: ${contentType}` };
     }

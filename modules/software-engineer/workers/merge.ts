@@ -8,7 +8,8 @@
  * The pr-monitor finalizes (all merged → close the issue + archive).
  */
 import { createClient } from '@supabase/supabase-js';
-import { getProject } from '../lib/credentials.js';
+import { getProject, getCodeRepos } from '../lib/credentials.js';
+import { canAutoMergeRepo } from '../lib/repo-merge-policy.js';
 import { redactToken } from '../lib/git.js';
 import { mergeRunPrs } from '../lib/merge-prs.js';
 import { recordPhaseStart, recordPhaseEnd, blockRun } from '../lib/run-state.js';
@@ -26,15 +27,22 @@ export default async function merge(job, ctx) {
   if (run.status === 'cancelled' || run.archived_at) return { skipped: 'inactive' };
   const project = await getProject(supabase, run.project_id);
   if (!project?.intakeEnabled) return blockRun(supabase, run, 'merge', 'kill_switch', 'intake disabled');
-  if (project.autonomyMode !== 'auto_merge_safe' || run.blast_radius !== 'safe') {
+  const repos = await getCodeRepos(supabase,run.project_id);
+  if (!repos.some(repo => canAutoMergeRepo(repo,project,run))) {
     return { skipped: 'not eligible for auto-merge' };
   }
   const token = project.githubToken;
 
   await recordPhaseStart(supabase, run, 'merge');
   try {
-    const { merged, held } = await mergeRunPrs(supabase, run, project);
+    const { merged, held, results } = await mergeRunPrs(supabase, run, project, { autonomous: true });
     await recordPhaseEnd(supabase, run, 'merge', 'passed', `merged ${merged} PR(s); ${held} held`);
+    if (results.some(r => r.reason === 'verification_required')) {
+      const {data:last} = await supabase.from('se_phases').select('attempt').eq('run_id',run.id).eq('phase','verify').order('attempt',{ascending:false}).limit(1).maybeSingle();
+      await supabase.from('se_runs').update({status:'queued',current_phase:'verify'}).eq('id',run.id);
+      await ctx?.enqueueJob?.('se','software-engineer:verify',{runId:run.id,attempt:(last?.attempt ?? 0)+1});
+      return {ok:true,merged,held,reverify:true};
+    }
     // pr-monitor finalizes (all merged → close issue + archive; else stay watching).
     await ctx?.enqueueJob?.('se', 'software-engineer:pr-monitor', { runId: run.id });
     return { ok: true, merged, held };

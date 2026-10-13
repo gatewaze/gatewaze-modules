@@ -4,6 +4,9 @@
  * Only the handful of calls the pipeline needs. The token is a brand credential, resolved
  * per run; it is never logged.
  */
+import { createHash } from 'node:crypto';
+const cooldowns = new Map<string, number>();
+function limited(until: number) { const error: any = new Error('GitHub API rate limit exceeded; retry after '+new Date(until).toISOString());error.code='github_rate_limit';error.retryAt=until;return error; }
 const BASE = 'https://api.github.com';
 
 export function githubClient(token: string) {
@@ -15,8 +18,22 @@ export function githubClient(token: string) {
   };
 
   async function j(path: string, init?: RequestInit) {
+    const resource=path.startsWith('/search/') ? 'search' : 'core';
+    const key=createHash('sha256').update(token ?? '').digest('hex')+':'+resource;
+    const until=cooldowns.get(key) ?? 0;
+    if(until>Date.now())throw limited(until);
+    cooldowns.delete(key);
     const r = await fetch(`${BASE}${path}`, { ...init, headers });
-    if (!r.ok) throw new Error(`github ${init?.method ?? 'GET'} ${path} → ${r.status}`);
+    if (!r.ok) {
+      const body=await r.json().catch(()=>({}));
+      if ([403,429].includes(r.status) && (r.headers.get('x-ratelimit-remaining')==='0' || r.headers.get('retry-after') || /rate limit/i.test(body.message ?? ''))) {
+        const reset=Number(r.headers.get('x-ratelimit-reset'))*1000;
+        const retry=Number(r.headers.get('retry-after'))*1000;
+        const next=Math.max(Date.now()+60000,reset || 0,Date.now()+(retry || 0))+5000;
+        cooldowns.set(key,next);throw limited(next);
+      }
+      throw new Error(`github ${init?.method ?? 'GET'} ${path} → ${r.status}`);
+    }
     return r.status === 204 ? null : r.json();
   }
 
@@ -25,6 +42,7 @@ export function githubClient(token: string) {
     getAuthenticatedUser() {
       return j(`/user`);
     },
+    getCommit(owner: string, name: string, sha: string) { return j(`/repos/${owner}/${name}/commits/${sha}`); },
     getIssue(owner: string, name: string, number: number) {
       return j(`/repos/${owner}/${name}/issues/${number}`);
     },
@@ -32,6 +50,15 @@ export function githubClient(token: string) {
      * related-PR matcher (agent runs reuse one branch name across repos). */
     listOpenPullsByHead(owner: string, name: string, headOwner: string, branch: string) {
       return j(`/repos/${owner}/${name}/pulls?state=open&per_page=10&head=${encodeURIComponent(`${headOwner}:${branch}`)}`);
+    },
+    async listAllIssues(owner: string, name: string) {
+      const result: any[]=[];
+      for(let page=1;page<=100;page++){
+        const rows=await j(`/repos/${owner}/${name}/issues?state=all&per_page=100&page=${page}`);
+        result.push(...rows.filter((i:any)=>!i.pull_request));
+        if(rows.length<100)return result;
+      }
+      throw new Error('Issue history too large for complete duplicate preflight');
     },
     /** Open issues on a repo (GitHub returns PRs here too — caller filters on `pull_request`).
      * Optional `labels` narrows server-side to issues carrying ALL the given label names. */

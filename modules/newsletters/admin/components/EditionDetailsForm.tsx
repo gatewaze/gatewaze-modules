@@ -63,7 +63,7 @@ export function EditionDetailsForm({ edition, collection, onChange, onCollection
 
           <div>
             <label className="block text-sm font-medium text-[var(--gray-11)] mb-1">
-              Preheader Text <span className="font-normal text-[var(--gray-9)]">(preview in inbox, max 150)</span>
+              Preheader Text <span className="text-[var(--red-11)]">*</span> <span className="font-normal text-[var(--gray-9)]">(preview in inbox, max 150)</span>
             </label>
             <input
               type="text"
@@ -72,8 +72,14 @@ export function EditionDetailsForm({ edition, collection, onChange, onCollection
               className={inputClass}
               placeholder="Preview text shown before opening..."
               maxLength={150}
+              required
+              aria-required="true"
             />
-            <p className="text-xs text-[var(--gray-9)] mt-1">{(edition.preheader || '').length}/150</p>
+            {(edition.preheader || '').trim() === '' ? (
+              <p className="text-xs text-[var(--red-11)] mt-1">Required to send: Gmail files emails without a preheader as spam.</p>
+            ) : (
+              <p className="text-xs text-[var(--gray-9)] mt-1">{(edition.preheader || '').length}/150</p>
+            )}
           </div>
 
           <div className="grid grid-cols-2 gap-4">
