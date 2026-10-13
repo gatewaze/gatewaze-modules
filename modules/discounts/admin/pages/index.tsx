@@ -15,7 +15,7 @@ import { RowActions } from '@/components/shared/table/RowActions';
 import { ScrollableTable } from '@/components/shared/table/ScrollableTable';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { Page } from '@/components/shared/Page';
-import { EventDiscount, CompetitionDiscountService } from '@/utils/competitionDiscountService';
+import { EventDiscount } from '@/utils/competitionDiscountService';
 import { DiscountCodesStats } from '../utils/discountService';
 import { useAccountAccess } from '@/hooks/useAccountAccess';
 import { DiscountCodesManagementModal } from '../components/DiscountCodesManagementModal';
@@ -255,12 +255,18 @@ export default function DiscountsPage() {
 
       setDiscountCodesStats(statsMap);
 
-      // Load claimant counts from events_discount_claims table
+      // Claims per discount. A 'viewed' row only records that someone saw
+      // the offer, so it is not a claim.
       const counts = new Map<string, number>();
       await Promise.all(
         discountIds.map(async (discountId) => {
-          const result = await CompetitionDiscountService.getDiscountClaimCount(discountId);
-          counts.set(discountId, result.success ? (result.data ?? 0) : 0);
+          const { count, error } = await supabase
+            .from('events_discount_claims')
+            .select('id', { count: 'exact', head: true })
+            .eq('discount_id', discountId)
+            .neq('status', 'viewed');
+          if (error) console.error('Error counting discount claims:', error);
+          counts.set(discountId, error ? 0 : (count ?? 0));
         })
       );
       setClaimantCounts(counts);
@@ -470,8 +476,12 @@ export default function DiscountsPage() {
           </div>
         </Td>
 
-        {/* Claimants (Issued/Total Codes) */}
+        {/* Codes issued from the uploaded pool (issued / total). A shared-code
+            offer has no pool: everyone gets the same code. */}
         <Td>
+          {discount.isSharedOffer ? (
+            <span className="text-sm text-[var(--gray-11)]">Shared code</span>
+          ) : (
           <Button
             variant="ghost"
             onClick={() => handleClaimantsClick(discount)}
@@ -494,9 +504,10 @@ export default function DiscountsPage() {
               </div>
             )}
           </Button>
+          )}
         </Td>
 
-        {/* Interested Count */}
+        {/* Claims (excluding 'viewed') */}
         <Td>
           <div className="flex items-center gap-2">
             <UserGroupIcon className="size-4 text-gray-400" />
@@ -577,8 +588,12 @@ export default function DiscountsPage() {
           </div>
         </Td>
 
-        {/* Claimants (Issued/Total Codes) */}
+        {/* Codes issued from the uploaded pool (issued / total). A shared-code
+            offer has no pool: everyone gets the same code. */}
         <Td>
+          {discount.isSharedOffer ? (
+            <span className="text-sm text-[var(--gray-11)]">Shared code</span>
+          ) : (
           <Button
             variant="ghost"
             onClick={() => handleClaimantsClick(discount)}
@@ -601,9 +616,10 @@ export default function DiscountsPage() {
               </div>
             )}
           </Button>
+          )}
         </Td>
 
-        {/* Interested Count */}
+        {/* Claims (excluding 'viewed') */}
         <Td>
           <div className="flex items-center gap-2">
             <UserGroupIcon className="size-4 text-gray-400" />
@@ -717,7 +733,7 @@ export default function DiscountsPage() {
                       <Th>Event Date</Th>
                       <Th>Closes</Th>
                       <Th>Time Remaining</Th>
-                      <Th>Claimants</Th>
+                      <Th>Codes issued</Th>
                       <Th>Claims</Th>
                       <Th data-sticky-right style={{ position: 'sticky', right: 0, background: 'var(--color-panel-solid)', zIndex: 2 }} />
                     </>
@@ -725,7 +741,7 @@ export default function DiscountsPage() {
                     <>
                       <Th>Closed</Th>
                       <Th>Event Date</Th>
-                      <Th>Claimants</Th>
+                      <Th>Codes issued</Th>
                       <Th>Claims</Th>
                       <Th data-sticky-right style={{ position: 'sticky', right: 0, background: 'var(--color-panel-solid)', zIndex: 2 }} />
                     </>
