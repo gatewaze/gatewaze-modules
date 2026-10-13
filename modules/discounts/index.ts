@@ -7,7 +7,7 @@ const discountsModule: GatewazeModule = {
   visibility: 'public',
   name: 'Discounts',
   description: 'Create, distribute, and track discount codes for events and products',
-  version: '1.2.1',
+  version: '1.2.2',
   features: [
     'discounts',
     'discounts.manage',

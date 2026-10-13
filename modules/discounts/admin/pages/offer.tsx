@@ -4,16 +4,21 @@
  * the offer, and reveals the code and records the claim only on a click.
  *
  * Route: /discounts/offers/new and /discounts/offers/:discountId
+ * An existing offer opens on its Analytics tab (?tab=analytics|settings);
+ * a new one has only the settings form.
  */
 import { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router';
+import { useParams, useNavigate, useSearchParams } from 'react-router';
 import { toast } from 'sonner';
-import { ArrowLeftIcon, PlusIcon, TrashIcon, ArrowDownTrayIcon } from '@heroicons/react/24/outline';
-import { Card, Button } from '@/components/ui';
+import { ArrowLeftIcon, PlusIcon, TrashIcon } from '@heroicons/react/24/outline';
+import { Card, Button, Tabs } from '@/components/ui';
 import { Input, Select, Textarea } from '@/components/ui/Form';
 import RichTextEditor from '@/components/ui/RichTextEditor';
 import { Page } from '@/components/shared/Page';
 import { supabase } from '@/lib/supabase';
+import { SharedOfferAnalytics } from '../components/SharedOfferAnalytics';
+
+type OfferTab = 'analytics' | 'settings';
 
 interface RegistrationLink {
   event_id: string;
@@ -86,7 +91,9 @@ export default function SharedOfferPage() {
   const [loading, setLoading] = useState(!isNew);
   const [saving, setSaving] = useState(false);
   const [events, setEvents] = useState<Record<string, LinkedEvent>>({});
-  const [claimCount, setClaimCount] = useState<number | null>(null);
+  const [searchParams, setSearchParams] = useSearchParams();
+  const activeTab: OfferTab = isNew ? 'settings' : (searchParams.get('tab') === 'settings' ? 'settings' : 'analytics');
+  const setActiveTab = (tab: OfferTab) => setSearchParams({ tab }, { replace: true });
   const [portalBase, setPortalBase] = useState<string>('');
 
   useEffect(() => {
@@ -140,12 +147,6 @@ export default function SharedOfferPage() {
         registration_links: links,
       });
       await lookupEvents(links.map((l) => l.event_id));
-      const { count } = await supabase
-        .from('events_discount_claims')
-        .select('id', { count: 'exact', head: true })
-        .eq('discount_id', discountId)
-        .neq('status', 'viewed');
-      setClaimCount(count ?? 0);
       setLoading(false);
     })();
   }, [discountId, isNew]);
@@ -227,47 +228,13 @@ export default function SharedOfferPage() {
       if (secretError) throw secretError;
 
       toast.success('Offer saved');
-      if (isNew) navigate(`/discounts/offers/${id}`, { replace: true });
+      if (isNew) navigate(`/discounts/offers/${id}?tab=settings`, { replace: true });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String((err as { message?: string })?.message ?? err);
       toast.error(msg.includes('uq_events_discounts_slug') ? 'Another discount already uses this slug' : `Save failed: ${msg}`);
     } finally {
       setSaving(false);
     }
-  };
-
-  const handleDownloadClaims = async () => {
-    if (isNew) return;
-    const rows: { email: string; status: string; code_issued_at: string | null; created_at: string }[] = [];
-    for (let from = 0; ; from += 1000) {
-      const { data, error } = await supabase
-        .from('events_discount_claims')
-        .select('email, status, code_issued_at, created_at')
-        .eq('discount_id', discountId)
-        .order('created_at')
-        .range(from, from + 999);
-      if (error) {
-        toast.error('Could not load claims');
-        return;
-      }
-      rows.push(...(data || []));
-      if (!data || data.length < 1000) break;
-    }
-    const esc = (v: string | null) => {
-      const s = v ?? '';
-      // Neutralise spreadsheet formulas, then quote.
-      const safe = /^[=+\-@\t\r]/.test(s) ? `'${s}` : s;
-      return `"${safe.replace(/"/g, '""')}"`;
-    };
-    const csv = ['email,status,code_issued_at,created_at']
-      .concat(rows.map((r) => [r.email, r.status, r.code_issued_at, r.created_at].map(esc).join(',')))
-      .join('\n');
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `${form.slug || 'offer'}-claims.csv`;
-    a.click();
-    URL.revokeObjectURL(a.href);
   };
 
   const offerUrl = form.slug && portalBase ? `${portalBase}/offers/${form.slug}` : '';
@@ -282,12 +249,36 @@ export default function SharedOfferPage() {
 
   return (
     <Page title={isNew ? 'New shared offer' : `Shared offer – ${form.title}`}>
-      <div className="p-6 space-y-6 max-w-3xl">
+      <div className="p-6 space-y-6">
         <Button variant="outline" onClick={() => navigate('/discounts')}>
           <ArrowLeftIcon className="w-4 h-4 mr-1" />
           Back to discounts
         </Button>
 
+        <div className="flex items-start justify-between gap-4">
+          <h1 className="text-2xl font-semibold text-[var(--gray-12)]">{isNew ? 'New shared offer' : form.title}</h1>
+          {offerUrl && !isNew && (
+            <a href={offerUrl} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 hover:underline whitespace-nowrap">
+              Open offer page
+            </a>
+          )}
+        </div>
+
+        {!isNew && (
+          <Tabs
+            value={activeTab}
+            onChange={(tab: string) => setActiveTab(tab as OfferTab)}
+            tabs={[
+              { id: 'analytics', label: 'Analytics' },
+              { id: 'settings', label: 'Settings' },
+            ]}
+          />
+        )}
+
+        {activeTab === 'analytics' && discountId && !isNew ? (
+          <SharedOfferAnalytics discountId={discountId} slug={form.slug} />
+        ) : (
+        <div className="space-y-6 max-w-3xl">
         <Card className="p-6 space-y-4">
           <p className="text-sm text-gray-600 dark:text-gray-400">
             Everyone who claims this offer gets the same code. The offer page shows the offer when it is opened,
@@ -295,17 +286,6 @@ export default function SharedOfferPage() {
             <code className="text-xs">{offerUrl || '<portal>/offers/<slug>'}?utm_medium={'{{email_encoded}}'}</code>{' '}
             so claims are recorded against the recipient.
           </p>
-          {!isNew && claimCount !== null && (
-            <div className="flex items-center justify-between rounded-md bg-gray-50 dark:bg-gray-800 px-4 py-3">
-              <span className="text-sm">
-                <strong>{claimCount.toLocaleString()}</strong> {claimCount === 1 ? 'person has' : 'people have'} claimed this offer
-              </span>
-              <Button variant="outline" size="small" onClick={handleDownloadClaims}>
-                <ArrowDownTrayIcon className="w-4 h-4 mr-1" />
-                Download CSV
-              </Button>
-            </div>
-          )}
           <Input
             label="Title"
             value={form.title}
@@ -432,12 +412,9 @@ export default function SharedOfferPage() {
           <Button onClick={handleSave} disabled={saving}>
             {saving ? 'Saving…' : isNew ? 'Create offer' : 'Save offer'}
           </Button>
-          {offerUrl && !isNew && (
-            <a href={offerUrl} target="_blank" rel="noopener noreferrer" className="text-sm text-blue-600 hover:underline self-center">
-              Open offer page
-            </a>
-          )}
         </div>
+        </div>
+        )}
       </div>
     </Page>
   );
