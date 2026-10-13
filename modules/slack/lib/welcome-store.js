@@ -8,9 +8,11 @@
 
 import { unsealSecret } from './secret-envelope.js';
 import { DEFAULT_DELAY_MINUTES, WELCOME_PURPOSE } from './welcome.js';
+import { peopleSyncMode } from './members.js';
 
 export const TOKENS_TABLE = 'integrations_slack_user_tokens';
 export const LOG_TABLE = 'integrations_slack_welcome_log';
+export const SYNCS_TABLE = 'integrations_slack_member_syncs';
 export const SENDER_COLUMNS = 'purpose, team_id, slack_user_id, slack_user_name, scopes, connected_by, connected_at, status, status_detail, updated_at';
 
 const CONFIG_TTL_MS = 30 * 1000;
@@ -45,6 +47,7 @@ export async function readSlackConfig(sb) {
     enabled: bool('SLACK_WELCOME_ENABLED'),
     message: typeof c.SLACK_WELCOME_MESSAGE === 'string' ? c.SLACK_WELCOME_MESSAGE : '',
     delayMinutes: Number.isFinite(delay) && delay >= 0 ? delay : DEFAULT_DELAY_MINUTES,
+    peopleSync: peopleSyncMode(c.SLACK_PEOPLE_SYNC),
   };
   configCache = { at: Date.now(), value };
   return value;
@@ -111,6 +114,23 @@ export async function slackApi(method, token, params = {}, fetchImpl = fetch) {
     return { ok: false, error: `http_${res.status}` };
   }
   return json && typeof json === 'object' ? json : { ok: false, error: 'bad_response' };
+}
+
+/**
+ * Link Slack members to people (migration 005), per the SLACK_PEOPLE_SYNC mode.
+ *
+ * @param {Array} records — from members.js toMemberRecord, nulls removed.
+ * @returns the function's rows: {r_slack_user_id, r_person_id, r_action}.
+ */
+export async function linkMembers(sb, records, mode) {
+  if (mode === 'off' || !records || records.length === 0) return [];
+  const { data, error } = await sb.rpc('integrations_slack_link_members', {
+    p_members: records,
+    p_create: mode === 'create',
+    p_source: 'Slack',
+  });
+  if (error) throw new Error(`could not link Slack members to people: ${error.message}`);
+  return data || [];
 }
 
 /** Send a DM from the sender's own account: open the IM, then post in it. */

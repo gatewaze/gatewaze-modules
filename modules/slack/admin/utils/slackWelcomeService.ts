@@ -63,6 +63,27 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
+export type PeopleSyncMode = 'off' | 'link' | 'create';
+
+export interface MemberSyncRun {
+  id: string;
+  mode: 'link' | 'create';
+  status: 'queued' | 'running' | 'done' | 'failed';
+  started_at: string | null;
+  finished_at: string | null;
+  pages: number;
+  members_seen: number;
+  results: Record<string, number>;
+  error: string | null;
+  created_at: string;
+}
+
+export interface MemberSyncStatus {
+  mode: PeopleSyncMode;
+  linked_people: number | null;
+  runs: MemberSyncRun[];
+}
+
 const W = '/modules/slack/welcome';
 const post = (body: unknown): RequestInit => ({ method: 'POST', body: JSON.stringify(body ?? {}) });
 
@@ -74,6 +95,13 @@ export const slackWelcome = {
   disconnect: () => call<{ ok: true }>(`${W}/disconnect`, post({})),
   test: (email: string, message: string) => call<{ ok: true; to: string; from: string }>(`${W}/test`, post({ email, message })),
   retry: (includeFailed: boolean) => call<{ ok: true; queued: number }>(`${W}/retry`, post({ include_failed: includeFailed })),
+  membersSync: () => call<MemberSyncStatus>(`${W}/members-sync`),
+  startMembersSync: () => call<{ ok: true; id: string; mode: PeopleSyncMode }>(`${W}/members-sync`, post({})),
+  savePeopleSync: (mode: PeopleSyncMode) =>
+    call<{ success: boolean }>(`/modules/slack/config`, {
+      method: 'PUT',
+      body: JSON.stringify({ config: { SLACK_PEOPLE_SYNC: mode } }),
+    }),
   /** Saved through the platform's module-config route, which merges keys and seals secret fields. */
   saveSettings: (s: { enabled: boolean; message: string; delay_minutes: number }) =>
     call<{ success: boolean }>(`/modules/slack/config`, {

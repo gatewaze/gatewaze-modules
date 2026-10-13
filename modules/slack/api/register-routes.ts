@@ -31,11 +31,15 @@ import {
   USER_SCOPES, WELCOME_PURPOSE,
 } from '../lib/welcome.js';
 import {
-  LOG_TABLE, TOKENS_TABLE, invalidateConfig, readSender, readSenderWithToken, readSlackConfig,
+  LOG_TABLE, SYNCS_TABLE, TOKENS_TABLE, invalidateConfig, linkMembers, readSender, readSenderWithToken, readSlackConfig,
   sendDirectMessage, slackApi,
 } from '../lib/welcome-store.js';
+import { toMemberRecord } from '../lib/members.js';
 
 const JOB_NAME = 'slack:welcome-dm';
+const SYNC_JOB_NAME = 'slack:sync-members';
+// A sync that has not finished after this long is assumed dead (worker restart).
+const SYNC_STALE_MS = 2 * 60 * 60 * 1000;
 const JOB_OPTS = {
   attempts: 5,
   backoff: { type: 'exponential', delay: 60_000 },
@@ -143,18 +147,39 @@ export function registerRoutes(app: Express, ctx?: Record<string, any>): void {
     }
   });
 
-  async function recordJoin(teamId: string, user: any, cfg: any) {
-    if (!teamId || !user || !user.id) return;
+  async function recordJoin(teamId: string, eventUser: any, cfg: any) {
+    let user = eventUser;
+    if (!teamId || !user || typeof user.id !== 'string' || !user.id) return;
     const sender = await readSender(supabase);
     if (sender && sender.team_id !== teamId) {
       log('ignored a join from a workspace this install does not welcome for', { teamId });
       return;
     }
 
+    // team_join does not reliably carry the member's email (on AAIF it never
+    // has), so ask Slack with the bot token, which has users:read.email.
+    if (!bodyEmail(user.profile && user.profile.email) && cfg.botToken) {
+      const info = await slackApi('users.info', cfg.botToken, { user: user.id });
+      if (info.ok && info.user && info.user.id === user.id) user = info.user;
+      else log('could not look up a new member', { error: info.error });
+    }
     const profile = user.profile || {};
     const email = bodyEmail(profile.email) || null;
+
+    // Link the member to a person (SLACK_PEOPLE_SYNC). A failure here must
+    // not lose the join, so it is logged and the welcome carries on.
     let personId = null;
-    if (email) {
+    const record = toMemberRecord(user);
+    if (record) {
+      try {
+        const linked = await linkMembers(supabase, [record], cfg.peopleSync);
+        personId = (linked[0] && linked[0].r_person_id) || null;
+        if (linked[0]) log('member linked to people', { result: linked[0].r_action });
+      } catch (err) {
+        log('could not link the member to people', { error: String(err) });
+      }
+    }
+    if (!personId && email) {
       const { data: people } = await supabase.from('people').select('id').eq('email', email).limit(1);
       personId = people && people[0] ? people[0].id : null;
     }
@@ -439,6 +464,64 @@ export function registerRoutes(app: Express, ctx?: Record<string, any>): void {
       if (await enqueue(r.id, 0, `slack-welcome-${r.id}-r${Date.now()}`)) queued++;
     }
     res.json({ ok: true, queued });
+  });
+
+  // ── Slack members → people ────────────────────────────────────────────────
+
+  /** Recent full-workspace syncs, newest first, plus the current mode. */
+  adm.get('/members-sync', async (_req: Request, res: Response) => {
+    try {
+      invalidateConfig();
+      const cfg = await readSlackConfig(supabase);
+      const { data, error } = await supabase.from(SYNCS_TABLE)
+        .select('id, mode, status, started_at, finished_at, pages, members_seen, results, error, created_at')
+        .order('created_at', { ascending: false }).limit(5);
+      if (error) throw new Error(error.message);
+      const { count } = await supabase.from('people').select('id', { count: 'exact', head: true })
+        .not('attributes->>slack_user_id', 'is', null);
+      res.json({ mode: cfg.peopleSync, linked_people: count ?? null, runs: data || [] });
+    } catch (err) {
+      log('members-sync status failed', { error: String(err) });
+      res.status(500).json({ error: 'Could not read the member sync status.' });
+    }
+  });
+
+  /** Start a full-workspace sync in the worker. One at a time. */
+  adm.post('/members-sync', testLimit, async (req: Request, res: Response) => {
+    invalidateConfig();
+    const cfg = await readSlackConfig(supabase);
+    if (!cfg.botToken) return res.status(503).json({ error: 'Set the Slack bot token first.' });
+    if (cfg.peopleSync === 'off') {
+      return res.status(409).json({ error: 'Linking Slack members to people is turned off (SLACK_PEOPLE_SYNC).' });
+    }
+
+    const staleBefore = new Date(Date.now() - SYNC_STALE_MS).toISOString();
+    await supabase.from(SYNCS_TABLE)
+      .update({ status: 'failed', finished_at: new Date().toISOString(), error: 'did not finish (worker restarted?)' })
+      .in('status', ['queued', 'running']).lt('created_at', staleBefore);
+    const { data: active } = await supabase.from(SYNCS_TABLE).select('id').in('status', ['queued', 'running']).limit(1);
+    if (active && active.length) return res.status(409).json({ error: 'A sync is already running.' });
+
+    const { data: created, error } = await supabase.from(SYNCS_TABLE)
+      .insert({ mode: cfg.peopleSync, started_by: req.userId })
+      .select('id').single();
+    if (error || !created) return res.status(500).json({ error: 'Could not start the sync.' });
+
+    if (!ctx || typeof ctx.enqueueJob !== 'function') {
+      await supabase.from(SYNCS_TABLE).update({ status: 'failed', error: 'job queue unavailable' }).eq('id', created.id);
+      return res.status(503).json({ error: 'The job queue is unavailable.' });
+    }
+    try {
+      await ctx.enqueueJob('jobs', SYNC_JOB_NAME, { runId: created.id }, {
+        attempts: 1, jobId: `slack-members-sync-${created.id}`, removeOnComplete: 50, removeOnFail: 50,
+      });
+    } catch (err) {
+      await supabase.from(SYNCS_TABLE).update({ status: 'failed', error: 'could not queue the job' }).eq('id', created.id);
+      log('members sync enqueue failed', { error: String(err) });
+      return res.status(503).json({ error: 'Could not queue the sync.' });
+    }
+    log('members sync started', { by: req.userId, mode: cfg.peopleSync, runId: created.id });
+    res.json({ ok: true, id: created.id, mode: cfg.peopleSync });
   });
 
   app.use('/api/modules/slack/welcome', adm);
