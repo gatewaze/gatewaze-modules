@@ -38,6 +38,18 @@ export interface RenderCtx {
 const NOLINE = 'text-decoration:none !important;'
 const MUTED = 'font-size:14px; line-height:1.5; color:var(--ink-3); margin:2px 0 0;'
 
+/**
+ * The space between a label and whatever it labels.
+ *
+ * Body copy gets this for free and pictures do not. A MUTED paragraph
+ * sits 2px below its label by margin, and its first line of glyphs sits
+ * lower again by the half-leading of a 14px line at 1.5, which is
+ * another 3.5px. A row of images has no leading, so the same markup put
+ * the photo strip flush against its heading while the two text blocks
+ * above it breathed (reported 2026-10-13).
+ */
+const LABEL_GAP = '6px'
+
 const PLAY_SVG =
   '<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" ' +
   'fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" ' +
@@ -264,7 +276,7 @@ export function renderTalkCardHtml(block: SrBlockRow, index: number, ctx: Render
     ? `
     <div>
       <p style="${label('var(--ink)')}">Photos from this session</p>
-      <div id="${stripId}" style="display:flex; gap:8px; overflow-x:auto; padding-bottom:4px;">${photoItems
+      <div id="${stripId}" style="display:flex; gap:8px; overflow-x:auto; padding-bottom:4px; margin-top:${LABEL_GAP};">${photoItems
         .map((p: any) =>
           `<div data-full="${escAttr(p.src)}" data-alt="${escAttr(String(p.alt ?? ''))}" role="button" tabindex="0"` +
           ` onclick="${stripOpenAttr}" onkeydown="if(event.key==='Enter')this.click()"` +
