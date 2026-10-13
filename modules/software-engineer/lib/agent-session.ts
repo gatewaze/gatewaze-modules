@@ -153,17 +153,27 @@ export const PHASE_DISALLOWED_TOOLS = ['ScheduleWakeup', 'Monitor', 'Workflow', 
  * rewrite is not enough on its own: the Agent tool does not ask permission, so the callback never
  * sees it. A PreToolUse hook runs for every tool call, so the refusal lives here, with a reason the
  * agent can act on.
+ *
+ * Agent and Task run in the background UNLESS told otherwise in the CLI the runner ships with: run
+ * #100's third spec attempt called Agent with no run_in_background at all, got "Async agent launched
+ * successfully", ended its turn to wait, and lost its tools. So for those two, anything but an
+ * explicit false is refused. Bash runs in the foreground by default, so only an explicit true is.
  */
+function runsInBackground(toolName: string | undefined, toolInput: any): boolean {
+  if (toolName === 'Bash') return toolInput?.run_in_background === true;
+  return toolInput?.run_in_background !== false;   // Agent / Task: background by default
+}
+
 const FOREGROUND_ONLY_HOOK = {
   matcher: 'Agent|Task|Bash',
-  hooks: [async (i: any) => (i?.tool_input?.run_in_background === true
+  hooks: [async (i: any) => (runsInBackground(i?.tool_name, i?.tool_input)
     ? {
         hookSpecificOutput: {
           hookEventName: 'PreToolUse',
           permissionDecision: 'deny',
           permissionDecisionReason:
             'Background work is not available in this unattended phase: the session ends when your turn ends, ' +
-            'and anything still running then loses its tools. Run it again with run_in_background false and wait for the result.',
+            'and anything still running then loses its tools. Call it again with run_in_background set to false (Agent and Task default to the background) and wait for the result.',
         },
       }
     : {})],
