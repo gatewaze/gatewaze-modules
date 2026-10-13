@@ -24,7 +24,7 @@ const softwareEngineerModule: GatewazeModule = {
   name: 'Software Engineer',
   description:
     'Autonomous engineering agent: labelled GitHub issues → spec → adversarial review → implement → verify → PR/merge, driven by in-process Claude Code sessions. Per-brand repos + credentials; live agent monitoring.',
-  version: '0.2.5',
+  version: '0.2.6',
 
   features: ['software-engineer'],
 
@@ -70,6 +70,7 @@ const softwareEngineerModule: GatewazeModule = {
     // landed on main with the feedback inbox, and the two would have collided.
     'migrations/030_workspace_base.sql',
     'migrations/031_repo_merge_policy.sql',
+    'migrations/032_spec_artifact_kinds.sql',
   ],
   // This array is the ONLY thing the platform runner reads. It does not glob
   // migrations/ — applyModuleMigrations() iterates these entries, so a .sql on
