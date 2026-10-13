@@ -12,6 +12,7 @@ import { enqueuePhase } from '../lib/enqueue.js';
 import { githubClient } from '../lib/github.js';
 import { makeMultiWorkspace, hasChanges, commitAndPush, commitsAhead, pushBranch } from '../lib/worktree.js';
 import { runAgentSession } from '../lib/phase-runner.js';
+import { specForPrompt } from '../lib/spec-prompt.js';
 import { classifyBlastRadius } from '../lib/blast-radius.js';
 import { redactToken } from '../lib/git.js';
 import { recordPhaseStart, recordPhaseEnd, writeGate, blockRun, upsertRunPr } from '../lib/run-state.js';
@@ -54,7 +55,7 @@ export default async function implement(job, ctx) {
       `git commit yourself; leave the working tree as edited/untracked files for the system to commit.`,
       ``,
       `--- APPROVED SPEC ---`,
-      String(art?.content ?? '').slice(0, 20000),
+      specForPrompt(art?.content),
       `--- END SPEC ---`,
     ].join('\n');
 
