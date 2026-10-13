@@ -7,7 +7,7 @@ const redirectsModule: GatewazeModule = {
   visibility: 'public',
   name: 'Redirects',
   description: 'Manage URL redirects and short links with click tracking and analytics',
-  version: '1.0.0',
+  version: '1.0.1',
   features: [
     'redirects',
     'redirects.manage',

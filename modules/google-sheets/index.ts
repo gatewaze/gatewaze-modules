@@ -7,7 +7,7 @@ const googleSheetsModule: GatewazeModule = {
   visibility: 'public',
   name: 'Google Sheets Integration',
   description: 'Sync registration and speaker data to Google Sheets with OAuth and real-time notifications',
-  version: '1.0.0',
+  version: '1.0.1',
   features: [
     'google-sheets.sync',
     'google-sheets.oauth',
