@@ -51,8 +51,9 @@ async function authHeaders(): Promise<Record<string, string>> {
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+/** `path` is relative to the API base, which already ends in /api. */
 async function call<T>(path: string, init?: RequestInit): Promise<T> {
-  const base = getApiConfig().baseUrl;
+  const base = getApiConfig().baseUrl.replace(/\/+$/, '');
   const res = await fetch(`${base}${path}`, {
     ...init,
     headers: { 'Content-Type': 'application/json', ...(await authHeaders()), ...(init?.headers || {}) },
@@ -62,7 +63,7 @@ async function call<T>(path: string, init?: RequestInit): Promise<T> {
   return body as T;
 }
 
-const W = '/api/modules/slack/welcome';
+const W = '/modules/slack/welcome';
 const post = (body: unknown): RequestInit => ({ method: 'POST', body: JSON.stringify(body ?? {}) });
 
 export const slackWelcome = {
@@ -75,7 +76,7 @@ export const slackWelcome = {
   retry: (includeFailed: boolean) => call<{ ok: true; queued: number }>(`${W}/retry`, post({ include_failed: includeFailed })),
   /** Saved through the platform's module-config route, which merges keys and seals secret fields. */
   saveSettings: (s: { enabled: boolean; message: string; delay_minutes: number }) =>
-    call<{ success: boolean }>(`/api/modules/slack/config`, {
+    call<{ success: boolean }>(`/modules/slack/config`, {
       method: 'PUT',
       body: JSON.stringify({
         config: {

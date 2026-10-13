@@ -244,8 +244,20 @@ export default function SlackWelcomePage() {
               </Button>
             </div>
             {link && (
-              <div className="space-y-1">
-                <CopyRow label={`Link for ${link.name} — valid until ${fmt(link.expires)}`} value={link.url} />
+              <div className="space-y-2 text-sm">
+                <p>
+                  Copy this link and open it in the browser (or browser profile) where you are signed in to Slack
+                  as <strong>{link.name}</strong>. It is not sent anywhere, and it only works for that account.
+                  Valid until {fmt(link.expires)}.
+                </p>
+                <code className="block select-all break-all rounded bg-[var(--gray-a3)] px-2 py-1">{link.url}</code>
+                <div className="flex justify-end">
+                  <CopyButton value={link.url}>
+                    {({ copy, copied }) => (
+                      <Button variant="outlined" onClick={copy}>{copied ? 'Copied' : 'Copy link'}</Button>
+                    )}
+                  </CopyButton>
+                </div>
               </div>
             )}
           </div>
