@@ -18,6 +18,12 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type, x-supabase-client-platform',
 }
 
+// Escape LIKE wildcards so an address containing _ or % matches only itself.
+// ('*' is rejected before any lookup: PostgREST treats it as a wildcard.)
+function escapeLike(value: string): string {
+  return value.replace(/[\\%_]/g, (c) => `\\${c}`)
+}
+
 interface CompetitionEntryRequest {
   email: string
   competition_id: string
@@ -30,7 +36,7 @@ interface CompetitionEntryResponse {
   message: string
   entry_id?: string
   member_profile_id?: string
-  person_id?: number
+  person_id?: string
   already_entered?: boolean
   error?: string
 }
@@ -49,16 +55,18 @@ Deno.serve(async (req) => {
 
   try {
     const body: CompetitionEntryRequest = await req.json()
-    const { email, competition_id, source, metadata = {} } = body
+    const { email, competition_id, source, metadata } = body
+    const entryMetadata: Record<string, any> =
+      metadata && typeof metadata === 'object' && !Array.isArray(metadata) ? metadata : {}
 
-    if (!email) {
+    if (!email || typeof email !== 'string') {
       return new Response(JSON.stringify({ success: false, error: 'Email is required' }), {
         status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
       })
     }
 
-    if (!competition_id) {
+    if (!competition_id || typeof competition_id !== 'string') {
       return new Response(JSON.stringify({ success: false, error: 'Competition ID is required' }), {
         status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
@@ -66,7 +74,9 @@ Deno.serve(async (req) => {
     }
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
-    if (!emailRegex.test(email)) {
+    // '*' is a wildcard in PostgREST like/ilike values and cannot be escaped,
+    // so an address containing it could match someone else's people row.
+    if (!emailRegex.test(email) || email.includes('*')) {
       return new Response(JSON.stringify({ success: false, error: 'Invalid email format' }), {
         status: 400,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
@@ -140,13 +150,15 @@ Deno.serve(async (req) => {
 
     console.log(`✅ Member profile ready: id=${memberProfile.id}`)
 
-    // Step 5: Check for existing entry
-    const { data: existingEntry } = await supabase
+    // Step 5: Check for existing entry (case-insensitive, matching the
+    // unique index on (competition_id, lower(email)))
+    const { data: existingEntries } = await supabase
       .from('events_competition_entries')
       .select('id')
       .eq('competition_id', competition_id)
-      .eq('email', normalizedEmail)
-      .maybeSingle()
+      .ilike('email', escapeLike(normalizedEmail))
+      .limit(1)
+    const existingEntry = existingEntries?.[0]
 
     if (existingEntry) {
       console.log(`⚠️ Already entered: ${existingEntry.id}`)
@@ -168,20 +180,34 @@ Deno.serve(async (req) => {
       .insert({
         competition_id,
         email: normalizedEmail,
+        person_id: person.id,
         member_profile_id: memberProfile.id,
         status: 'entered',
         entered_at: new Date().toISOString(),
-        referrer: source || null,
-        entry_metadata: metadata,
+        referrer: typeof source === 'string' && source ? source : null,
+        entry_metadata: entryMetadata,
       })
       .select('id')
       .single()
+
+    // A concurrent request for the same address won the unique index race.
+    if (entryError && entryError.code === '23505') {
+      return new Response(JSON.stringify({
+        success: true,
+        message: 'Already entered this competition',
+        member_profile_id: memberProfile.id,
+        person_id: person.id,
+        already_entered: true
+      }), {
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      })
+    }
 
     if (entryError) {
       console.error('Error creating entry:', entryError)
       return new Response(JSON.stringify({
         success: false,
-        error: `Failed to create entry: ${entryError.message}`
+        error: 'Failed to create entry'
       }), {
         status: 500,
         headers: { ...corsHeaders, 'Content-Type': 'application/json' }
@@ -190,13 +216,16 @@ Deno.serve(async (req) => {
 
     console.log(`✅ Entry created: ${entry.id}`)
 
-    // Step 7: Send competition entry confirmation email (non-blocking)
-    sendCompetitionEntryEmail({
-      eventId: competition.event_id,
-      competitionTitle: competition.title,
-      email: normalizedEmail,
-      personId: person.id,
-    }).catch(err => console.error('Failed to send competition entry email:', err))
+    // Step 7: Send competition entry confirmation email (non-blocking).
+    // Settings are per event, so a competition with no event sends none.
+    if (competition.event_id) {
+      sendCompetitionEntryEmail({
+        eventId: competition.event_id,
+        competitionTitle: competition.title,
+        email: normalizedEmail,
+        personId: person.id,
+      }).catch(err => console.error('Failed to send competition entry email:', err))
+    }
 
     // Step 8: Track in CIO (non-blocking)
     if (isCIOConfigured) {
@@ -208,7 +237,7 @@ Deno.serve(async (req) => {
       }).catch(err => console.error('Failed to track CIO event:', err))
     }
 
-    // Conversion tracking is handled by DB trigger on competition_entries INSERT
+    // Conversion tracking is handled by DB trigger on events_competition_entries INSERT
 
     return new Response(JSON.stringify({
       success: true,
@@ -223,9 +252,11 @@ Deno.serve(async (req) => {
 
   } catch (error) {
     console.error('❌ Competition entry error:', error)
+    // Internal error text (parse failures, DB errors) stays in the logs; this
+    // endpoint is public.
     return new Response(JSON.stringify({
       success: false,
-      error: error instanceof Error ? error.message : 'Unknown error'
+      error: 'Something went wrong. Please try again.'
     }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
@@ -285,12 +316,13 @@ async function getIpLocation(ipAddress: string | null): Promise<{
 async function findOrCreatePerson(
   email: string,
   ipLocation?: { city?: string; country?: string; country_code?: string; continent?: string; location?: string } | null
-): Promise<{ id: number; cio_id: string } | null> {
+): Promise<{ id: string; cio_id: string } | null> {
   try {
     const { data: existingPerson } = await supabase
       .from('people')
       .select('id, cio_id, attributes')
-      .ilike('email', email)
+      .ilike('email', escapeLike(email))
+      .limit(1)
       .maybeSingle()
 
     if (existingPerson) {
@@ -387,7 +419,8 @@ async function findOrCreatePerson(
       const { data: retryPerson } = await supabase
         .from('people')
         .select('id, cio_id')
-        .ilike('email', email)
+        .ilike('email', escapeLike(email))
+        .limit(1)
         .maybeSingle()
       return retryPerson
     }
@@ -399,7 +432,7 @@ async function findOrCreatePerson(
   }
 }
 
-async function getOrCreateMemberProfile(personId: number): Promise<{ id: string } | null> {
+async function getOrCreateMemberProfile(personId: string): Promise<{ id: string } | null> {
   try {
     const { data: memberProfileId, error: rpcError } = await supabase
       .rpc('people_get_or_create_profile', {
@@ -429,10 +462,10 @@ const FROM_ADDRESSES: Record<string, string> = {
 }
 
 interface SendCompetitionEntryEmailParams {
-  eventId: string
+  eventId: string // events.id (uuid)
   competitionTitle: string
   email: string
-  personId: number
+  personId: string
 }
 
 async function sendCompetitionEntryEmail(params: SendCompetitionEntryEmailParams): Promise<void> {
@@ -486,7 +519,7 @@ async function sendCompetitionEntryEmail(params: SendCompetitionEntryEmailParams
     const { data: eventDetails } = await supabase
       .from('events')
       .select('event_title, event_city, event_country_code, event_start, event_end, event_location, event_link')
-      .eq('event_id', eventId)
+      .eq('id', eventId)
       .maybeSingle()
 
     // Get person attributes for template variables
@@ -578,9 +611,10 @@ async function sendCompetitionEntryEmail(params: SendCompetitionEntryEmailParams
     console.log(`Competition entry confirmation email sent to ${email}`)
 
     if (settings.competition_entry_email_template_id) {
+      // The query builder is thenable but has no .catch
       supabase.rpc('increment_email_template_usage', {
         template_id: settings.competition_entry_email_template_id,
-      }).catch(() => {})
+      }).then(() => {}, () => {})
     }
   } catch (error) {
     console.error('Error sending competition entry email:', error)

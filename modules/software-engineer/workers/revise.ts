@@ -6,6 +6,8 @@
  * update in place), and returns the run to watching. Auto-address, unlimited rounds. A failed/empty
  * revise leaves the PRs open for a human rather than failing the run.
  */
+import { canAutoMergeRepo, canRepairRepo } from '../lib/repo-merge-policy.js';
+import { enqueuePhase } from '../lib/enqueue.js';
 import { createClient } from '@supabase/supabase-js';
 import { getProject, getCodeRepos, resolveCommitIdentity } from '../lib/credentials.js';
 import { githubClient } from '../lib/github.js';
@@ -34,6 +36,7 @@ export default async function revise(job, ctx) {
 
   // 'ci' = pr-monitor triggered a bounded CI-fix pass (no new review feedback, CI settled-red).
   const reason = job?.data?.reason;
+  if (reason === 'merge_conflict' && run.kind === 'external_pr') return {skipped:'external PR conflict repair requires a human'};
   const attempt = job?.data?.attempt ?? 1;
   const openPrs = (await listRunPrs(supabase, run.id)).filter((p) => p.pr_number && p.state === 'open');
   if (openPrs.length === 0) { await supabase.from('se_runs').update({ status: 'watching', current_phase: 'watch' }).eq('id', run.id); return { skipped: 'no open prs' }; }
@@ -64,23 +67,28 @@ export default async function revise(job, ctx) {
       // it — on a public repo anyone can submit them.
       for (const r of reviews ?? []) if (['CHANGES_REQUESTED', 'COMMENTED'].includes(r.state) && (r.body ?? '').trim() && isTrustedFeedbackAuthor(r.user?.login, project, run)) lines.push(`- (${r.state}) @${r.user?.login ?? '?'}: ${r.body.trim()}`);
       for (const c of inline ?? []) if ((c.body ?? '').trim() && isTrustedFeedbackAuthor(c.user?.login, project, run)) lines.push(`- ${c.path}:${c.line ?? c.original_line ?? '?'} — ${c.body.trim()}`);
-      if (lines.length) feedbackByRepo[p.repo_name] = lines.join('\n');
+      if (lines.length) feedbackByRepo[`${p.repo_owner}/${p.repo_name}`] = lines.join('\n');
     }
     const feedback = Object.entries(feedbackByRepo).map(([repo, f]) => `### ${repo}\n${f}`).join('\n\n').slice(0, 12000);
     // No trusted review feedback normally means nothing to do — EXCEPT a CI-fix pass, where the
     // trigger is failing CI, not a comment. In ci mode we proceed with a CI-repair prompt instead.
+    const conflictMode = reason === 'merge_conflict' && run.kind !== 'external_pr';
     const ciMode = reason === 'ci' && !feedback.trim();
-    if (!feedback.trim() && !ciMode) {
+    if (!feedback.trim() && !ciMode && !conflictMode) {
       await recordPhaseEnd(supabase, run, 'revise', 'skipped', 'no actionable feedback');
       await supabase.from('se_runs').update({ status: 'watching', current_phase: 'watch' }).eq('id', run.id);
       return { skipped: 'no feedback' };
     }
 
     // Clone the affected repos' RUN BRANCH (writable), so pushes update the existing PRs.
-    const affected = new Set(openPrs.map((p) => `${p.repo_owner}/${p.repo_name}`));
+    const affected = new Set();
+    for (const p of openPrs) {
+      if (!conflictMode || (await gh.getPullRequest(p.repo_owner,p.repo_name,p.pr_number)).mergeable_state === 'dirty') affected.add(`${p.repo_owner}/${p.repo_name}`);
+    }
     const codeRepos = (await getCodeRepos(supabase, run.project_id))
-      .filter((r) => affected.has(`${r.repoOwner}/${r.repoName}`))
-      .map((r) => ({ ...r, writeMode: 'writable' }));
+      .filter((r) => affected.has(`${r.repoOwner}/${r.repoName}`) && (!conflictMode || canRepairRepo(r,run)))
+      .map((r) => ({ ...r, checkoutRef: undefined, writeMode: 'writable' }));
+    if (conflictMode && !codeRepos.length) throw new Error('No writable repository still needs conflict repair');
     const commitId = await resolveCommitIdentity(supabase, project, token);
     ws = await makeMultiWorkspace(codeRepos, token, run.branch_name, commitId, true);
 
@@ -89,7 +97,16 @@ export default async function revise(job, ctx) {
     // everything from scratch. Absent for a `revise` job enqueued before this field existed, or for
     // any non-CI reason — the prompt is unchanged in that case.
     const classification = typeof job?.data?.classification === 'string' ? job.data.classification.trim() : '';
-    const prompt = ciMode
+    const prompt = conflictMode
+      ? [
+          `Bring each writable PR branch up to date with its configured base branch (${codeRepos.map(r => `${r.repoOwner}/${r.repoName}: ${r.baseBranch || 'main'}`).join(', ')}).`,
+          `Fetch the run branch and configured base with enough history to find their real merge base (the clone may be shallow). Merge the base into the existing run branch and resolve conflicts preserving both intended changes. Never use --allow-unrelated-histories.`,
+          `Do not rewrite history, force push, bypass hooks, disable checks, or change unrelated repositories.`,
+          `Remove all conflict markers and run the repository tests, typecheck and security checks.`,
+          `If requirements conflict or checks cannot pass, abort the merge and explain what needs human attention.`,
+          `Do not push or merge a GitHub PR; the system handles that after verification.`,
+        ].join('\n')
+      : ciMode
       ? [
           ...(classification ? [`CI TRIAGE NOTE (from the platform, before you start):`, classification, ``] : []),
           `The CI checks on your open pull request(s)${run.issue_number ? ` for issue #${run.issue_number}` : ''} are FAILING.`,
@@ -132,6 +149,7 @@ export default async function revise(job, ctx) {
       }
       catch { /* leave that PR as-is */ }
     }
+    const automatic = codeRepos.some(r => canAutoMergeRepo(r,project,run));
     const round = (run.revise_count ?? 0) + 1;
     await recordPhaseEnd(supabase, run, 'revise', pushed ? 'passed' : 'skipped', pushed ? `addressed feedback (round ${round}, ${pushed} repo(s))` : 'no code change produced', { model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude', input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD, modelUsage: result.modelUsage });
     // If revise pushed new code, the blast_radius computed back in `implement`
@@ -149,6 +167,11 @@ export default async function revise(job, ctx) {
     try { await gh.postComment(run.repo_owner, run.repo_name, run.issue_number ?? run.pr_number, comment); } catch { /* best-effort */ }
     // Fold this round's TRUSTED feedback into the review-learnings KB (pending until the PR merges).
     try { await distillReviewLearnings(supabase, project, run, feedback, ctx?.logger); } catch { /* best-effort, never blocks revise */ }
+    if (pushed && (automatic || conflictMode)) {
+      const {data: last} = await supabase.from('se_phases').select('attempt').eq('run_id',run.id).eq('phase','verify').order('attempt',{ascending:false}).limit(1).maybeSingle();
+      await supabase.from('se_runs').update({status:'queued',current_phase:'verify'}).eq('id',run.id);
+      await enqueuePhase(ctx,run.id,'verify',{attempt:(last?.attempt ?? 0)+1});
+    }
     return { ok: true, round, pushed };
   } catch (e) {
     const msg = redactToken(e?.message || String(e), token);

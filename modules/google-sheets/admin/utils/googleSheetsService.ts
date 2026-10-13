@@ -21,10 +21,9 @@ export interface EventGoogleSheetsNotification {
   spreadsheet_name: string | null;
   sheet_name: string | null;
   column_mapping: Record<string, string> | null;
-  // OAuth fields
-  google_access_token: string | null;
-  google_refresh_token: string | null;
-  google_token_expires_at: string | null;
+  // OAuth state. The tokens themselves are not readable by client roles
+  // (migration 002); google_connected is true when a refresh token is stored.
+  google_connected: boolean;
   google_user_email: string | null;
   created_at: string;
   updated_at: string;
@@ -55,22 +54,11 @@ export interface SpreadsheetInfo {
 // OAuth Helpers
 // =============================================================================
 
-/**
- * Get the OAuth authorization URL for connecting a Google account
- */
-export function getGoogleOAuthUrl(
-  eventId: string,
-  notificationType: GoogleSheetsNotificationType,
-  returnUrl: string
-): string {
-  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-  const params = new URLSearchParams({
-    event_id: eventId,
-    notification_type: notificationType,
-    return_url: returnUrl,
-  });
-  return `${supabaseUrl}/functions/v1/google-sheets-oauth/authorize?${params}`;
-}
+// Starting the Google OAuth flow lives in ./googleSheetsOAuth.ts, imported by
+// relative path. This file is reached through the `@/utils/googleSheetsService`
+// alias, and an admin that ships its own src/utils/googleSheetsService.ts
+// takes precedence over this copy, so a new export here would not reach the
+// tab on those installs.
 
 /**
  * Check if a notification config has valid OAuth credentials
@@ -79,7 +67,7 @@ export function hasValidOAuthCredentials(
   notification: EventGoogleSheetsNotification | undefined | null
 ): boolean {
   if (!notification) return false;
-  return Boolean(notification.google_refresh_token);
+  return notification.google_connected === true;
 }
 
 /**
@@ -92,7 +80,7 @@ export async function disconnectGoogleAccount(
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 
   try {
-    const response = await fetch(`${supabaseUrl}/functions/v1/google-sheets-oauth/disconnect`, {
+    const response = await fetch(`${supabaseUrl}/functions/v1/integrations-google-sheets-oauth/disconnect`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -150,6 +138,21 @@ export function buildSpreadsheetUrl(spreadsheetId: string, sheetGid?: string): s
 // Database Operations
 // =============================================================================
 
+// Client roles may read only these columns (migration 002 leaves the OAuth
+// tokens out), so a select('*') would fail. Keep in step with that migration.
+const NOTIFICATION_COLUMNS =
+  'id, event_id, notification_type, enabled, spreadsheet_id, spreadsheet_name, sheet_name, column_mapping, google_user_email, google_connected, created_at, updated_at';
+
+// Columns an admin may write. Anything else in an update is dropped here
+// rather than rejected by the database.
+const WRITABLE_COLUMNS = [
+  'enabled',
+  'spreadsheet_id',
+  'spreadsheet_name',
+  'sheet_name',
+  'column_mapping',
+] as const;
+
 /**
  * Get Google Sheets notification settings for an event
  */
@@ -157,8 +160,8 @@ export async function getEventGoogleSheetsNotifications(
   eventId: string
 ): Promise<EventGoogleSheetsNotification[]> {
   const { data, error } = await supabase
-    .from('events_google_sheets_notifications')
-    .select('*')
+    .from('event_google_sheets_notifications')
+    .select(NOTIFICATION_COLUMNS)
     .eq('event_id', eventId);
 
   if (error) {
@@ -177,8 +180,8 @@ export async function getEventGoogleSheetsNotification(
   notificationType: GoogleSheetsNotificationType
 ): Promise<EventGoogleSheetsNotification | null> {
   const { data, error } = await supabase
-    .from('events_google_sheets_notifications')
-    .select('*')
+    .from('event_google_sheets_notifications')
+    .select(NOTIFICATION_COLUMNS)
     .eq('event_id', eventId)
     .eq('notification_type', notificationType)
     .maybeSingle();
@@ -200,18 +203,19 @@ export async function upsertEventGoogleSheetsNotification(
     notification_type: GoogleSheetsNotificationType;
   }
 ): Promise<EventGoogleSheetsNotification | null> {
+  const row: Record<string, unknown> = {
+    event_id: notification.event_id,
+    notification_type: notification.notification_type,
+    updated_at: new Date().toISOString(),
+  };
+  for (const key of WRITABLE_COLUMNS) {
+    if (key in notification) row[key] = notification[key];
+  }
+
   const { data, error } = await supabase
-    .from('events_google_sheets_notifications')
-    .upsert(
-      {
-        ...notification,
-        updated_at: new Date().toISOString(),
-      },
-      {
-        onConflict: 'event_id,notification_type',
-      }
-    )
-    .select()
+    .from('event_google_sheets_notifications')
+    .upsert(row, { onConflict: 'event_id,notification_type' })
+    .select(NOTIFICATION_COLUMNS)
     .single();
 
   if (error) {
@@ -230,7 +234,7 @@ export async function getGoogleSheetsNotificationLogs(
   limit: number = 50
 ): Promise<GoogleSheetsNotificationLog[]> {
   const { data, error } = await supabase
-    .from('integrations_google_sheets_notification_logs')
+    .from('google_sheets_notification_logs')
     .select('*')
     .eq('event_id', eventId)
     .order('created_at', { ascending: false })
@@ -258,7 +262,7 @@ export async function sendTestGoogleSheetsNotification(
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 
   try {
-    const response = await fetch(`${supabaseUrl}/functions/v1/google-sheets-notify`, {
+    const response = await fetch(`${supabaseUrl}/functions/v1/integrations-google-sheets-notify`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -326,7 +330,7 @@ export async function sendHistoricGoogleSheetsNotifications(
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
 
   try {
-    const response = await fetch(`${supabaseUrl}/functions/v1/google-sheets-notify`, {
+    const response = await fetch(`${supabaseUrl}/functions/v1/integrations-google-sheets-notify`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -416,7 +420,6 @@ export function getSpeakerSubmissionColumns(): { header: string; description: st
 
 const GoogleSheetsService = {
   // OAuth helpers
-  getGoogleOAuthUrl,
   hasValidOAuthCredentials,
   disconnectGoogleAccount,
 

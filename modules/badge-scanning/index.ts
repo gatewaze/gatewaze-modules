@@ -6,7 +6,7 @@ const badgeScanningModule: GatewazeModule = {
   visibility: 'public',
   name: 'Badge Printing & Scanning',
   description: 'Badge printing, QR code scanning, and contact exchange for events',
-  version: '1.0.0',
+  version: '1.0.1',
   group: 'events',
   features: [
     'badge-scanning',

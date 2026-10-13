@@ -29,6 +29,7 @@ import {
 } from '../../utils';
 import { exportEditionHtml } from '../../components/puck/email-blocks/export-edition-html';
 import { getViewOnlineUrl } from '../../utils/view-online-url';
+import { publicSupabaseUrl } from '../../utils/publicSupabaseUrl';
 import { buildEmailRegistry } from '../../components/puck/email-blocks/declarative/registry';
 import { asEditionSkeleton, buildSkeletonBlocks, type SkeletonBlockDef } from '../../lib/editionSkeleton';
 import { emailBlockRegistry } from '../../components/puck/email-blocks';
@@ -476,7 +477,10 @@ export default function EditionEditorPage() {
       // runs on save, below). Resolve them back to full public URLs for the
       // editor — including `<img src>` inside rich-text HTML — so images render
       // in the canvas. Save strips them again, keeping the DB env-portable.
-      const bucketUrl = `${(import.meta.env.VITE_SUPABASE_URL as string | undefined) ?? ''}/storage/v1/object/public/media`;
+      // The same resolved content is rendered into the HTML that is sent and
+      // published, so it uses the real Supabase URL, not the host-session
+      // admin origin.
+      const bucketUrl = `${publicSupabaseUrl()}/storage/v1/object/public/media`;
       setEdition({
         id: editionData.id,
         edition_date: editionData.edition_date,
@@ -1017,6 +1021,7 @@ export default function EditionEditorPage() {
             editionId={edition.id}
             editionDate={edition.edition_date}
             subject={edition.subject || ''}
+            preheader={edition.preheader || ''}
             collection={collection}
             newsletterSlug={newsletterSlug}
             editionStatus={(edition as { status?: string }).status}

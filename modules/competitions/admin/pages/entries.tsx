@@ -426,7 +426,7 @@ export default function CompetitionEntriesPage() {
           eventEnd={competition.eventEnd || ''}
           offerTicketDetails={competition.offerTicketDetails || ''}
           preSelectedEmail={currentCyclingEmail}
-          eventId={competition.eventId || eventId || ''}
+          eventId={competition.eventShortId || ''}
           selectedEmails={Array.from(selectedEntries)}
         />
       )}

@@ -1,3 +1,4 @@
+import { applyPreheader } from '../../../newsletters/lib/preheader.js';
 import { supabase } from '@/lib/supabase';
 import type { SegmentDefinition } from '@/lib/segments';
 
@@ -360,6 +361,15 @@ export async function deleteBroadcastFolder(id: string): Promise<void> {
  *  instance snapshots the parent's content/audience so the worker binding (which
  *  reads broadcast_sends) is unchanged. The SendingPanel then triggers the
  *  immediate send (broadcast-send edge fn) or leaves it scheduled for the cron. */
+/**
+ * A preheader is mandatory on every real send: Gmail files mail without one
+ * as spam. Whitespace-only does not count. Migration 029 enforces the same
+ * rule on `broadcast_sends` inserts.
+ */
+export function hasPreheader(preheader: string | null | undefined): boolean {
+  return typeof preheader === 'string' && preheader.trim().length > 0;
+}
+
 export async function createBroadcastSend(parentId: string, config: SendComposerConfig): Promise<{ id: string }> {
   const parent = await getBroadcast(parentId);
   if (!parent) throw new Error('Broadcast not found');
@@ -367,6 +377,7 @@ export async function createBroadcastSend(parentId: string, config: SendComposer
   // Mandatory: every broadcast is tied to a list so recipients can unsubscribe
   // from it (the send injects the unsubscribe footer for that list). No list → no send.
   if (!parent.category_list_id) throw new Error('Select an unsubscribe list before sending');
+  if (!hasPreheader(parent.preheader)) throw new Error('Add a preheader in Email details and save before sending');
 
   // Bake the linked event's {{event_*}} variables into this send's snapshot.
   // These are constant per send (event details don't vary per recipient), so
@@ -387,6 +398,10 @@ export async function createBroadcastSend(parentId: string, config: SendComposer
       if (renderedHtml) renderedHtml = substituteEventVars(renderedHtml, values);
     }
   }
+  // The inbox preview text lives in the HTML, rendered when the content was
+  // last saved; the preheader may have been set or changed since. Stamp the
+  // saved preheader into the snapshot so the send always carries it.
+  if (renderedHtml) renderedHtml = applyPreheader(renderedHtml, parent.preheader);
 
   const { data, error } = await supabase
     .from('broadcast_sends')

@@ -11,7 +11,7 @@ const eventSpeakersModule: GatewazeModule = {
   // top-level Speakers admin nav, calendar submit-talk portal page.
   // v2.1.0 — speaker speaker kits: auto-generated umami tracking link, AI post
   // variants, rendered social cards + zip for confirmed talks (see guide.md).
-  version: '2.3.0',
+  version: '2.3.1',
   features: [
     'event-speakers',
     'event-speakers.manage',

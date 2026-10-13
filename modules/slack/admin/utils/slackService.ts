@@ -4,6 +4,7 @@
  */
 
 import { supabase } from '@/lib/supabase';
+import { publicSupabaseUrl } from './publicSupabaseUrl';
 
 // =============================================================================
 // Types
@@ -149,10 +150,14 @@ export function getBrandDefaultInfo(): BrandDefaultInfo | null {
  */
 export function getSlackOAuthUrl(eventId: string): string {
   const clientId = import.meta.env.VITE_SLACK_CLIENT_ID;
-  const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+  // Slack calls this redirect URI itself, so it must be the real Supabase
+  // URL, not the admin origin that VITE_SUPABASE_URL is in host-session mode.
+  const supabaseUrl = publicSupabaseUrl();
 
   if (!clientId || !supabaseUrl) {
-    throw new Error('Slack OAuth not configured. Missing VITE_SLACK_CLIENT_ID or VITE_SUPABASE_URL.');
+    throw new Error(
+      'Slack OAuth not configured. Missing VITE_SLACK_CLIENT_ID, or both VITE_SUPABASE_PUBLIC_URL and VITE_SUPABASE_URL.',
+    );
   }
 
   const redirectUri = `${supabaseUrl}/functions/v1/slack-oauth-callback`;

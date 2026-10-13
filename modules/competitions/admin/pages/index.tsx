@@ -104,7 +104,7 @@ export default function CompetitionsPage() {
   const [selectedWinnerIds, setSelectedWinnerIds] = useState<Set<number>>(new Set());
   const [isBulkUpdating, setIsBulkUpdating] = useState(false);
 
-  // State for entries counts (from competition_entries table)
+  // State for entries counts (from events_competition_entries table)
   const [entriesCounts, setEntriesCounts] = useState<Map<string, number>>(new Map());
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
 
@@ -180,7 +180,7 @@ export default function CompetitionsPage() {
   const loadCompetitions = async () => {
     setLoading(true);
     try {
-      // Query event_competitions with a left join to events for metadata
+      // Query events_competitions with a left join to events for metadata
       const { data, error } = await supabase
         .from('events_competitions')
         .select('*, events(event_title, event_city, event_country_code, event_logo, event_start, event_end, event_id, account_id)')
@@ -194,7 +194,10 @@ export default function CompetitionsPage() {
 
       let mapped: CompetitionWithEvent[] = (data || []).map((row: any) => ({
         id: row.id,
-        eventId: row.event_id || '',
+        // Winners are keyed by the short text event id (events.event_id),
+        // not the events_competitions.event_id uuid, so this page uses the
+        // short id throughout (winner lookups, counts, logging).
+        eventId: row.events?.event_id || '',
         title: row.title,
         slug: row.slug,
         value: row.value,
@@ -274,7 +277,7 @@ export default function CompetitionsPage() {
     try {
       const counts = new Map<string, number>();
 
-      // Get entries count from competition_entries table using competition UUID
+      // Get entries count from events_competition_entries table using competition UUID
       await Promise.all(
         competitions.map(async (comp) => {
           try {
