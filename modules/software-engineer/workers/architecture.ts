@@ -29,6 +29,7 @@ import { redactToken } from '../lib/git.js';
 import { recordPhaseStart, recordPhaseEnd, blockRun } from '../lib/run-state.js';
 import { notifyGate } from '../lib/notify.js';
 import { createOrSupersedeDecision, ARCHITECTURE_DECISION_OPTIONS } from '../lib/decisions.js';
+import { specForPrompt } from '../lib/spec-prompt.js';
 
 const sb = (ctx) =>
   ctx?.supabase ??
@@ -116,7 +117,7 @@ export default async function architecture(job, ctx) {
       `     about being an agent or about this gate.`,
       ``,
       `--- APPROVED SPEC ---`,
-      String(art?.content ?? '').slice(0, 20000),
+      specForPrompt(art?.content),
       `--- END SPEC ---`,
     ].join('\n');
 
