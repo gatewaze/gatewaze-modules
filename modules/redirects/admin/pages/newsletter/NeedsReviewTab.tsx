@@ -173,8 +173,9 @@ export function NeedsReviewTab() {
   const handleReparse = async () => {
     setReparsing(true);
     try {
-      // Get the API URL based on environment
-      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+      // An empty VITE_API_URL means the API is same-origin (/api), as in
+      // sibling modules; never fall back to a hard-coded localhost host.
+      const apiUrl = import.meta.env.VITE_API_URL || '';
 
       const response = await fetch(`${apiUrl}/api/redirects/parse`, {
         method: 'POST',

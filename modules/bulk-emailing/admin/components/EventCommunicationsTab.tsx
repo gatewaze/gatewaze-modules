@@ -41,6 +41,7 @@ import {
   findAllVariables,
   type TemplateContext,
 } from '@/utils/templateVariables';
+import { publicSupabaseUrl } from '../utils/publicSupabaseUrl';
 
 interface EventCommunicationsTabProps {
   eventId: string;
@@ -393,8 +394,10 @@ function SpeakerEmailConfig({
     firstName: string = 'Jane',
     lastName: string = 'Smith'
   ): TemplateContext => {
-    // Build example confirmation link for preview/test
-    const baseUrl = import.meta.env.VITE_SUPABASE_URL || 'https://api.example.com';
+    // Build example confirmation link for preview/test. Test sends email it,
+    // so it uses the real Supabase URL, not the admin origin that
+    // VITE_SUPABASE_URL is in host-session mode.
+    const baseUrl = publicSupabaseUrl() || 'https://api.example.com';
     const exampleConfirmationLink = `${baseUrl}/functions/v1/events-speaker-confirm?token=example-token-123`;
     // Build example edit link for speaker portal (relative path)
     // Points to the success/dashboard page where confirmed speakers see their checklist
@@ -2688,7 +2691,10 @@ export function EventCommunicationsTab({ eventId, eventUuid, eventTitle }: Event
 
   // Build template context for preview
   const buildPreviewContext = (email: string = 'test@example.com', firstName: string = 'John', lastName: string = 'Doe'): TemplateContext & { calendar: Record<string, string> } => {
-    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
+    // Test sends email these calendar links, so they use the real Supabase
+    // URL, not the admin origin that VITE_SUPABASE_URL is in host-session
+    // mode.
+    const supabaseUrl = publicSupabaseUrl();
     const calendarBaseUrl = `${supabaseUrl}/functions/v1/calendar`;
     const emailEncoded = encodeEmail(email);
 

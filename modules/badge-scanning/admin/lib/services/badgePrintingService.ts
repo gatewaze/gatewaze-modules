@@ -8,8 +8,14 @@ import { toPublicUrl } from '@gatewaze/shared';
 import { generateBadgeImage, generateBadgePdf, BadgeTemplate } from '../badgeGenerator';
 import { printBadge, printBadgeBatch, PrinterConfig, PrintJob } from '../printerIntegration';
 import { generateQrAccessToken } from '../qrCode';
+import { publicSupabaseUrl } from '../../utils/publicSupabaseUrl';
 
-const BUCKET_URL = `${import.meta.env.VITE_SUPABASE_URL}/storage/v1/object/public/media`;
+// Nothing calls BadgePrintingService today. If it were used, these URLs would
+// be loaded by the badge generator (node-canvas) and end up on printed or
+// stored badges, not in the admin browser, so they use the real Supabase URL
+// rather than the admin origin that VITE_SUPABASE_URL is in host-session mode,
+// for consistency with the other modules.
+const BUCKET_URL = `${publicSupabaseUrl()}/storage/v1/object/public/media`;
 
 export class BadgePrintingService {
   constructor(private supabase: SupabaseClient) {}
