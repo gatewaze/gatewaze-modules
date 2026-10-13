@@ -138,8 +138,40 @@ async function countLines(absPath: string): Promise<number | null> {
 
 /** Shared PreToolUse hooks for both runPhase and runInteractive — kept in one place so the Bash
  *  forbidden-flag guard and the issue #58 context-discipline guards can't drift between the two. */
-function buildPreToolUseHooks(cwd: string) {
+/**
+ * Tools whose work outlives the turn that started them, or that wait for a person. A phase session
+ * closes its input when the main agent's turn ends, so anything still running after that loses the
+ * permission channel: every later tool call fails with "Tool permission request failed: AbortError:
+ * Stream closed" and the agent flails until the phase gives up. Runs #96 and #100 (13 Oct) each
+ * made over 80 such calls after the main agent started background subagents and ended its turn to
+ * wait for them. Nobody answers a question in an unattended phase either.
+ */
+export const PHASE_DISALLOWED_TOOLS = ['ScheduleWakeup', 'Monitor', 'Workflow', 'AskUserQuestion', 'CronCreate', 'RemoteTrigger'];
+
+/**
+ * Background Agent/Task/Bash calls, refused in phase sessions. canUseTool's run_in_background
+ * rewrite is not enough on its own: the Agent tool does not ask permission, so the callback never
+ * sees it. A PreToolUse hook runs for every tool call, so the refusal lives here, with a reason the
+ * agent can act on.
+ */
+const FOREGROUND_ONLY_HOOK = {
+  matcher: 'Agent|Task|Bash',
+  hooks: [async (i: any) => (i?.tool_input?.run_in_background === true
+    ? {
+        hookSpecificOutput: {
+          hookEventName: 'PreToolUse',
+          permissionDecision: 'deny',
+          permissionDecisionReason:
+            'Background work is not available in this unattended phase: the session ends when your turn ends, ' +
+            'and anything still running then loses its tools. Run it again with run_in_background false and wait for the result.',
+        },
+      }
+    : {})],
+};
+
+function buildPreToolUseHooks(cwd: string, { foregroundOnly = false }: { foregroundOnly?: boolean } = {}) {
   return [
+    ...(foregroundOnly ? [FOREGROUND_ONLY_HOOK] : []),
     {
       matcher: 'Bash',
       hooks: [async (i: any) => {
@@ -255,7 +287,7 @@ export class InProcessRunner implements Runner {
           ...(input.noTools ? { tools: [], maxTurns: 1 } : {}),
           // A phase must finish its work before reporting its result. Detached tools can
           // outlive that result and lose their permission channel in the SDK.
-          disallowedTools: ['ScheduleWakeup'],
+          disallowedTools: PHASE_DISALLOWED_TOOLS,
           permissionMode: 'default',
           canUseTool: async (_name: string, toolInput: Record<string, unknown>) =>
             input.noTools
@@ -267,7 +299,7 @@ export class InProcessRunner implements Runner {
           // Bare auto-approval rules bypass it, including on SDK versions with automatic mode.
           allowedTools: [],
           hooks: {
-            PreToolUse: buildPreToolUseHooks(input.cwd),
+            PreToolUse: buildPreToolUseHooks(input.cwd, { foregroundOnly: true }),
           },
         },
       });
