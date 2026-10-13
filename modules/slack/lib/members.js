@@ -21,8 +21,18 @@ export function peopleSyncMode(value) {
   return PEOPLE_SYNC_MODES.includes(v) ? v : DEFAULT_PEOPLE_SYNC_MODE;
 }
 
-/** Members per call to the link function. users.list pages are at most 200. */
-export const LINK_BATCH_SIZE = 200;
+/**
+ * Members per call to the link function. Each call runs under PostgREST's
+ * statement timeout (8s on Supabase), so keep calls small enough to finish
+ * while the database is busy with other work.
+ */
+export const LINK_BATCH_SIZE = 50;
+
+/** A statement timeout from Postgres, as PostgREST reports it. */
+export function isStatementTimeout(err) {
+  const m = err && err.message ? err.message : String(err || '');
+  return /statement timeout|canceling statement/i.test(m);
+}
 
 const NAME_MAX = 200;
 const EMAIL_MAX = 254;

@@ -1,7 +1,7 @@
 // @ts-nocheck — vitest harness.
 
 import { describe, it, expect } from 'vitest';
-import { isHumanMember, peopleSyncMode, tallyLinkResults, toMemberRecord } from '../lib/members.js';
+import { isHumanMember, isStatementTimeout, peopleSyncMode, tallyLinkResults, toMemberRecord } from '../lib/members.js';
 
 describe('peopleSyncMode', () => {
   it.each(['off', 'link', 'create', ' CREATE '])('accepts %j', (v) => expect(peopleSyncMode(v)).toBe(v.trim().toLowerCase()));
@@ -63,5 +63,15 @@ describe('tallyLinkResults', () => {
     const t = tallyLinkResults([{ r_action: 'created' }, { r_action: 'updated' }, { r_action: 'created' }]);
     tallyLinkResults([{ r_action: 'no_email' }, {}], t);
     expect(t).toEqual({ created: 2, updated: 1, no_email: 1, unknown: 1 });
+  });
+});
+
+describe('isStatementTimeout', () => {
+  it('recognises PostgREST statement timeouts', () => {
+    expect(isStatementTimeout(new Error('could not link Slack members to people: canceling statement due to statement timeout'))).toBe(true);
+  });
+  it('does not treat other errors as timeouts', () => {
+    expect(isStatementTimeout(new Error('permission denied for function'))).toBe(false);
+    expect(isStatementTimeout(undefined)).toBe(false);
   });
 });
