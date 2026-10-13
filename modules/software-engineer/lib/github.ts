@@ -51,6 +51,15 @@ export function githubClient(token: string) {
     listOpenPullsByHead(owner: string, name: string, headOwner: string, branch: string) {
       return j(`/repos/${owner}/${name}/pulls?state=open&per_page=10&head=${encodeURIComponent(`${headOwner}:${branch}`)}`);
     },
+    async listAllIssues(owner: string, name: string) {
+      const result: any[]=[];
+      for(let page=1;page<=100;page++){
+        const rows=await j(`/repos/${owner}/${name}/issues?state=all&per_page=100&page=${page}`);
+        result.push(...rows.filter((i:any)=>!i.pull_request));
+        if(rows.length<100)return result;
+      }
+      throw new Error('Issue history too large for complete duplicate preflight');
+    },
     /** Open issues on a repo (GitHub returns PRs here too — caller filters on `pull_request`).
      * Optional `labels` narrows server-side to issues carrying ALL the given label names. */
     listIssues(owner: string, name: string, state: 'open' | 'all' = 'open', labels?: string[]) {
