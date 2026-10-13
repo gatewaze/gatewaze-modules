@@ -7,7 +7,7 @@ const discountsModule: GatewazeModule = {
   visibility: 'public',
   name: 'Discounts',
   description: 'Create, distribute, and track discount codes for events and products',
-  version: '1.1.0',
+  version: '1.2.0',
   features: [
     'discounts',
     'discounts.manage',
@@ -18,6 +18,12 @@ const discountsModule: GatewazeModule = {
     {
       path: 'discounts',
       component: () => import('./admin/pages/index'),
+      requiredFeature: 'discounts',
+      guard: 'none',
+    },
+    {
+      path: 'discounts/offers/:discountId',
+      component: () => import('./admin/pages/offer'),
       requiredFeature: 'discounts',
       guard: 'none',
     },
@@ -61,6 +67,8 @@ const discountsModule: GatewazeModule = {
     'migrations/000_discounts_core_tables.sql',
     'migrations/001_discounts_tables.sql',
     'migrations/002_legacy_parity.sql',
+    // 003 shared-code offers for the portal's /offers/<slug> page.
+    'migrations/003_shared_offers.sql',
   ],
 
   configSchema: {},

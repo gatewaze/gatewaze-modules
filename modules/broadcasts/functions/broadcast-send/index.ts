@@ -89,6 +89,23 @@ function substituteMergeFields(text: string, attrs: Record<string, unknown>, esc
   })
 }
 
+// {{email_encoded}}: the recipient's address in the legacy tech.tickets
+// encoding (XOR with "HideMe", then URL-safe base64). The portal decodes it
+// from ?utm_medium= / ?e= (packages/portal/lib/emailEncoding.ts) to know who
+// clicked, e.g. /offers/<slug>?utm_medium={{email_encoded}}. It identifies,
+// it does not authenticate: anyone can encode any address. Keep in step with
+// the portal's decodeEmail.
+function encodeEmail(email: string): string {
+  // The legacy encoding is byte-wise; a non-ASCII address has no stable
+  // form in it. Leave the link without an address and the offer page asks.
+  if (/[^\x20-\x7e]/.test(email)) return ''
+  const lower = email.toLowerCase()
+  const pass = 'HideMe'
+  let bin = ''
+  for (let i = 0; i < lower.length; i++) bin += String.fromCharCode(lower.charCodeAt(i) ^ pass.charCodeAt(i % pass.length))
+  return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '')
+}
+
 // HMAC unsubscribe token encoding (email, suppression_topic). Mirrors the
 // newsletter token shape but the second segment is the TOPIC, not a list id —
 // a broadcast unsubscribe suppresses a topic, not a list (spec §1.5).
@@ -244,6 +261,11 @@ async function sendToRecipient(supabase: SB, provider: EmailProviderModule, ctx:
     if (ctx.usesMergeFields) {
       personalizedHtml = substituteMergeFields(personalizedHtml, attrs, true)
       subject = substituteMergeFields(ctx.subject, attrs, false)
+    }
+    // Computed from the address itself, so it works for every recipient.
+    // URL-safe characters only, so no escaping is needed in an href.
+    if (personalizedHtml.includes('email_encoded')) {
+      personalizedHtml = personalizedHtml.replace(/\{\{\s*email_encoded\s*\}\}/g, encodeEmail(email))
     }
 
     // Per-recipient send-time blocks: resolve for THIS recipient and substitute

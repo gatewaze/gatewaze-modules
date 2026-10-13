@@ -7,7 +7,7 @@ const broadcastsModule: GatewazeModule = {
   visibility: 'public',
   name: 'Broadcasts',
   description: 'Send a single scheduled, timezone-aware email to a segment, with an AI segment copilot',
-  version: '0.2.1',
+  version: '0.2.2',
   features: [
     'broadcasts',
     'broadcasts.send',
