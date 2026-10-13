@@ -18,10 +18,12 @@ const gh = vi.hoisted(() => ({
   issue: { title: 'Fix the widget', body: 'The widget is broken.', labels: [] as string[] },
   // Keyed by issue number: the dependency issue's own getIssue result (state only matters for #9).
   depIssue: { state: 'open' },
+  allIssues: [] as any[],
 }));
 vi.mock('../../lib/github.js', () => ({
   githubClient: () => ({
     getIssue: async (_o: string, _n: string, num: number) => { if(gh.quotaError)throw gh.quotaError;return num === 53 ? gh.issue : gh.depIssue; },
+    listAllIssues: async () => gh.allIssues,
     putFile: async (...args: any[]) => { gh.putFileCalls.push(args); },
     setStatusLabel: async (...args: any[]) => { gh.setStatusLabelCalls.push(args); },
     removeLabel: async (...args: any[]) => { gh.removeLabelCalls.push(args); },
@@ -87,6 +89,16 @@ vi.mock('../../lib/credentials.js', () => ({
 
 import spec from '../../workers/spec.js';
 
+// The spec phase now refuses to advance without the agent's duplicate/codebase preflight, so every
+// agent double that is meant to get past it writes one, naming a file that exists in the workspace.
+async function writePreflight(cwd: string, overrides: Record<string, unknown> = {}) {
+  await mkdir(join(cwd, 'specs'), { recursive: true });
+  await mkdir(join(cwd, 'src'), { recursive: true });
+  await writeFile(join(cwd, 'src/widget.ts'), 'export {};\n', 'utf8');
+  const preflight = { verdict: 'new_work', reason: 'No existing issue or code covers the broken widget.', files: ['src/widget.ts'], issue_number: null, ...overrides };
+  await writeFile(join(cwd, 'specs/issue-53-preflight.json'), JSON.stringify(preflight), 'utf8');
+}
+
 function mockSupabase() {
   const inserts: any[] = [];
   const updates: any[] = [];
@@ -122,6 +134,7 @@ describe('spec worker', () => {
     gh.removeLabelCalls.length = 0;
     gh.issue = { title: 'Fix the widget', body: 'The widget is broken.', labels: [] };
     gh.depIssue = { state: 'open' };
+    gh.allIssues = [];
     rs.starts.length = 0; rs.ends.length = 0; rs.blocks.length = 0;
     enqueue.calls.length = 0;
     memory.calls.length = 0;
@@ -134,7 +147,7 @@ describe('spec worker', () => {
   it('reads the agent-written spec file as the artifact, not the chat reply', async () => {
     const specBody = '# Spec\n\nGoal: fix the widget.\n' + 'Detail line.\n'.repeat(20);
     runAgentSession.mockImplementation(async (_sb: unknown, _ctx: unknown, _run: any, _project: any, _phase: string, opts: any) => {
-      await mkdir(join(opts.cwd, 'specs'), { recursive: true });
+      await writePreflight(opts.cwd);
       await writeFile(join(opts.cwd, 'specs/issue-53.md'), specBody, 'utf8');
       return { text: 'Done! I wrote up a spec.', tokensInput: 10, tokensOutput: 20 };
     });
@@ -147,8 +160,10 @@ describe('spec worker', () => {
     expect(specArtifact?.row.content).toBe(specBody);
     expect(specArtifact?.row.content).not.toContain('Done! I wrote up a spec.');
 
-    const summaryArtifact = inserts.find((i) => i.table === 'se_artifacts' && i.row.kind === 'spec_summary');
+    const summaryArtifact = inserts.find((i) => i.table === 'se_artifacts' && i.row.kind === 'spec_summary' && !i.row.content.startsWith('Duplicate/codebase preflight'));
     expect(summaryArtifact?.row.content).toBe('Done! I wrote up a spec.');
+    const preflightArtifact = inserts.find((i) => i.table === 'se_artifacts' && i.row.content?.startsWith('Duplicate/codebase preflight'));
+    expect(JSON.parse(preflightArtifact.row.content.split('\n')[1])).toMatchObject({ verdict: 'new_work' });
 
     expect(rs.ends.at(-1)).toMatchObject({ phase: 'spec', status: 'passed' });
     expect(enqueue.calls).toEqual([{ runId: 'run-1', phase: 'review', data: undefined }]);
@@ -158,13 +173,16 @@ describe('spec worker', () => {
   it('fails loud when the agent never writes the spec file (chats a summary instead)', async () => {
     // Regression case modeled on the #51 evidence: a long, plausible-sounding chat reply with no file.
     const chatOnly = 'I explored the repo and drafted a spec covering the widget fix, test plan, and risks.';
-    runAgentSession.mockImplementation(async () => ({ text: chatOnly, tokensInput: 5, tokensOutput: 5 }));
+    runAgentSession.mockImplementation(async (_sb: unknown, _ctx: unknown, _run: any, _project: any, _phase: string, opts: any) => {
+      await writePreflight(opts.cwd);
+      return { text: chatOnly, tokensInput: 5, tokensOutput: 5 };
+    });
 
     const { supabase, inserts, updates } = mockSupabase();
     const result = await spec({ data: { runId: 'run-1' } }, { supabase });
 
     expect(result).toEqual({ failed: 'agent did not write the spec file' });
-    expect(inserts.find((i) => i.table === 'se_artifacts')).toBeUndefined();
+    expect(inserts.find((i) => i.table === 'se_artifacts' && i.row.kind === 'spec')).toBeUndefined();
     expect(rs.ends.at(-1)).toMatchObject({ phase: 'spec', status: 'failed', summary: 'agent did not write the spec file' });
     expect(updates.find((u) => u.table === 'se_runs')?.row).toMatchObject({ status: 'failed' });
     expect(enqueue.calls).toEqual([]);
@@ -172,7 +190,7 @@ describe('spec worker', () => {
 
   it('fails loud when the spec file exists but is a stub under the length floor', async () => {
     runAgentSession.mockImplementation(async (_sb: unknown, _ctx: unknown, _run: any, _project: any, _phase: string, opts: any) => {
-      await mkdir(join(opts.cwd, 'specs'), { recursive: true });
+      await writePreflight(opts.cwd);
       await writeFile(join(opts.cwd, 'specs/issue-53.md'), 'TODO', 'utf8');
       return { text: 'placeholder', tokensInput: 1, tokensOutput: 1 };
     });
@@ -181,7 +199,7 @@ describe('spec worker', () => {
     const result = await spec({ data: { runId: 'run-1' } }, { supabase });
 
     expect(result).toEqual({ failed: 'agent did not write the spec file' });
-    expect(inserts.find((i) => i.table === 'se_artifacts')).toBeUndefined();
+    expect(inserts.find((i) => i.table === 'se_artifacts' && i.row.kind === 'spec')).toBeUndefined();
   });
 
   it('surfaces a runAgentSession error without touching the spec file', async () => {
@@ -216,7 +234,7 @@ describe('spec worker', () => {
     gh.depIssue = { state: 'closed' };
     const specBody = '# Spec\n\nGoal: fix the widget.\n' + 'Detail line.\n'.repeat(20);
     runAgentSession.mockImplementation(async (_sb: unknown, _ctx: unknown, _run: any, _project: any, _phase: string, opts: any) => {
-      await mkdir(join(opts.cwd, 'specs'), { recursive: true });
+      await writePreflight(opts.cwd);
       await writeFile(join(opts.cwd, 'specs/issue-53.md'), specBody, 'utf8');
       return { text: 'Done!', tokensInput: 10, tokensOutput: 20 };
     });
@@ -226,6 +244,42 @@ describe('spec worker', () => {
 
     expect(result).toEqual({ ok: true, branch: expect.any(String) });
     expect(rs.ends.at(-1)).toMatchObject({ phase: 'spec', status: 'passed' });
+  });
+
+  it('stops before writing a spec when the agent leaves no duplicate/codebase preflight', async () => {
+    const specBody = '# Spec\n\nGoal: fix the widget.\n' + 'Detail line.\n'.repeat(20);
+    runAgentSession.mockImplementation(async (_sb: unknown, _ctx: unknown, _run: any, _project: any, _phase: string, opts: any) => {
+      await mkdir(join(opts.cwd, 'specs'), { recursive: true });
+      await writeFile(join(opts.cwd, 'specs/issue-53.md'), specBody, 'utf8');
+      return { text: 'Done!', tokensInput: 1, tokensOutput: 1 };
+    });
+
+    const { supabase, inserts } = mockSupabase();
+    const result = await spec({ data: { runId: 'run-1' } }, { supabase });
+
+    expect(result).toMatchObject({ blocked: 'authorization' });
+    expect(rs.blocks.at(-1)?.detail).toContain('preflight');
+    expect(inserts.find((i) => i.table === 'se_artifacts' && i.row.kind === 'spec')).toBeUndefined();
+    expect(enqueue.calls).toEqual([]);
+  });
+
+  it('pauses on a duplicate verdict and names the canonical issue', async () => {
+    gh.allIssues = [{ number: 53, state: 'open', title: 'Fix the widget' }, { number: 41, state: 'open', title: 'Widget broken' }];
+    runAgentSession.mockImplementation(async (_sb: unknown, _ctx: unknown, _run: any, _project: any, _phase: string, opts: any) => {
+      await writePreflight(opts.cwd, { verdict: 'duplicate', issue_number: 41, reason: 'Issue #41 already asks for the same widget fix.' });
+      return { text: 'Duplicate.', tokensInput: 1, tokensOutput: 1 };
+    });
+
+    const { supabase, inserts } = mockSupabase();
+    const result = await spec({ data: { runId: 'run-1' } }, { supabase });
+
+    expect(result).toMatchObject({ blocked: 'authorization' });
+    expect(rs.blocks.at(-1)?.detail).toContain('canonical issue #41');
+    expect(inserts.find((i) => i.table === 'se_artifacts' && i.row.kind === 'spec')).toBeUndefined();
+    // The run's own issue is never offered to the agent as evidence of a duplicate.
+    const prompt = String(runAgentSession.mock.calls[0][5].prompt);
+    expect(prompt).toContain('"number":41');
+    expect(prompt).not.toContain('"number":53');
   });
 });
 
