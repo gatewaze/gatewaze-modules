@@ -70,3 +70,46 @@ capture it once from a real browser and ship it with `SLACK_SESSION_SECRET_B64`.
 ## Dependencies
 
 None.
+
+## Welcome DM to new members
+
+When someone joins the workspace, the module can send them a direct message
+from a real person's account, for example the community founder's. Replies
+land in that person's own DMs. Admin page: **Slack welcome DM**
+(`/slack/welcome`).
+
+How it works:
+
+1. Slack sends a `team_join` event to
+   `POST /api/modules/slack/internal/events`. The route checks Slack's request
+   signature (`SLACK_SIGNING_SECRET`, five-minute replay window) and records
+   the join in `integrations_slack_welcome_log`, one row per member per
+   workspace, so a redelivered event cannot send twice.
+2. A `slack:welcome-dm` job is queued on the platform worker with the
+   configured delay. It claims the row atomically, then opens a DM and posts
+   the message with the sender's **user token**.
+3. Bots, deactivated accounts and the sender themselves are skipped. If the
+   sender's token stops working, the connection is marked broken and the
+   welcomes wait until someone reconnects and presses **Retry waiting**.
+
+The sender is connected with a link created on the admin page for their Slack
+email address. They open it while signed in to Slack as themselves; the link
+is valid for 24 hours and refuses any other account or workspace. Their token is stored
+encrypted with `GATEWAZE_SECRETS_KEY` (`integrations_slack_user_tokens`, which
+only the service role can read) and is never returned by any route.
+
+Slack app settings this needs:
+
+| Setting | Value |
+|---------|-------|
+| Event Subscriptions → Request URL | `<API_URL>/api/modules/slack/internal/events`, bot event `team_join` |
+| OAuth & Permissions → Redirect URL | `<API_URL>/api/modules/slack/internal/oauth/callback` |
+| User token scopes | `chat:write`, `im:write` |
+| Bot token scopes | `users:read`, `users:read.email` |
+
+Module config: `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET`, `SLACK_SIGNING_SECRET`
+and `SLACK_BOT_TOKEN` (the last three are stored encrypted), plus
+`SLACK_WELCOME_ENABLED`, `SLACK_WELCOME_MESSAGE` (`{first_name}` and `{name}`
+are filled in, up to 4,000 characters) and `SLACK_WELCOME_DELAY_MINUTES`.
+It is off until enabled. The built-in message is a generic placeholder; since
+the DMs come from a real person, write your own in their voice.
