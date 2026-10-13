@@ -33,6 +33,7 @@ const RESULT_LABELS: Record<string, string> = {
   unmatched: 'no matching person',
   no_email: 'no email visible',
   invalid: 'invalid',
+  error: 'failed (database busy) — run the sync again',
 };
 
 /**

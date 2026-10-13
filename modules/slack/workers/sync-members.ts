@@ -16,14 +16,49 @@
  */
 
 import { serviceClient } from '../lib/service-client.js';
-import { LINK_BATCH_SIZE, toMemberRecord, tallyLinkResults } from '../lib/members.js';
+import { LINK_BATCH_SIZE, isStatementTimeout, toMemberRecord, tallyLinkResults } from '../lib/members.js';
 import { SYNCS_TABLE, linkMembers, readSlackConfig, slackApi } from '../lib/welcome-store.js';
 
 const PAGE_GAP_MS = 3500;
 const MAX_RATE_LIMIT_WAITS = 20;
 const MAX_PAGES = 2000; // 400k members — a runaway cursor stops here
 
+const TIMEOUT_RETRY_GAP_MS = 5000;
+const SINGLE_MEMBER_TRIES = 3;
+
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Link one batch. A statement timeout usually means the database is busy, not
+ * that the batch is bad: split it and try the halves after a pause, down to
+ * single members. A member that still times out is counted as `error` and the
+ * sync moves on, so one slow moment cannot end a long run. Other errors throw.
+ */
+async function linkResilient(sb, records, mode, results) {
+  try {
+    tallyLinkResults(await linkMembers(sb, records, mode), results);
+    return;
+  } catch (err) {
+    if (!isStatementTimeout(err)) throw err;
+  }
+  await sleep(TIMEOUT_RETRY_GAP_MS);
+  if (records.length > 1) {
+    const mid = Math.ceil(records.length / 2);
+    await linkResilient(sb, records.slice(0, mid), mode, results);
+    await linkResilient(sb, records.slice(mid), mode, results);
+    return;
+  }
+  for (let i = 1; i < SINGLE_MEMBER_TRIES; i++) {
+    try {
+      tallyLinkResults(await linkMembers(sb, records, mode), results);
+      return;
+    } catch (err) {
+      if (!isStatementTimeout(err)) throw err;
+      await sleep(TIMEOUT_RETRY_GAP_MS * (i + 1));
+    }
+  }
+  results.error = (results.error || 0) + 1;
+}
 
 export default async function syncMembers(job: { data?: { runId?: string } }) {
   const runId = job?.data?.runId;
@@ -70,7 +105,7 @@ export default async function syncMembers(job: { data?: { runId?: string } }) {
       seen += members.length;
       const records = members.map(toMemberRecord).filter(Boolean);
       for (let i = 0; i < records.length; i += LINK_BATCH_SIZE) {
-        tallyLinkResults(await linkMembers(sb, records.slice(i, i + LINK_BATCH_SIZE), run.mode), results);
+        await linkResilient(sb, records.slice(i, i + LINK_BATCH_SIZE), run.mode, results);
       }
       pages++;
       await update({ pages, members_seen: seen, results });
