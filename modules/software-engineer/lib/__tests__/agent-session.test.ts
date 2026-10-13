@@ -84,10 +84,22 @@ describe('agent-session PreToolUse guards (issue #58 + Bash forbidden-flag)', ()
     for (const name of ['Agent', 'Task', 'Bash']) {
       const res = await fg.hooks[0]({ tool_name: name, tool_input: { run_in_background: true, prompt: 'explore' } });
       expect(res.hookSpecificOutput.permissionDecision).toBe('deny');
-      expect(res.hookSpecificOutput.permissionDecisionReason).toContain('run_in_background false');
+      expect(res.hookSpecificOutput.permissionDecisionReason).toContain('run_in_background set to false');
     }
-    expect(await fg.hooks[0]({ tool_name: 'Agent', tool_input: { prompt: 'explore' } })).toEqual({});
+    expect(await fg.hooks[0]({ tool_name: 'Agent', tool_input: { prompt: 'explore', run_in_background: false } })).toEqual({});
     expect(await fg.hooks[0]({ tool_name: 'Bash', tool_input: { command: 'ls', run_in_background: false } })).toEqual({});
+    expect(await fg.hooks[0]({ tool_name: 'Bash', tool_input: { command: 'ls' } })).toEqual({});
+  });
+
+  it('refuses an Agent or Task call that leaves run_in_background unset, because both default to the background', async () => {
+    // Run #100, spec attempt 3: Agent with no run_in_background returned "Async agent launched
+    // successfully", the main agent ended its turn to wait, and the session closed under it.
+    await new InProcessRunner().runPhase({ cwd: dir, prompt: 'spec', model: 'claude-sonnet-5', credential: CRED });
+    const fg = capturedOptions.hooks.PreToolUse.find((h: any) => h.matcher === 'Agent|Task|Bash');
+    for (const name of ['Agent', 'Task']) {
+      const res = await fg.hooks[0]({ tool_name: name, tool_input: { prompt: 'explore the repo' } });
+      expect(res.hookSpecificOutput.permissionDecision).toBe('deny');
+    }
   });
 
   it('leaves background work alone in an interactive session, which stays open across turns', async () => {
