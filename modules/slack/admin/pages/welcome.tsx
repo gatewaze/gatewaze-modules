@@ -2,10 +2,12 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { Link } from 'react-router';
 import { ArrowPathIcon, CheckCircleIcon, XCircleIcon } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
-import { Badge, Button, Card, CopyButton, Input, Switch, Textarea } from '@/components/ui';
+import { Badge, Button, Card, CopyButton, Input, Select, Switch, Textarea } from '@/components/ui';
 import { Spinner } from '@/components/ui/Spinner';
 import { Page } from '@/components/shared/Page';
-import { slackWelcome, type WelcomeLogRow, type WelcomeStatus } from '@/utils/slackWelcomeService';
+import {
+  slackWelcome, type MemberSyncStatus, type PeopleSyncMode, type WelcomeLogRow, type WelcomeStatus,
+} from '@/utils/slackWelcomeService';
 
 /**
  * Slack welcome DM: when someone joins the workspace, a message goes to them
@@ -23,6 +25,128 @@ const STATUS_COLOR: Record<WelcomeLogRow['status'], 'success' | 'info' | 'warnin
 };
 
 const fmt = (iso: string | null) => (iso ? new Date(iso).toLocaleString() : '—');
+
+const RESULT_LABELS: Record<string, string> = {
+  created: 'people created',
+  updated: 'people updated',
+  unchanged: 'already up to date',
+  unmatched: 'no matching person',
+  no_email: 'no email visible',
+  invalid: 'invalid',
+};
+
+/**
+ * Slack members in People: each member's Slack user ID is written onto the
+ * person with the same email (attributes.slack_user_id), on join and by a
+ * full sync. Self-contained: its own state, and it polls while a sync runs.
+ */
+function MembersSyncCard() {
+  const [data, setData] = useState<MemberSyncStatus | null>(null);
+  const [error, setError] = useState('');
+  const [starting, setStarting] = useState(false);
+  const [savingMode, setSavingMode] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      setData(await slackWelcome.membersSync());
+      setError('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
+
+  const latest = data?.runs[0];
+  const running = latest?.status === 'queued' || latest?.status === 'running';
+
+  useEffect(() => {
+    load();
+  }, [load]);
+  useEffect(() => {
+    if (!running) return undefined;
+    const t = setInterval(load, 5000);
+    return () => clearInterval(t);
+  }, [running, load]);
+
+  const changeMode = async (mode: PeopleSyncMode) => {
+    setSavingMode(true);
+    try {
+      await slackWelcome.savePeopleSync(mode);
+      toast.success('Saved.');
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not save');
+    } finally {
+      setSavingMode(false);
+    }
+  };
+
+  const start = async () => {
+    setStarting(true);
+    try {
+      await slackWelcome.startMembersSync();
+      toast.success('Sync started. It takes about a minute per 4,000 members.');
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not start the sync');
+    } finally {
+      setStarting(false);
+    }
+  };
+
+  return (
+    <Card skin="bordered" className="p-5 space-y-4">
+      <h2 className="text-lg font-medium">Slack members in People</h2>
+      <p className="text-sm text-[var(--gray-11)]">
+        Each member&apos;s Slack user ID is added to the person with the same email, as{' '}
+        <code>slack_user_id</code>. This happens when someone joins; a full sync covers everyone already in the workspace.
+      </p>
+      {error && <p className="text-sm text-[var(--red-11)]">Could not load: {error}</p>}
+      {data && (
+        <>
+          <div className="max-w-sm">
+            <Select
+              label="When a member has no matching person"
+              value={data.mode}
+              disabled={savingMode}
+              onChange={(e) => changeMode(e.target.value as PeopleSyncMode)}
+            >
+              <option value="off">Do nothing (linking off)</option>
+              <option value="link">Link existing people only</option>
+              <option value="create">Create a person for them</option>
+            </Select>
+          </div>
+          <p className="text-sm">
+            {data.linked_people == null ? '' : `${data.linked_people.toLocaleString()} people have a Slack user ID.`}
+          </p>
+          <div className="flex items-center gap-3">
+            <Button onClick={start} disabled={starting || running || data.mode === 'off'}>
+              {running ? 'Sync running…' : starting ? 'Starting…' : 'Sync all members now'}
+            </Button>
+            {running && <Spinner />}
+          </div>
+          {latest && (
+            <div className="text-sm space-y-1">
+              <div>
+                Last sync: <Badge variant="soft" color={latest.status === 'failed' ? 'error' : latest.status === 'done' ? 'success' : 'info'}>{latest.status}</Badge>{' '}
+                {latest.status === 'done' || latest.status === 'failed' ? `finished ${fmt(latest.finished_at)}` : `started ${fmt(latest.started_at || latest.created_at)}`}
+                {' · '}{latest.members_seen.toLocaleString()} members checked ({latest.mode === 'create' ? 'creating missing people' : 'linking only'})
+              </div>
+              {Object.keys(latest.results || {}).length > 0 && (
+                <div className="text-[var(--gray-11)]">
+                  {Object.entries(latest.results)
+                    .sort((a, b) => b[1] - a[1])
+                    .map(([k, n]) => `${n.toLocaleString()} ${RESULT_LABELS[k] || k}`)
+                    .join(' · ')}
+                </div>
+              )}
+              {latest.error && <div className="text-[var(--red-11)]">{latest.error}</div>}
+            </div>
+          )}
+        </>
+      )}
+    </Card>
+  );
+}
 
 function SetupItem({ ok, label }: { ok: boolean; label: string }) {
   const Icon = ok ? CheckCircleIcon : XCircleIcon;
@@ -294,6 +418,8 @@ export default function SlackWelcomePage() {
             </div>
           </div>
         </Card>
+
+        <MembersSyncCard />
 
         <Card skin="bordered" className="p-5 space-y-4">
           <div className="flex items-center justify-between gap-4">

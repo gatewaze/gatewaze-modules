@@ -113,3 +113,30 @@ and `SLACK_BOT_TOKEN` (the last three are stored encrypted), plus
 are filled in, up to 4,000 characters) and `SLACK_WELCOME_DELAY_MINUTES`.
 It is off until enabled. The built-in message is a generic placeholder; since
 the DMs come from a real person, write your own in their voice.
+
+## Slack members in People
+
+Each Slack member is linked to the person with the same email. The link is
+`attributes.slack_user_id`, Slack's user ID (the `U…` value Slack's UI calls
+the "member ID"). It is the only Slack identifier Gatewaze matches on;
+`attributes.slack_username` is kept as a display label.
+
+- When someone joins, the events route looks the member up with the bot token
+  (`team_join` does not reliably include the email) and links them.
+- **Sync all members now** on the Slack welcome DM page runs the
+  `slack:sync-members` worker job, which pages through `users.list` and links
+  everyone already in the workspace. It is safe to run again: people whose
+  Slack details have not changed are left alone. A 30,000-member workspace
+  takes about ten minutes, set by Slack's rate limit on `users.list`.
+
+`SLACK_PEOPLE_SYNC` decides what happens to a member nobody has yet:
+
+| Value | Effect |
+|-------|--------|
+| `off` | Nothing is written to people. |
+| `link` (default) | Existing people get their Slack user ID; nobody is created. |
+| `create` | As `link`, and a person is created (`contact_kind = member`, `acquisition_source = Slack`) for members with no match. |
+
+A matched person's first and last name are only filled in where they are
+empty. Bots, apps and deactivated accounts are skipped, as are members whose
+email the bot cannot see.

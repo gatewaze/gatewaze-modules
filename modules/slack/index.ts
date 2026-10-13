@@ -7,7 +7,7 @@ const slackIntegrationModule: GatewazeModule = {
   visibility: 'public',
   name: 'Slack',
   description: 'Send notifications, manage channels, and automate workflows via Slack',
-  version: '1.2.1',
+  version: '1.3.0',
   features: [
     'slack',
     'slack.notifications',
@@ -20,6 +20,7 @@ const slackIntegrationModule: GatewazeModule = {
     'migrations/002_slack_invitation_rpcs.sql',
     'migrations/003_portal_self_service.sql',
     'migrations/004_welcome_dm.sql',
+    'migrations/005_people_sync.sql',
   ],
 
   edgeFunctions: [
@@ -80,6 +81,8 @@ const slackIntegrationModule: GatewazeModule = {
   // time keeps well inside Slack's per-user posting limits.
   workers: [
     { name: 'slack:welcome-dm', handler: './workers/welcome-dm.ts', concurrency: 1 },
+    // Links every workspace member to people; started from the admin page.
+    { name: 'slack:sync-members', handler: './workers/sync-members.ts', concurrency: 1 },
   ],
 
   configSchema: {
@@ -131,6 +134,20 @@ const slackIntegrationModule: GatewazeModule = {
       required: false,
       default: '5',
       description: 'Minutes to wait after someone joins before the welcome is sent',
+    },
+    // Slack members → people, by email. The link is attributes.slack_user_id.
+    SLACK_PEOPLE_SYNC: {
+      key: 'SLACK_PEOPLE_SYNC',
+      type: 'select',
+      required: false,
+      default: 'link',
+      label: 'Slack members in People',
+      description: 'When someone joins (and on a full sync): add their Slack user ID to the person with the same email, and optionally create a person for members nobody has yet.',
+      options: [
+        { label: 'Off', value: 'off' },
+        { label: 'Link existing people', value: 'link' },
+        { label: 'Link, and create missing people', value: 'create' },
+      ],
     },
     SLACK_DEFAULT_CHANNEL: {
       key: 'SLACK_DEFAULT_CHANNEL',
