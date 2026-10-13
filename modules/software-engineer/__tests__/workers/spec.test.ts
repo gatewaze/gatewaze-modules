@@ -160,9 +160,9 @@ describe('spec worker', () => {
     expect(specArtifact?.row.content).toBe(specBody);
     expect(specArtifact?.row.content).not.toContain('Done! I wrote up a spec.');
 
-    const summaryArtifact = inserts.find((i) => i.table === 'se_artifacts' && i.row.kind === 'spec_summary' && !i.row.content.startsWith('Duplicate/codebase preflight'));
+    const summaryArtifact = inserts.find((i) => i.table === 'se_artifacts' && i.row.kind === 'spec_summary');
     expect(summaryArtifact?.row.content).toBe('Done! I wrote up a spec.');
-    const preflightArtifact = inserts.find((i) => i.table === 'se_artifacts' && i.row.content?.startsWith('Duplicate/codebase preflight'));
+    const preflightArtifact = inserts.find((i) => i.table === 'se_artifacts' && i.row.kind === 'spec_preflight');
     expect(JSON.parse(preflightArtifact.row.content.split('\n')[1])).toMatchObject({ verdict: 'new_work' });
 
     expect(rs.ends.at(-1)).toMatchObject({ phase: 'spec', status: 'passed' });
@@ -258,9 +258,23 @@ describe('spec worker', () => {
     const result = await spec({ data: { runId: 'run-1' } }, { supabase });
 
     expect(result).toMatchObject({ blocked: 'authorization' });
-    expect(rs.blocks.at(-1)?.detail).toContain('preflight');
+    expect(rs.blocks.at(-1)?.detail).toContain('the agent did not write ./specs/issue-53-preflight.json');
     expect(inserts.find((i) => i.table === 'se_artifacts' && i.row.kind === 'spec')).toBeUndefined();
     expect(enqueue.calls).toEqual([]);
+  });
+
+  it('names the failed check when the preflight cites a file that is not in the workspace', async () => {
+    runAgentSession.mockImplementation(async (_sb: unknown, _ctx: unknown, _run: any, _project: any, _phase: string, opts: any) => {
+      await writePreflight(opts.cwd, { files: ['../outside.ts'] });
+      await writeFile(join(opts.cwd, 'specs/issue-53.md'), '# Spec\n' + 'Detail line.\n'.repeat(30), 'utf8');
+      return { text: 'Done!', tokensInput: 1, tokensOutput: 1 };
+    });
+
+    const { supabase } = mockSupabase();
+    const result = await spec({ data: { runId: 'run-1' } }, { supabase });
+
+    expect(result).toMatchObject({ blocked: 'authorization' });
+    expect(rs.blocks.at(-1)?.detail).toContain('Preflight references an unavailable file');
   });
 
   it('pauses on a duplicate verdict and names the canonical issue', async () => {
