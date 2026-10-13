@@ -7,7 +7,7 @@ const slackIntegrationModule: GatewazeModule = {
   visibility: 'public',
   name: 'Slack',
   description: 'Send notifications, manage channels, and automate workflows via Slack',
-  version: '1.1.5',
+  version: '1.2.0',
   features: [
     'slack',
     'slack.notifications',
@@ -19,6 +19,7 @@ const slackIntegrationModule: GatewazeModule = {
     'migrations/001_slack_tables.sql',
     'migrations/002_slack_invitation_rpcs.sql',
     'migrations/003_portal_self_service.sql',
+    'migrations/004_welcome_dm.sql',
   ],
 
   edgeFunctions: [
@@ -30,9 +31,11 @@ const slackIntegrationModule: GatewazeModule = {
 
   adminRoutes: [
     { path: 'slack/invitations', component: () => import('./admin/pages/invitations'), requiredFeature: 'slack', guard: 'none' },
+    { path: 'slack/welcome', component: () => import('./admin/pages/welcome'), requiredFeature: 'slack', guard: 'none' },
   ],
   adminNavItems: [
     { path: '/slack/invitations', label: 'Slack', icon: 'MessageSquare', requiredFeature: 'slack', order: 18 },
+    { path: '/slack/welcome', label: 'Slack welcome DM', icon: 'MessageSquare', requiredFeature: 'slack', order: 19 },
   ],
 
   // Portal: a public "Slack" page where a signed-in visitor requests their own
@@ -65,18 +68,69 @@ const slackIntegrationModule: GatewazeModule = {
     },
   ],
 
+  // Welcome-DM routes: Slack events + OAuth return under /internal/ (each
+  // self-authenticating), admin routes behind the super_admin gate.
+  apiRoutes: async (app: unknown, ctx?: unknown) => {
+    const { registerRoutes } = await import('./api/register-routes.js');
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any -- express/ctx shapes are host-provided
+    registerRoutes(app as any, ctx as any);
+  },
+
+  // Sends one welcome DM; queued with a delay by the events route. One at a
+  // time keeps well inside Slack's per-user posting limits.
+  workers: [
+    { name: 'slack:welcome-dm', handler: './workers/welcome-dm.ts', concurrency: 1 },
+  ],
+
   configSchema: {
     SLACK_BOT_TOKEN: {
       key: 'SLACK_BOT_TOKEN',
       type: 'secret',
+      encrypted: true,
       required: true,
       description: 'Slack Bot OAuth token (xoxb-...)',
     },
     SLACK_SIGNING_SECRET: {
       key: 'SLACK_SIGNING_SECRET',
       type: 'secret',
+      encrypted: true,
       required: true,
       description: 'Slack app signing secret for webhook verification',
+    },
+    // The Slack app's OAuth client, for connecting the welcome-DM sender's account.
+    SLACK_CLIENT_ID: {
+      key: 'SLACK_CLIENT_ID',
+      type: 'string',
+      required: false,
+      description: 'Slack app client ID (Basic Information → App Credentials)',
+    },
+    SLACK_CLIENT_SECRET: {
+      key: 'SLACK_CLIENT_SECRET',
+      type: 'secret',
+      encrypted: true,
+      required: false,
+      description: 'Slack app client secret',
+    },
+    // Welcome DM to new members, sent from the connected person's own account.
+    SLACK_WELCOME_ENABLED: {
+      key: 'SLACK_WELCOME_ENABLED',
+      type: 'boolean',
+      required: false,
+      default: 'false',
+      description: 'Send a welcome DM when someone joins the workspace',
+    },
+    SLACK_WELCOME_MESSAGE: {
+      key: 'SLACK_WELCOME_MESSAGE',
+      type: 'string',
+      required: false,
+      description: "Welcome message text. {first_name} and {name} are filled in from the new member's profile.",
+    },
+    SLACK_WELCOME_DELAY_MINUTES: {
+      key: 'SLACK_WELCOME_DELAY_MINUTES',
+      type: 'number',
+      required: false,
+      default: '5',
+      description: 'Minutes to wait after someone joins before the welcome is sent',
     },
     SLACK_DEFAULT_CHANNEL: {
       key: 'SLACK_DEFAULT_CHANNEL',
