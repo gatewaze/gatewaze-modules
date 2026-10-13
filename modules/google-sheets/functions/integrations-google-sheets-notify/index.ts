@@ -7,21 +7,39 @@
  *
  * Uses OAuth tokens stored per-event (not service account)
  *
- * Can be triggered by:
- * - Database triggers (automatic)
- * - Manual test from admin UI
- * - Historic send (all existing data)
+ * Who may call it (verify_jwt is off, so this function checks for itself):
+ * - A server-side push of a real registration or speaker submission must
+ *   present this project's service-role key as its bearer token.
+ * - A test send (isTest) or a historic send (isHistoric) from the admin must
+ *   present a signed-in user's token, and that user must be able to admin
+ *   the event. The service-role key cannot make these.
+ * Anything else is refused: no or invalid token 401, wrong caller 403.
+ *
+ * Cells are written with USER_ENTERED so timestamps and amounts stay dates
+ * and numbers in the sheet. Registrant names, talk titles and the like are
+ * untrusted, so any cell that a spreadsheet would read as a formula is
+ * prefixed with a single quote first (see defuseCell).
  */
 
 import "jsr:@supabase/functions-js/edge-runtime.d.ts";
 import { createClient } from "jsr:@supabase/supabase-js@2";
+import {
+  bearerToken,
+  corsFor,
+  isServiceRoleRequest,
+  jsonResponse,
+  requireEventAdmin,
+} from "../_shared/google-sheets-auth.ts";
 
 // Google Sheets API endpoint
 const SHEETS_API_BASE = "https://sheets.googleapis.com/v4/spreadsheets";
 
-// Google OAuth configuration for token refresh
-const GOOGLE_CLIENT_ID = Deno.env.get("GOOGLE_SHEETS_CLIENT_ID");
-const GOOGLE_CLIENT_SECRET = Deno.env.get("GOOGLE_SHEETS_CLIENT_SECRET");
+const NOTIFICATION_TYPES = ["registration", "speaker_submission"] as const;
+
+// The service-role client, untyped: there are no generated database types
+// here, and ReturnType<typeof createClient> resolves its schema to never.
+// deno-lint-ignore no-explicit-any
+type DB = any;
 
 interface NotifyPayload {
   eventId: string;
@@ -68,23 +86,48 @@ interface NotificationConfig {
 
 Deno.serve(async (req) => {
   try {
-    // CORS headers
     if (req.method === "OPTIONS") {
-      return new Response("ok", {
-        headers: {
-          "Access-Control-Allow-Origin": "*",
-          "Access-Control-Allow-Methods": "POST",
-          "Access-Control-Allow-Headers":
-            "authorization, x-client-info, apikey, content-type",
-        },
-      });
+      return new Response("ok", { headers: corsFor(req) });
+    }
+    if (req.method !== "POST") {
+      return jsonResponse(req, { error: "Method not allowed" }, 405);
     }
 
-    const payload: NotifyPayload = await req.json();
-    const { eventId, notificationType, data, isTest, isHistoric } = payload;
+    // Cheap refusal before the body is read.
+    if (!bearerToken(req)) {
+      return jsonResponse(req, { error: "Unauthorized" }, 401);
+    }
 
-    if (!eventId || !notificationType) {
-      return jsonResponse({ error: "Missing eventId or notificationType" }, 400);
+    let payload: NotifyPayload;
+    try {
+      payload = await req.json();
+    } catch {
+      return jsonResponse(req, { error: "Invalid JSON body" }, 400);
+    }
+    const { eventId, notificationType, data } = payload ?? ({} as NotifyPayload);
+    const isTest = payload?.isTest === true;
+    const isHistoric = payload?.isHistoric === true;
+
+    if (
+      typeof eventId !== "string" || eventId === "" || eventId.length > 64 ||
+      !(NOTIFICATION_TYPES as readonly string[]).includes(notificationType)
+    ) {
+      return jsonResponse(req, { error: "Missing or invalid eventId or notificationType" }, 400);
+    }
+
+    // Who is calling. The service role pushes real rows; an event admin runs
+    // test and historic sends. Neither may do the other's job.
+    const fromServer = await isServiceRoleRequest(req);
+    if (fromServer) {
+      if (isTest || isHistoric) {
+        return jsonResponse(req, { error: "Test and historic sends need an event admin" }, 403);
+      }
+    } else {
+      const auth = await requireEventAdmin(req, eventId);
+      if ("response" in auth) return auth.response;
+      if (!isTest && !isHistoric) {
+        return jsonResponse(req, { error: "Only the server can push live rows" }, 403);
+      }
     }
 
     // Create Supabase client
@@ -103,7 +146,7 @@ Deno.serve(async (req) => {
 
     if (configError) {
       console.error("Error fetching notification config:", configError);
-      return jsonResponse(
+      return jsonResponse(req,
         { error: "Failed to fetch notification configuration" },
         500
       );
@@ -113,7 +156,7 @@ Deno.serve(async (req) => {
       console.log(
         `No Google Sheets notification configured for event ${eventId}, type ${notificationType}`
       );
-      return jsonResponse(
+      return jsonResponse(req,
         { message: "No notification configured", skipped: true },
         200
       );
@@ -123,18 +166,18 @@ Deno.serve(async (req) => {
       console.log(
         `Google Sheets notification disabled for event ${eventId}, type ${notificationType}`
       );
-      return jsonResponse({ message: "Notification disabled", skipped: true }, 200);
+      return jsonResponse(req, { message: "Notification disabled", skipped: true }, 200);
     }
 
     if (!notificationConfig.spreadsheet_id) {
       console.error(`No spreadsheet ID configured for event ${eventId}`);
-      return jsonResponse({ error: "No spreadsheet configured" }, 400);
+      return jsonResponse(req, { error: "No spreadsheet configured" }, 400);
     }
 
     // Check if OAuth is configured
     if (!notificationConfig.google_refresh_token) {
       console.error(`No OAuth credentials for event ${eventId}`);
-      return jsonResponse(
+      return jsonResponse(req,
         { error: "Google account not connected. Please reconnect in settings." },
         400
       );
@@ -146,7 +189,7 @@ Deno.serve(async (req) => {
       notificationConfig
     );
     if (!accessToken) {
-      return jsonResponse(
+      return jsonResponse(req,
         {
           error:
             "Failed to get Google API access token. Please reconnect your Google account.",
@@ -164,12 +207,14 @@ Deno.serve(async (req) => {
         eventId,
         notificationType
       );
-      return jsonResponse(historicResult, historicResult.success ? 200 : 500);
+      return jsonResponse(req, historicResult, historicResult.success ? 200 : 500);
     }
 
-    // For speaker submissions, fetch details if only IDs provided
+    // For speaker submissions, fetch details if only IDs provided. Only for
+    // the server's pushes: a test send's IDs come from the browser and could
+    // name another event's talk.
     let enrichedData = data;
-    if (notificationType === "speaker_submission" && data?.talkId && !data?.talkTitle) {
+    if (fromServer && notificationType === "speaker_submission" && data?.talkId && !data?.talkTitle) {
       enrichedData = await fetchTalkAndSpeakerDetails(supabaseClient, data.talkId, data.speakerId);
     }
 
@@ -198,7 +243,7 @@ Deno.serve(async (req) => {
         triggerType: notificationType,
         rowData,
       });
-      return jsonResponse({ error: appendResult.error }, 400);
+      return jsonResponse(req, { error: appendResult.error }, 400);
     }
 
     // Log success
@@ -218,7 +263,7 @@ Deno.serve(async (req) => {
       `Successfully appended ${notificationType} to Google Sheet for event ${eventId}`
     );
 
-    return jsonResponse(
+    return jsonResponse(req,
       {
         success: true,
         message: "Data appended to Google Sheet",
@@ -227,11 +272,8 @@ Deno.serve(async (req) => {
       200
     );
   } catch (error) {
-    console.error("Unexpected error:", error);
-    return jsonResponse(
-      { error: "Internal server error", details: error.message },
-      500
-    );
+    console.error("Unexpected error:", error instanceof Error ? error.message : String(error));
+    return jsonResponse(req, { error: "Internal server error" }, 500);
   }
 });
 
@@ -239,21 +281,27 @@ Deno.serve(async (req) => {
 // Helper Functions
 // =============================================================================
 
-function jsonResponse(data: object, status: number): Response {
-  return new Response(JSON.stringify(data), {
-    status,
-    headers: {
-      "Content-Type": "application/json",
-      "Access-Control-Allow-Origin": "*",
-    },
-  });
+/**
+ * Makes a cell safe for USER_ENTERED: a value a spreadsheet would read as a
+ * formula (leading =, +, -, @, tab or carriage return) gets a leading single
+ * quote, which Sheets treats as "this is text" and does not display. A plain
+ * number such as -5 is left alone so it stays a number.
+ */
+export function defuseCell(value: string): string {
+  // A plain number, negative included, is safe and should stay a number.
+  if (/^-?\d+(\.\d+)?$/.test(value)) return value;
+  return /^[=+\-@\t\r]/.test(value) ? `'${value}` : value;
+}
+
+function defuseRows(rows: string[][]): string[][] {
+  return rows.map((row) => row.map((cell) => defuseCell(String(cell ?? ""))));
 }
 
 /**
  * Get a valid access token, refreshing if necessary
  */
 async function getValidAccessToken(
-  supabase: ReturnType<typeof createClient>,
+  supabase: DB,
   config: NotificationConfig
 ): Promise<string | null> {
   // Check if current token is still valid
@@ -272,7 +320,9 @@ async function getValidAccessToken(
     return null;
   }
 
-  if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
+  const clientId = Deno.env.get("GOOGLE_SHEETS_CLIENT_ID") ?? "";
+  const clientSecret = Deno.env.get("GOOGLE_SHEETS_CLIENT_SECRET") ?? "";
+  if (!clientId || !clientSecret) {
     console.error("Google OAuth client credentials not configured");
     return null;
   }
@@ -282,8 +332,8 @@ async function getValidAccessToken(
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams({
-        client_id: GOOGLE_CLIENT_ID,
-        client_secret: GOOGLE_CLIENT_SECRET,
+        client_id: clientId,
+        client_secret: clientSecret,
         refresh_token: config.google_refresh_token,
         grant_type: "refresh_token",
       }),
@@ -296,9 +346,11 @@ async function getValidAccessToken(
     }
 
     const tokens = await tokenResponse.json();
-    const { access_token, expires_in } = tokens;
+    const access_token = tokens?.access_token;
+    const expires_in =
+      typeof tokens?.expires_in === "number" && Number.isFinite(tokens.expires_in) ? tokens.expires_in : 3600;
 
-    if (!access_token) {
+    if (typeof access_token !== "string" || access_token === "") {
       console.error("No access token in refresh response");
       return null;
     }
@@ -317,7 +369,8 @@ async function getValidAccessToken(
       .eq("id", config.id);
 
     if (updateError) {
-      console.error("Failed to update tokens:", updateError);
+      // Code and message only: details can echo the row, tokens included.
+      console.error("Failed to update tokens:", `${updateError.code ?? "unknown"}: ${updateError.message ?? ""}`);
       // Still return the token even if we couldn't save it
     }
 
@@ -332,7 +385,7 @@ async function getValidAccessToken(
  * Fetch talk and speaker details when only IDs are provided (from trigger)
  */
 async function fetchTalkAndSpeakerDetails(
-  supabase: ReturnType<typeof createClient>,
+  supabase: DB,
   talkId: string,
   speakerId?: string
 ): Promise<NotifyPayload["data"]> {
@@ -471,7 +524,7 @@ async function appendToSheet(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        values: [values],
+        values: defuseRows([values]),
       }),
     });
 
@@ -494,7 +547,7 @@ async function appendToSheet(
     console.error("Error appending to sheet:", error);
     return {
       success: false,
-      error: error.message,
+      error: error instanceof Error ? error.message : String(error),
     };
   }
 }
@@ -503,7 +556,7 @@ async function appendToSheet(
  * Log notification result
  */
 async function logNotification(
-  supabase: ReturnType<typeof createClient>,
+  supabase: DB,
   params: {
     eventId: string;
     notificationType: string;
@@ -540,7 +593,7 @@ async function logNotification(
 // =============================================================================
 
 async function sendHistoricData(
-  supabase: ReturnType<typeof createClient>,
+  supabase: DB,
   accessToken: string,
   config: { spreadsheet_id: string; sheet_name: string },
   eventId: string,
@@ -738,7 +791,7 @@ async function batchAppendToSheet(
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        values: rows,
+        values: defuseRows(rows),
       }),
     });
 
@@ -757,7 +810,7 @@ async function batchAppendToSheet(
     console.error("Error batch appending to sheet:", error);
     return {
       success: false,
-      error: error.message,
+      error: error instanceof Error ? error.message : String(error),
     };
   }
 }
