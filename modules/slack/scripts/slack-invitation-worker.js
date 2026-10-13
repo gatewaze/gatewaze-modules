@@ -104,6 +104,21 @@ export async function processQueue() {
     return;
   }
 
+  // The platform worker calls this on a timer. Look at the queue before
+  // launching anything: starting Chromium on every tick with nothing to do
+  // left zombie processes behind (Node as PID 1 does not reap them) until
+  // the container hit its PID limit and every later launch failed with
+  // "Cannot fork".
+  const { data: next, error: peekError } = await getSupabase()
+    .rpc('integrations_get_pending_slack_invitations', { limit_count: 1 });
+  if (peekError) {
+    console.error('❌ Could not check the Slack invitation queue:', peekError.message || peekError);
+    return;
+  }
+  if (!next || next.length === 0) return;
+  // Re-check: another call may have started while the query was in flight.
+  if (isProcessingQueue) return;
+
   isProcessingQueue = true;
   console.log('🚀 Starting Slack invitation queue processor...');
 
