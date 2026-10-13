@@ -84,3 +84,41 @@ describe('the talk renderer sub-line', () => {
     expect(html).not.toContain('[object Object]');
   });
 });
+
+describe('the photo strip sits the same distance below its heading as body copy', () => {
+  // Body copy gets 2px of margin plus the half-leading of a 14px/1.5
+  // line. A row of images has no leading, so without an explicit margin
+  // the strip sat flush under "Photos from this session" while the two
+  // text blocks above it breathed (reported 2026-10-13).
+  const withPhotos = (): string => renderTalkCardHtml(
+    {
+      id: 'b1',
+      kind: 'talk',
+      slug: 'a-talk',
+      sort_order: 0,
+      data: {
+        title: 'A Talk',
+        speaker: { name: 'A Speaker' },
+        photos: [{ src: 'https://cdn.test/a.jpg', thumb: 'https://cdn.test/a-t.jpg', alt: 'a' }],
+      },
+    } as never,
+    0,
+    { pagePath: '/resources/x' } as never,
+  );
+
+  it('gives the strip an explicit top margin', () => {
+    const strip = /<div id="gw-ts-b1" style="([^"]*)"/.exec(withPhotos());
+    expect(strip, 'photo strip not rendered').toBeTruthy();
+    expect(strip![1]).toContain('margin-top:6px');
+  });
+
+  it('leaves the label flush, so the gap is set in one place', () => {
+    const label = /<p style="([^"]*)">Photos from this session<\/p>/.exec(withPhotos());
+    expect(label, 'photo label not rendered').toBeTruthy();
+    expect(label![1]).toContain('margin:0;');
+  });
+
+  it('renders no strip at all when the talk has no photos', () => {
+    expect(render({ name: 'A Speaker' })).not.toContain('Photos from this session');
+  });
+});
