@@ -96,6 +96,9 @@ function substituteMergeFields(text: string, attrs: Record<string, unknown>, esc
 // it does not authenticate: anyone can encode any address. Keep in step with
 // the portal's decodeEmail.
 function encodeEmail(email: string): string {
+  // The legacy encoding is byte-wise; a non-ASCII address has no stable
+  // form in it. Leave the link without an address and the offer page asks.
+  if (/[^\x20-\x7e]/.test(email)) return ''
   const lower = email.toLowerCase()
   const pass = 'HideMe'
   let bin = ''
