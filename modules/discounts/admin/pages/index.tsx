@@ -25,6 +25,9 @@ type TabType = 'current' | 'past';
 
 // Extended discount type with joined event data
 interface DiscountWithEvent extends EventDiscount {
+  // A shared-code offer (migration 003): not tied to one event, edited on
+  // /discounts/offers/:id rather than the event-based detail pages.
+  isSharedOffer: boolean;
   eventTitle: string | null;
   eventCity: string | null;
   eventCountryCode: string | null;
@@ -157,6 +160,7 @@ export default function DiscountsPage() {
         sortOrder: row.sort_order ?? 0,
         createdAt: row.created_at,
         updatedAt: row.updated_at,
+        isSharedOffer: !row.event_id && Array.isArray(row.registration_links) && row.registration_links.length > 0,
         // Joined event data (may be null for standalone discounts)
         eventTitle: row.events?.event_title || null,
         eventCity: row.events?.event_city || null,
@@ -274,6 +278,10 @@ export default function DiscountsPage() {
   };
 
   const handleClaimantsClick = (discount: DiscountWithEvent) => {
+    if (discount.isSharedOffer) {
+      navigate(`/discounts/offers/${discount.id}`);
+      return;
+    }
     navigate(`/discounts/${discount.id}/claimants`);
   };
 
@@ -288,6 +296,10 @@ export default function DiscountsPage() {
   };
 
   const handleViewDetails = (discount: DiscountWithEvent) => {
+    if (discount.isSharedOffer) {
+      navigate(`/discounts/offers/${discount.id}`);
+      return;
+    }
     navigate(`/discounts/${discount.id}/detail`);
   };
 
@@ -645,6 +657,9 @@ export default function DiscountsPage() {
                 Last updated: {lastUpdated.toLocaleTimeString()}
               </span>
             )}
+            <Button onClick={() => navigate('/discounts/offers/new')}>
+              New shared offer
+            </Button>
             <Button
               onClick={() => {
                 loadDiscounts();
