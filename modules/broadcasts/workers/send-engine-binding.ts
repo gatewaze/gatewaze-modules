@@ -66,6 +66,19 @@ function unquote(fb: string): string {
   const t = fb.trim();
   return (t.length >= 2 && ((t[0] === '"' && t.endsWith('"')) || (t[0] === "'" && t.endsWith("'")))) ? t.slice(1, -1) : t;
 }
+// {{email_encoded}}: the recipient's address in the legacy tech.tickets
+// encoding (XOR with "HideMe", then URL-safe base64). The portal decodes it
+// from ?utm_medium= / ?e= (packages/portal/lib/emailEncoding.ts) to know who
+// clicked, e.g. /offers/<slug>?utm_medium={{email_encoded}}. It identifies,
+// it does not authenticate: anyone can encode any address. Keep in step with
+// the portal's decodeEmail.
+function encodeEmail(email: string): string {
+  const lower = email.toLowerCase();
+  const pass = 'HideMe';
+  let bin = '';
+  for (let i = 0; i < lower.length; i++) bin += String.fromCharCode(lower.charCodeAt(i) ^ pass.charCodeAt(i % pass.length));
+  return Buffer.from(bin, 'latin1').toString('base64').replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
 function scanTokens(html: string, subject: string): string[] {
   const set = new Set<string>();
   const re = /\{\{[^}]+\}\}/g;
@@ -267,6 +280,7 @@ export const broadcastBinding: SendEngineBinding = {
       const inner = token.slice(2, -2).trim();              // strip {{ }}
       if (inner === 'unsubscribe_url') { subs[token] = unsubUrl; continue; }
       if (inner === 'manage_subscriptions_url') { subs[token] = manageUrl; continue; }
+      if (inner === 'email_encoded') { subs[token] = r.email ? encodeEmail(r.email) : ''; continue; }
       if (weather && WEATHER_TOKENS.includes(inner)) { subs[token] = weather[inner] ?? ''; continue; }
       // Event blocks: substitute the self-contained rendered HTML (raw, not
       // escaped) or '' — '' omits the block entirely for this recipient. Always
