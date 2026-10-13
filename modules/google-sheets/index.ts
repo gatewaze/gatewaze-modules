@@ -7,7 +7,7 @@ const googleSheetsModule: GatewazeModule = {
   visibility: 'public',
   name: 'Google Sheets Integration',
   description: 'Sync registration and speaker data to Google Sheets with OAuth and real-time notifications',
-  version: '1.0.1',
+  version: '1.0.2',
   features: [
     'google-sheets.sync',
     'google-sheets.oauth',
@@ -23,6 +23,7 @@ const googleSheetsModule: GatewazeModule = {
 
   migrations: [
     'migrations/001_google_sheets_tables.sql',
+    'migrations/002_event_admin_rls_and_token_privileges.sql',
   ],
 
   configSchema: {

@@ -11,9 +11,15 @@
   },
   "scripts": {
     "build": "tsc",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
   },
   "peerDependencies": {
     "@gatewaze/shared": "*"
+  },
+  "devDependencies": {
+    "vitest": "^4.0.0",
+    "typescript": "^5.9.3",
+    "@types/node": "^22.0.0"
   }
 }
