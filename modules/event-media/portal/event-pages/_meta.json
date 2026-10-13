@@ -3,6 +3,7 @@
     "label": "Photos",
     "icon": "photo",
     "order": 50,
-    "subNav": "/api/public/event-media/events/{identifier}/gallery?limit=1"
+    "subNav": "/api/public/event-media/events/{identifier}/gallery?limit=1",
+    "requiresContent": "/api/public/event-media/events/{identifier}/gallery?limit=1"
   }
 }
