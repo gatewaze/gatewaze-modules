@@ -8,12 +8,15 @@ import EmailService from '../../../bulk-emailing/admin/utils/emailService';
 import EmailTemplateService from '../../../bulk-emailing/admin/utils/emailTemplateService';
 import { replaceVariables, buildContext, type TemplateContext } from '@/utils/templateVariables';
 import type { EventSpeakerWithDetails } from './speakerService';
+import { publicSupabaseUrl } from './publicSupabaseUrl';
 
 // Get the base URL for the app (for confirmation links)
 const getAppBaseUrl = (): string => {
   // In production, this would be the deployed URL
-  // For now, use the Supabase project URL for the edge function
-  return import.meta.env.VITE_SUPABASE_URL || 'https://api.example.com';
+  // For now, use the Supabase project URL for the edge function. The link
+  // goes out in emails, so it is the real Supabase URL, not the admin origin
+  // that VITE_SUPABASE_URL is in host-session mode.
+  return publicSupabaseUrl() || 'https://api.example.com';
 };
 
 // Get the portal base URL (for speaker edit links)

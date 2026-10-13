@@ -330,7 +330,6 @@ export function CreatePartyModal({ isOpen, onClose, eventUuid, mode: initialMode
     if (existing) return existing.id;
 
     // Create auth user via people-signup edge function (creates both auth user + people record)
-    const apiUrl = import.meta.env.VITE_API_URL || import.meta.env.VITE_SUPABASE_URL || '';
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
     const anonKey = import.meta.env.VITE_SUPABASE_ANON_KEY || '';
 
