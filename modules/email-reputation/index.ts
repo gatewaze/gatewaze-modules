@@ -20,11 +20,13 @@ const emailReputationModule: GatewazeModule = {
   name: 'Email Reputation',
   description:
     'Open rates by mailbox provider for every send, with an alert when one provider (usually Gmail) falls far below the rest.',
-  version: '0.1.0',
+  version: '0.1.1',
   features: ['email-reputation'],
 
   migrations: [
     'migrations/001_email_reputation.sql',
+    // Scan the 3 most recent sends for unresolved domains, not 20 (timed out on AAIF).
+    'migrations/002_unresolved_domains_recent_three.sql',
   ],
 
   workers: [
