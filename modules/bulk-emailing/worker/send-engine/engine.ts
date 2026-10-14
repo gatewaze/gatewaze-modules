@@ -15,7 +15,7 @@
  * Wired in by each domain's dispatch cron (newsletters/broadcasts/bulk-emailing
  * workers) — always active.
  */
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { resolveChannelProvider } from './channels/registry.js';
 import type { MessageAttachment } from './channels/types.js';
 
@@ -116,9 +116,22 @@ export async function runDripTick(deps: EngineDeps, binding: SendEngineBinding):
   while (Date.now() - start < config.budgetMs) {
     const { data: claimed, error } = await supabase.rpc(binding.claimRpc, { p_limit: config.claimBatch });
     if (error) { logger.error('[send-engine] claim failed', error); break; }
-    const rows: Recipient[] = claimed ?? [];
-    if (rows.length === 0) break;
-    claimedTotal += rows.length;
+    const claimedRows: Recipient[] = claimed ?? [];
+    if (claimedRows.length === 0) break;
+    claimedTotal += claimedRows.length;
+
+    // Erased or objecting addresses (compliance module) never get marketing.
+    const gate = await splitSuppressed(deps, claimedRows);
+    if (gate.error) {
+      logger.error('[send-engine] suppression check failed; holding the batch', gate.error);
+      await releaseRows(deps, binding, claimedRows.map((r) => r.id));
+      break;
+    }
+    if (gate.suppressed.length) {
+      await markRows(deps, binding, gate.suppressed.map((r) => r.id), 'skipped');
+      for (const r of gate.suppressed) touched.add(r.send_id);
+    }
+    const rows = gate.allowed;
 
     const bySend = new Map<string, Recipient[]>();
     for (const r of rows) { (bySend.get(r.send_id) ?? bySend.set(r.send_id, []).get(r.send_id)!).push(r); }
@@ -337,6 +350,38 @@ async function updateRowsByIds(deps: EngineDeps, table: string, ids: string[], p
     const { error } = await deps.supabase.from(table).update(patch).in('id', chunk);
     if (error) deps.logger.error('[send-engine] row update failed', { table, count: chunk.length, error: (error as { message?: string }).message ?? error });
   }
+}
+
+/** sha256 of the lowercased, trimmed address; matches compliance_email_sha256(). */
+export function suppressionHash(email: string): string {
+  return createHash('sha256').update(email.trim().toLowerCase(), 'utf8').digest('hex');
+}
+
+/**
+ * Split claimed rows into suppressed and allowed using the compliance
+ * module's suppression table. Without the compliance module there is no
+ * table and nothing is suppressed. Any other lookup failure is returned as
+ * an error so the caller holds the batch rather than risk mailing an erased
+ * address.
+ */
+export async function splitSuppressed(deps: EngineDeps, rows: Recipient[]): Promise<{ allowed: Recipient[]; suppressed: Recipient[]; error?: unknown }> {
+  const withHash = rows.map((r) => ({ r, h: r.email ? suppressionHash(r.email) : null }));
+  const hashes = [...new Set(withHash.map((x) => x.h).filter((h): h is string => !!h))];
+  if (hashes.length === 0) return { allowed: rows, suppressed: [] };
+  const hit = new Set<string>();
+  for (let i = 0; i < hashes.length; i += 100) {
+    const { data, error } = await deps.supabase.from('compliance_suppressions').select('email_sha256').in('email_sha256', hashes.slice(i, i + 100));
+    if (error) {
+      const missing = error.code === '42P01' || error.code === 'PGRST205' || /does not exist|schema cache/i.test(error.message ?? '');
+      if (missing) return { allowed: rows, suppressed: [] };
+      return { allowed: [], suppressed: [], error };
+    }
+    for (const d of (data ?? []) as Array<{ email_sha256: string }>) hit.add(d.email_sha256);
+  }
+  const allowed: Recipient[] = [];
+  const suppressed: Recipient[] = [];
+  for (const { r, h } of withHash) (h && hit.has(h) ? suppressed : allowed).push(r);
+  return { allowed, suppressed };
 }
 
 async function releaseRows(deps: EngineDeps, binding: SendEngineBinding, ids: string[]): Promise<void> {

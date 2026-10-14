@@ -7,7 +7,7 @@ const bulkEmailingModule: GatewazeModule = {
   visibility: 'public',
   name: 'Bulk Emailing',
   description: 'Send ad-hoc bulk emails to segments and contact lists with template support and delivery tracking',
-  version: '1.0.2',
+  version: '1.1.0',
   features: [
     'bulk-emailing',
     'bulk-emailing.send',
