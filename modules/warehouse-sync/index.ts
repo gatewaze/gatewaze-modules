@@ -39,7 +39,7 @@ const warehouseSyncModule: GatewazeModule = {
   name: 'Warehouse Sync',
   description:
     'Replicates a curated, governed subset of the Gatewaze Supabase Postgres into a data warehouse (Snowflake, BigQuery, Redshift, …) via Airbyte, with replication-slot safety monitoring, PII masking, delete/erasure propagation, and reconciliation tests. Snowflake is the first destination.',
-  version: '0.2.3',
+  version: '0.2.4',
 
   features: [
     'warehouse-sync',
@@ -60,6 +60,7 @@ const warehouseSyncModule: GatewazeModule = {
     'migrations/005_airbyte_status.sql',
     'migrations/006_table_sync_config.sql',
     'migrations/007_pii_and_selection.sql',
+    'migrations/008_slot_health_wal_status.sql',
   ],
 
   // File stems MUST equal the job-name suffix — the platform worker derives the
