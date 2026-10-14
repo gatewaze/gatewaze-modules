@@ -16,6 +16,7 @@
 
 import { createClient } from '@supabase/supabase-js';
 import { airbyteClientFromConfig } from '../lib/airbyte-client.js';
+import { loadModuleConfig } from '../lib/module-config.js';
 
 if (typeof (globalThis as Record<string, unknown>).WebSocket === 'undefined') {
   (globalThis as Record<string, unknown>).WebSocket = class {
@@ -25,12 +26,16 @@ if (typeof (globalThis as Record<string, unknown>).WebSocket === 'undefined') {
 
 export default async function handler(job, ctx) {
   const logger = ctx?.logger ?? console;
-  const cfg = (ctx?.moduleConfig ?? {}) as Record<string, unknown>;
   const supabase =
     ctx?.supabase ??
     createClient(process.env.SUPABASE_URL ?? '', process.env.SUPABASE_SERVICE_ROLE_KEY ?? '', {
       auth: { autoRefreshToken: false, persistSession: false },
     });
+
+  // The worker host does not populate ctx.moduleConfig, so read the persisted
+  // row. Without this this worker skipped on every tick, reporting Airbyte as
+  // unconfigured while airbyteApiUrl/airbyteWorkspaceId were in fact set.
+  const cfg = await loadModuleConfig(supabase, ctx);
 
   const airbyte = airbyteClientFromConfig(cfg);
   if (!airbyte) {
