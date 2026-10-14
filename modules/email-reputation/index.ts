@@ -20,7 +20,7 @@ const emailReputationModule: GatewazeModule = {
   name: 'Email Reputation',
   description:
     'Open rates by mailbox provider for every send, with an alert when one provider (usually Gmail) falls far below the rest.',
-  version: '0.1.2',
+  version: '0.1.3',
   features: ['email-reputation'],
 
   migrations: [
