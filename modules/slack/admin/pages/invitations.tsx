@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router';
 import {
   ArrowPathIcon,
@@ -33,6 +33,7 @@ import {
 import { Spinner } from '@/components/ui/Spinner';
 import { Page } from '@/components/shared/Page';
 import { DataTable } from '@/components/shared/table/DataTable';
+import { PersonLink } from '@/components/people/PersonLink';
 
 const PAGE_SIZE = 50;
 
@@ -96,6 +97,11 @@ export default function SlackInvitationsPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [sorting, setSorting] = useState<SortingState>([{ id: 'updated_at', desc: true }]);
   const [globalFilter, setGlobalFilter] = useState('');
+  // email (lower-case) → person id, for linking each row to its person.
+  const [personIds, setPersonIds] = useState<Record<string, string>>({});
+  // Emails already looked up, found or not, so the 30s refresh only asks
+  // about new ones.
+  const checkedEmails = useRef<Set<string>>(new Set());
 
   const apiConfig = getApiConfig();
   const apiUrl = apiConfig.baseUrl;
@@ -120,6 +126,26 @@ export default function SlackInvitationsPage() {
 
       if (invitationsError) throw invitationsError;
       setInvitations(invitationsData || []);
+
+      // Find the person for each invited email, so the email can link to them.
+      const unchecked = Array.from(new Set(
+        (invitationsData || []).map((i: SlackInvitation) => i.email?.trim().toLowerCase()).filter(Boolean),
+      )).filter((e) => !checkedEmails.current.has(e));
+      const found: Record<string, string> = {};
+      for (let i = 0; i < unchecked.length; i += 50) {
+        const batch = unchecked.slice(i, i + 50);
+        const { data: people, error: peopleError } = await supabase
+          .from('people')
+          .select('id, email')
+          .in('email', batch);
+        if (peopleError) {
+          console.error('Error looking up people for invitations:', peopleError);
+          break;
+        }
+        for (const p of people || []) found[String(p.email).toLowerCase()] = p.id;
+        batch.forEach((e) => checkedEmails.current.add(e));
+      }
+      if (Object.keys(found).length) setPersonIds((prev) => ({ ...prev, ...found }));
 
       // Fetch stats from API
       const statsResponse = await fetch(`${apiUrl}/api/slack/queue-stats`);
@@ -161,7 +187,11 @@ export default function SlackInvitationsPage() {
       cell: (info) => (
         <div className="flex items-center gap-2">
           <EnvelopeIcon className="w-4 h-4 text-[var(--gray-a8)]" />
-          <span className="font-medium">{info.getValue()}</span>
+          <PersonLink
+            className="font-medium"
+            label={info.getValue()}
+            personId={personIds[info.getValue()?.trim().toLowerCase()]}
+          />
         </div>
       ),
     }),
