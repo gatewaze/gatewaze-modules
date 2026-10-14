@@ -14,8 +14,8 @@ export interface ReconcileTarget {
 }
 
 export const RECONCILE_TARGETS: ReconcileTarget[] = [
-  { schema: 'public', table: 'people', deletedCol: 'deleted_at', updatedCol: 'updated_at' },
-  { schema: 'public', table: 'person_emails', deletedCol: 'deleted_at', updatedCol: 'updated_at' },
+  { schema: 'public', table: 'people', deletedCol: null, updatedCol: 'updated_at' },
+  { schema: 'public', table: 'person_emails', deletedCol: null, updatedCol: 'updated_at' },
   { schema: 'public', table: 'people_events', deletedCol: null, updatedCol: 'created_at' },
   { schema: 'public', table: 'events', deletedCol: 'deleted_at', updatedCol: 'updated_at' },
   { schema: 'public', table: 'event_registrations', deletedCol: 'deleted_at', updatedCol: 'updated_at' },

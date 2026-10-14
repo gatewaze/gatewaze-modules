@@ -37,6 +37,57 @@ Mutable tables carry `created_at` / `updated_at` with a `set_updated_at` trigger
 
 This module has no per-deployment config (`configSchema` is empty).
 
+## Erasure (GDPR Art. 17)
+
+A privacy request of type `data_deletion` can be carried out from the Privacy Requests tab, the public API or MCP. It always runs in two steps.
+
+1. Preview. The engine finds every identifier for the person: the request addresses, other addresses recorded on the same person (`attributes.other_emails`, `person_emails`, `people_merge_audit`), profiles, registrations, sign-in accounts, Customer.io ids, phone numbers and Slack ids. It then counts the rows it would touch in each table. Nothing changes.
+2. Erase. Needs a preview less than 24 hours old with no blockers, and the caller types one of the request addresses to confirm. Everything runs in one transaction, which either completes or rolls back. Afterwards the worker deletes the sign-in accounts, calls Customer.io and SendGrid, refreshes materialized views, and builds a checklist of manual steps (Luma, Gradual, Slack, Segment, Stripe). When every step is done, the request is completed and its addresses are replaced with sha256 hashes.
+
+### Where personal data lives
+
+`compliance_personal_data_registry` lists every table that holds personal data, how to match a person's rows, and whether erasure deletes them or anonymises them (keeps the row, clears the identifiers). Migration 003 registers core and the open source modules. A module in another repository registers its own tables from one of its migrations:
+
+```sql
+DO $$
+BEGIN
+  IF to_regprocedure('public.compliance_register_personal_data(jsonb)') IS NOT NULL THEN
+    PERFORM public.compliance_register_personal_data('{"table":"podcast_guests","owner":"podcasts","action":"delete","person":["person_id"],"email":["email"]}');
+  END IF;
+END $$;
+```
+
+Keys: `table`, `entry`, `owner`, `action` (`delete` / `anonymise` / `ignore`), `person`, `profile`, `registration`, `auth`, `cio`, `email`, `email_array`, `phone`, `json_email`, `parent`, `clear`, `replace`, `covers`, `retain`, `note`, `order`. See the header of migration 003 for how to choose an action.
+
+The engine fails closed. The preview stops the erasure if the person has rows in a table that links to `people`, `people_profiles` or `events_registrations` without a registry entry, or in an unregistered column that looks like an email address. `compliance_erasure_coverage()` lists every personal-looking column no entry covers; the admin API exposes it at `GET /api/modules/compliance/coverage`.
+
+### Suppression
+
+Every erased address is stored in `compliance_suppressions` as `sha256(lower(trim(email)))`, with no other data. The send engine skips suppressed recipients for every channel, and a trigger on `list_subscriptions`, `email_subscriptions` and `calendars_members` stops anything re-subscribing a suppressed address. The hash format matches warehouse-sync's `email_sha256`.
+
+### Public API and MCP
+
+Routes under `/api/v1/privacy`:
+
+| Route | Scope |
+|---|---|
+| `POST /requests` | `compliance:write` |
+| `GET /requests?email=`, `GET /requests/:id`, `GET /requests/:id/report` | `compliance:read` |
+| `POST /requests/:id/preview` | `compliance:write` |
+| `POST /requests/:id/execute` | `compliance:erase` |
+
+Callers outside the admin see table names and row counts, never rows, and only counts of the identifiers the preview discovered. Keep `compliance:erase` separate from the other two so a key that can file requests can't delete data.
+
+The preview and the erasure run in the `compliance:erasure` worker over a direct Postgres connection (`SUPABASE_DB_URL`, `DATABASE_URL` or `POSTGRES_URL`), because they scan tables too large for PostgREST's statement timeout. The `compliance-erasure-sweep` cron runs every minute and picks up anything queued, so requests filed through the public API work even where that API has no job queue.
+
+### Testing
+
+`__tests__/sql/erasure.test.sql` seeds a person, previews, erases and checks the result inside a transaction that is rolled back:
+
+```
+psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f modules/compliance/__tests__/sql/erasure.test.sql
+```
+
 ## Features
 
 - `compliance` — Core compliance dashboard and the `compliance_*` schema.

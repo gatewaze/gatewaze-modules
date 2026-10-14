@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo, useCallback } from 'react';
 import {
   ShieldCheckIcon,
   ClockIcon,
@@ -10,30 +10,52 @@ import {
   EyeIcon,
   TrashIcon,
   DocumentArrowDownIcon,
-  UserIcon,
+  ExclamationTriangleIcon,
 } from '@heroicons/react/24/outline';
 import { supabase } from '@/lib/supabase';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { Card, Input, Button, Table, THead, TBody, Tr, Th, Td } from '@/components/ui';
 import { RowActions } from '@/components/shared/table/RowActions';
 
+type RequestType = 'data_export' | 'data_deletion' | 'data_correction' | 'data_portability' | 'consent_withdrawal' | 'processing_restriction';
+type Status = 'pending' | 'in_progress' | 'completed' | 'rejected';
+
+interface PlanTable { table: string; entry: string; owner: string; action: 'delete' | 'anonymise'; rows: number; retain?: { reason: string; basis: string; period: string } | null; note?: string | null }
+interface PlanIssue { kind: string; table?: string; column?: string; entry?: string; rows?: number; detail: string }
+interface Plan { built_at: string; summary: { emails: number; people: number; auth_users: number; tables: number; rows: number }; tables: PlanTable[]; blockers: PlanIssue[]; warnings: PlanIssue[] }
+interface Processor { id: string; name: string; status: 'erased' | 'not_found' | 'manual' | 'failed' | 'skipped'; detail?: string; at: string }
+interface ChecklistItem { id: string; title: string; detail?: string; done: boolean; done_by?: string | null; done_at?: string | null }
+
 interface PrivacyRequest {
   id: string;
-  subject_person_id: number | null;
   subject_email: string;
-  request_type: 'data_export' | 'data_deletion' | 'data_correction' | 'data_portability' | 'consent_withdrawal' | 'processing_restriction';
-  status: 'pending' | 'in_progress' | 'completed' | 'rejected';
+  subject_emails: string[] | null;
+  request_type: RequestType;
+  status: Status;
   requested_at: string;
-  processing_completed_at?: string;
+  due_at: string | null;
+  source: string | null;
+  notes: string | null;
   requester_email: string;
-  notes?: string;
-  processed_by?: string;
-  error_message?: string;
-  result_summary?: Record<string, any>;
+  submitted_via: 'admin' | 'api' | 'mcp' | null;
+  submitted_by: string | null;
+  identifiers: { emails?: string[] | number; person_ids?: string[]; auth_user_ids?: string[] } | null;
+  plan: Plan | null;
+  plan_status: 'none' | 'queued' | 'running' | 'ready' | 'failed';
+  plan_error: string | null;
+  plan_built_at: string | null;
+  execute_status: 'none' | 'queued' | 'running' | 'erased' | 'failed';
+  executed_at: string | null;
+  executed_by: string | null;
+  error_message: string | null;
+  processors: Processor[];
+  checklist: ChecklistItem[];
+  processing_completed_at: string | null;
+  redacted_at: string | null;
 }
 
-type StatusFilter = 'all' | 'pending' | 'in_progress' | 'completed' | 'rejected';
-type RequestTypeFilter = 'all' | 'data_export' | 'data_deletion' | 'data_correction' | 'data_portability' | 'consent_withdrawal' | 'processing_restriction';
+type StatusFilter = 'all' | Status;
+type RequestTypeFilter = 'all' | RequestType;
 
 const REQUEST_TYPE_LABELS: Record<string, string> = {
   data_export: 'Data Export (DSAR)',
@@ -44,12 +66,70 @@ const REQUEST_TYPE_LABELS: Record<string, string> = {
   processing_restriction: 'Processing Restriction',
 };
 
-const STATUS_LABELS: Record<string, string> = {
+const STATUS_LABELS: Record<Status, string> = {
   pending: 'Pending',
   in_progress: 'In Progress',
   completed: 'Completed',
   rejected: 'Rejected',
 };
+
+const SELECT_CLASS = 'px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-white';
+
+/**
+ * Calls the compliance module's admin API. Those routes check the session and
+ * admin role themselves, so attach the Supabase access token and target the
+ * API host, as other module admin pages do.
+ */
+async function apiFetch(path: string, init?: RequestInit): Promise<any> {
+  const base = (import.meta as any).env?.VITE_API_URL ?? '';
+  const { data } = await supabase.auth.getSession();
+  const headers = new Headers(init?.headers);
+  headers.set('Content-Type', 'application/json');
+  if (data.session?.access_token) headers.set('Authorization', `Bearer ${data.session.access_token}`);
+  const res = await fetch(`${base}/api/modules/compliance${path}`, { ...init, headers });
+  if (path.endsWith('.md')) {
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.text();
+  }
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body?.error?.message ?? `HTTP ${res.status}`);
+  return body.data;
+}
+
+const emailsOf = (r: PrivacyRequest) => (r.redacted_at ? [] : r.subject_emails ?? [r.subject_email]);
+const isBusy = (r: PrivacyRequest) => ['queued', 'running'].includes(r.plan_status) || ['queued', 'running'].includes(r.execute_status);
+
+function daysLeft(due: string | null): number | null {
+  if (!due) return null;
+  return Math.ceil((new Date(due).getTime() - Date.now()) / 86_400_000);
+}
+
+function formatDate(v?: string | null) {
+  return v ? new Date(v).toLocaleString() : '-';
+}
+
+function StatusBadge({ status }: { status: Status }) {
+  const styles: Record<Status, string> = {
+    pending: 'bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-200',
+    in_progress: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-200',
+    completed: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-200',
+    rejected: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-200',
+  };
+  const Icon = status === 'completed' ? CheckCircleIcon : status === 'rejected' ? XCircleIcon : status === 'in_progress' ? ArrowPathIcon : ClockIcon;
+  return (
+    <span className={`inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-full ${styles[status]}`}>
+      <Icon className="size-3" />
+      {STATUS_LABELS[status]}
+    </span>
+  );
+}
+
+function DueBadge({ r }: { r: PrivacyRequest }) {
+  const d = daysLeft(r.due_at);
+  if (d === null || r.status === 'completed' || r.status === 'rejected') return <span>-</span>;
+  const cls = d < 0 ? 'text-red-600 font-semibold' : d <= 5 ? 'text-orange-600 font-semibold' : '';
+  return <span className={cls}>{d < 0 ? `${-d}d overdue` : `${d}d left`}</span>;
+}
 
 export function PrivacyRequestsTab() {
   const [requests, setRequests] = useState<PrivacyRequest[]>([]);
@@ -57,203 +137,51 @@ export function PrivacyRequestsTab() {
   const [searchQuery, setSearchQuery] = useState('');
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('all');
   const [typeFilter, setTypeFilter] = useState<RequestTypeFilter>('all');
-  const [selectedRequest, setSelectedRequest] = useState<PrivacyRequest | null>(null);
-  const [showModal, setShowModal] = useState(false);
-  const [processing, setProcessing] = useState(false);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [showNew, setShowNew] = useState(false);
 
-  const [stats, setStats] = useState({
-    total: 0,
-    pending: 0,
-    inProgress: 0,
-    completed: 0,
-    rejected: 0,
-  });
-
-  useEffect(() => {
-    fetchRequests();
+  const fetchRequests = useCallback(async () => {
+    let query = supabase.from('compliance_privacy_requests').select('*').order('requested_at', { ascending: false }).limit(500);
+    if (statusFilter !== 'all') query = query.eq('status', statusFilter);
+    if (typeFilter !== 'all') query = query.eq('request_type', typeFilter);
+    const { data, error } = await query;
+    if (error) console.error('Error fetching privacy requests:', error);
+    setRequests((data as PrivacyRequest[]) ?? []);
+    setLoading(false);
   }, [statusFilter, typeFilter]);
 
-  const fetchRequests = async () => {
-    setLoading(true);
-    try {
-      let query = supabase
-        .from('compliance_privacy_requests')
-        .select('*')
-        .order('requested_at', { ascending: false });
+  useEffect(() => { fetchRequests(); }, [fetchRequests]);
 
-      if (statusFilter !== 'all') {
-        query = query.eq('status', statusFilter);
-      }
+  // Poll while a preview or erasure is running.
+  useEffect(() => {
+    if (!requests.some(isBusy)) return;
+    const t = setInterval(fetchRequests, 3000);
+    return () => clearInterval(t);
+  }, [requests, fetchRequests]);
 
-      if (typeFilter !== 'all') {
-        query = query.eq('request_type', typeFilter);
-      }
+  // Search runs over the loaded rows, so the search box never reaches a
+  // PostgREST filter.
+  const visible = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    if (!q) return requests;
+    return requests.filter((r) =>
+      emailsOf(r).some((e) => e.includes(q)) ||
+      r.requester_email?.toLowerCase().includes(q) ||
+      r.source?.toLowerCase().includes(q));
+  }, [requests, searchQuery]);
 
-      if (searchQuery) {
-        query = query.or(`requester_email.ilike.%${searchQuery}%,subject_email.ilike.%${searchQuery}%`);
-      }
+  const stats = useMemo(() => ({
+    total: requests.length,
+    pending: requests.filter((r) => r.status === 'pending').length,
+    inProgress: requests.filter((r) => r.status === 'in_progress').length,
+    completed: requests.filter((r) => r.status === 'completed').length,
+    dueSoon: requests.filter((r) => r.status !== 'completed' && r.status !== 'rejected' && (daysLeft(r.due_at) ?? 99) <= 5).length,
+  }), [requests]);
 
-      const { data, error } = await query;
-
-      if (error) throw error;
-
-      setRequests(data || []);
-
-      // Calculate stats
-      const allData = data || [];
-      setStats({
-        total: allData.length,
-        pending: allData.filter(r => r.status === 'pending').length,
-        inProgress: allData.filter(r => r.status === 'in_progress').length,
-        completed: allData.filter(r => r.status === 'completed').length,
-        rejected: allData.filter(r => r.status === 'rejected').length,
-      });
-    } catch (error) {
-      console.error('Error fetching privacy requests:', error);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const handleStatusChange = async (requestId: string, newStatus: string) => {
-    setProcessing(true);
-    try {
-      const updates: any = {
-        status: newStatus,
-      };
-
-      if (newStatus === 'completed') {
-        updates.processing_completed_at = new Date().toISOString();
-      }
-      if (newStatus === 'in_progress') {
-        updates.processing_started_at = new Date().toISOString();
-      }
-
-      const { error } = await supabase
-        .from('compliance_privacy_requests')
-        .update(updates)
-        .eq('id', requestId);
-
-      if (error) throw error;
-
-      await fetchRequests();
-      setShowModal(false);
-      setSelectedRequest(null);
-    } catch (error) {
-      console.error('Error updating request status:', error);
-    } finally {
-      setProcessing(false);
-    }
-  };
-
-  const handleExportData = async (customerId: number) => {
-    setProcessing(true);
-    try {
-      const { data, error } = await supabase.rpc('compliance_export_user_data', {
-        p_person_id: customerId,
-      });
-
-      if (error) throw error;
-
-      // Download as JSON file
-      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `user-data-export-${customerId}-${new Date().toISOString().split('T')[0]}.json`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
-    } catch (error) {
-      console.error('Error exporting data:', error);
-    } finally {
-      setProcessing(false);
-    }
-  };
-
-  const handleDeleteUserData = async (customerId: number, requestId: string) => {
-    if (!confirm('Are you sure you want to permanently delete all data for this user? This action cannot be undone.')) {
-      return;
-    }
-
-    setProcessing(true);
-    try {
-      const { error } = await supabase.rpc('compliance_delete_user_data', {
-        p_person_id: customerId,
-      });
-
-      if (error) throw error;
-
-      // Mark request as completed
-      await handleStatusChange(requestId, 'completed');
-    } catch (error) {
-      console.error('Error deleting user data:', error);
-    } finally {
-      setProcessing(false);
-    }
-  };
-
-  const formatDate = (dateString?: string) => {
-    if (!dateString) return '-';
-    return new Date(dateString).toLocaleString();
-  };
-
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case 'pending':
-        return (
-          <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-full bg-yellow-100 text-yellow-800 dark:bg-yellow-900/30 dark:text-yellow-200">
-            <ClockIcon className="size-3" />
-            Pending
-          </span>
-        );
-      case 'in_progress':
-        return (
-          <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-full bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-200">
-            <ArrowPathIcon className="size-3" />
-            In Progress
-          </span>
-        );
-      case 'completed':
-        return (
-          <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-full bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-200">
-            <CheckCircleIcon className="size-3" />
-            Completed
-          </span>
-        );
-      case 'rejected':
-        return (
-          <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium rounded-full bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-200">
-            <XCircleIcon className="size-3" />
-            Rejected
-          </span>
-        );
-      default:
-        return null;
-    }
-  };
-
-  const getRequestTypeBadge = (type: string) => {
-    const colors: Record<string, string> = {
-      access: 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-200',
-      deletion: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-200',
-      rectification: 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-200',
-      portability: 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900/30 dark:text-cyan-200',
-      restriction: 'bg-gray-100 text-gray-800 dark:bg-gray-700 dark:text-gray-200',
-      objection: 'bg-pink-100 text-pink-800 dark:bg-pink-900/30 dark:text-pink-200',
-    };
-
-    return (
-      <span className={`inline-flex items-center px-2 py-1 text-xs font-medium rounded-full ${colors[type] || colors.access}`}>
-        {REQUEST_TYPE_LABELS[type] || type}
-      </span>
-    );
-  };
+  const selected = requests.find((r) => r.id === selectedId) ?? null;
 
   return (
     <div className="space-y-6">
-      {/* Stats Cards */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
         <div className="bg-gray-50 dark:bg-gray-800 p-4 rounded-lg">
           <div className="text-2xl font-bold text-gray-900 dark:text-white">{stats.total}</div>
@@ -271,85 +199,49 @@ export function PrivacyRequestsTab() {
           <div className="text-2xl font-bold text-green-900 dark:text-green-200">{stats.completed}</div>
           <div className="text-sm text-green-600 dark:text-green-400">Completed</div>
         </div>
-        <div className="bg-red-50 dark:bg-red-900/20 p-4 rounded-lg">
-          <div className="text-2xl font-bold text-red-900 dark:text-red-200">{stats.rejected}</div>
-          <div className="text-sm text-red-600 dark:text-red-400">Rejected</div>
+        <div className="bg-orange-50 dark:bg-orange-900/20 p-4 rounded-lg">
+          <div className="text-2xl font-bold text-orange-900 dark:text-orange-200">{stats.dueSoon}</div>
+          <div className="text-sm text-orange-600 dark:text-orange-400">Due within 5 days</div>
         </div>
       </div>
 
-      {/* Filters */}
       <Card className="p-4">
         <div className="flex flex-wrap gap-4 items-end">
-          {/* Search */}
           <div className="flex-1 min-w-[200px]">
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Search
-            </label>
-            <div className="flex gap-2">
-              <Input
-                placeholder="Search by email..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && fetchRequests()}
-                className="flex-1"
-              />
-              <Button onClick={fetchRequests} variant="outline" className="gap-1">
-                <MagnifyingGlassIcon className="size-4" />
-                Search
-              </Button>
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Search</label>
+            <div className="relative">
+              <MagnifyingGlassIcon className="size-4 absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <Input placeholder="Email or source..." value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} className="pl-9" />
             </div>
           </div>
-
-          {/* Status Filter */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Status
-            </label>
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
-              className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
-            >
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Status</label>
+            <select value={statusFilter} onChange={(e) => setStatusFilter(e.target.value as StatusFilter)} className={SELECT_CLASS}>
               <option value="all">All Status</option>
-              <option value="pending">Pending</option>
-              <option value="in_progress">In Progress</option>
-              <option value="completed">Completed</option>
-              <option value="rejected">Rejected</option>
+              {Object.entries(STATUS_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
             </select>
           </div>
-
-          {/* Request Type Filter */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-              Request Type
-            </label>
-            <select
-              value={typeFilter}
-              onChange={(e) => setTypeFilter(e.target.value as RequestTypeFilter)}
-              className="px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
-            >
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Request Type</label>
+            <select value={typeFilter} onChange={(e) => setTypeFilter(e.target.value as RequestTypeFilter)} className={SELECT_CLASS}>
               <option value="all">All Types</option>
-              <option value="data_export">Data Export (DSAR)</option>
-              <option value="data_deletion">Right to Erasure</option>
-              <option value="data_correction">Data Correction</option>
-              <option value="data_portability">Data Portability</option>
-              <option value="consent_withdrawal">Consent Withdrawal</option>
-              <option value="processing_restriction">Processing Restriction</option>
+              {Object.entries(REQUEST_TYPE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
             </select>
           </div>
+          <Button onClick={() => setShowNew(true)} className="gap-1">
+            <PlusIcon className="size-4" />
+            New request
+          </Button>
         </div>
       </Card>
 
-      {/* Request List */}
       {loading ? (
-        <div className="flex items-center justify-center py-12">
-          <LoadingSpinner size="medium" />
-        </div>
-      ) : requests.length === 0 ? (
+        <div className="flex items-center justify-center py-12"><LoadingSpinner size="medium" /></div>
+      ) : visible.length === 0 ? (
         <div className="text-center py-12 text-gray-500 dark:text-gray-400">
           <ShieldCheckIcon className="size-12 mx-auto mb-4 opacity-50" />
           <p>No privacy requests found.</p>
-          <p className="text-sm mt-2">Requests submitted through the privacy portal will appear here.</p>
+          <p className="text-sm mt-2">Requests filed here, through the public API or through MCP appear in this list.</p>
         </div>
       ) : (
         <Card className="overflow-hidden">
@@ -357,74 +249,29 @@ export function PrivacyRequestsTab() {
             <Table>
               <THead>
                 <Tr>
-                  <Th>Request</Th>
+                  <Th>Subject</Th>
                   <Th>Type</Th>
                   <Th>Status</Th>
-                  <Th>Submitted</Th>
+                  <Th>Received</Th>
+                  <Th>Due</Th>
+                  <Th>Filed via</Th>
                   <Th />
                 </Tr>
               </THead>
               <TBody>
-                {requests.map((request) => (
-                  <Tr key={request.id}>
+                {visible.map((r) => (
+                  <Tr key={r.id}>
                     <Td>
-                      <div className="flex items-center gap-3">
-                        <div className="flex-shrink-0">
-                          <div className="size-10 rounded-full bg-[var(--gray-a3)] flex items-center justify-center">
-                            <UserIcon className="size-5" />
-                          </div>
-                        </div>
-                        <div>
-                          <div className="text-sm font-medium">
-                            {request.subject_email}
-                          </div>
-                          {request.subject_person_id && (
-                            <div className="text-xs">
-                              Customer ID: {request.subject_person_id}
-                            </div>
-                          )}
-                        </div>
-                      </div>
+                      <div className="text-sm font-medium">{r.redacted_at ? 'Erased (addresses hashed)' : emailsOf(r).join(', ')}</div>
+                      {r.source && <div className="text-xs text-gray-500">{r.source}</div>}
                     </Td>
+                    <Td>{REQUEST_TYPE_LABELS[r.request_type] ?? r.request_type}</Td>
+                    <Td><StatusBadge status={r.status} /></Td>
+                    <Td>{formatDate(r.requested_at)}</Td>
+                    <Td><DueBadge r={r} /></Td>
+                    <Td>{r.submitted_via ?? 'admin'}</Td>
                     <Td>
-                      {getRequestTypeBadge(request.request_type)}
-                    </Td>
-                    <Td>
-                      {getStatusBadge(request.status)}
-                    </Td>
-                    <Td>
-                      <div>{formatDate(request.requested_at)}</div>
-                      {request.processing_completed_at && (
-                        <div className="text-xs text-[var(--green-11)]">
-                          Completed: {formatDate(request.processing_completed_at)}
-                        </div>
-                      )}
-                    </Td>
-                    <Td>
-                      <RowActions
-                        actions={[
-                          {
-                            label: 'View Details',
-                            icon: <EyeIcon className="size-4" />,
-                            onClick: () => { setSelectedRequest(request); setShowModal(true); },
-                          },
-                          {
-                            label: 'Export User Data',
-                            icon: <DocumentArrowDownIcon className="size-4" />,
-                            onClick: () => handleExportData(request.subject_person_id!),
-                            disabled: processing,
-                            hidden: !((request.request_type === 'data_export' || request.request_type === 'data_portability') && request.status !== 'completed' && request.subject_person_id),
-                          },
-                          {
-                            label: 'Delete User Data',
-                            icon: <TrashIcon className="size-4" />,
-                            onClick: () => handleDeleteUserData(request.subject_person_id!, request.id),
-                            disabled: processing,
-                            color: 'red',
-                            hidden: !(request.request_type === 'data_deletion' && request.status !== 'completed' && request.subject_person_id),
-                          },
-                        ]}
-                      />
+                      <RowActions actions={[{ label: 'Open', icon: <EyeIcon className="size-4" />, onClick: () => setSelectedId(r.id) }]} />
                     </Td>
                   </Tr>
                 ))}
@@ -434,176 +281,266 @@ export function PrivacyRequestsTab() {
         </Card>
       )}
 
-      {/* Detail Modal */}
-      {showModal && selectedRequest && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
-            <div className="p-6 border-b border-gray-200 dark:border-gray-700">
-              <div className="flex justify-between items-start">
-                <div>
-                  <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
-                    Privacy Request Details
-                  </h3>
-                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                    Request ID: {selectedRequest.id}
-                  </p>
-                </div>
-                <Button
-                  isIcon
-                  variant="ghost"
-                  onClick={() => { setShowModal(false); setSelectedRequest(null); }}
-                >
-                  <XCircleIcon className="size-6" />
-                </Button>
-              </div>
-            </div>
+      {showNew && <NewRequestModal onClose={() => setShowNew(false)} onCreated={(id) => { setShowNew(false); fetchRequests(); setSelectedId(id); }} />}
+      {selected && <RequestModal request={selected} onClose={() => setSelectedId(null)} onChanged={fetchRequests} />}
+    </div>
+  );
+}
 
-            <div className="p-6 space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
-                    Request Type
-                  </label>
-                  <div className="mt-1">{getRequestTypeBadge(selectedRequest.request_type)}</div>
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
-                    Status
-                  </label>
-                  <div className="mt-1">{getStatusBadge(selectedRequest.status)}</div>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
-                    Subject Email
-                  </label>
-                  <div className="mt-1 text-sm text-gray-900 dark:text-white">
-                    {selectedRequest.subject_email}
-                  </div>
-                </div>
-                <div>
-                  <label className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
-                    Requester Email
-                  </label>
-                  <div className="mt-1 text-sm text-gray-900 dark:text-white">
-                    {selectedRequest.requester_email}
-                  </div>
-                </div>
-              </div>
-
-              {selectedRequest.subject_person_id && (
-                <div>
-                  <label className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
-                    Customer ID
-                  </label>
-                  <div className="mt-1 text-sm text-gray-900 dark:text-white">
-                    {selectedRequest.subject_person_id}
-                  </div>
-                </div>
-              )}
-
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
-                    Requested At
-                  </label>
-                  <div className="mt-1 text-sm text-gray-900 dark:text-white">
-                    {formatDate(selectedRequest.requested_at)}
-                  </div>
-                </div>
-                {selectedRequest.processing_completed_at && (
-                  <div>
-                    <label className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
-                      Completed At
-                    </label>
-                    <div className="mt-1 text-sm text-gray-900 dark:text-white">
-                      {formatDate(selectedRequest.processing_completed_at)}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {selectedRequest.notes && (
-                <div>
-                  <label className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
-                    Notes
-                  </label>
-                  <div className="mt-1 text-sm text-gray-900 dark:text-white bg-gray-50 dark:bg-gray-700 p-3 rounded">
-                    {selectedRequest.notes}
-                  </div>
-                </div>
-              )}
-
-              {selectedRequest.error_message && (
-                <div>
-                  <label className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
-                    Error / Rejection Reason
-                  </label>
-                  <div className="mt-1 text-sm text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 p-3 rounded">
-                    {selectedRequest.error_message}
-                  </div>
-                </div>
-              )}
-
-              {/* Status Update Actions */}
-              {selectedRequest.status !== 'completed' && selectedRequest.status !== 'rejected' && (
-                <div className="border-t border-gray-200 dark:border-gray-700 pt-4">
-                  <label className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
-                    Update Status
-                  </label>
-                  <div className="flex flex-wrap gap-2 mt-2">
-                    {selectedRequest.status === 'pending' && (
-                      <Button
-                        onClick={() => handleStatusChange(selectedRequest.id, 'in_progress')}
-                        disabled={processing}
-                        variant="outline"
-                        size="sm"
-                        className="gap-1"
-                      >
-                        <ArrowPathIcon className="size-4" />
-                        Start Processing
-                      </Button>
-                    )}
-                    <Button
-                      onClick={() => handleStatusChange(selectedRequest.id, 'completed')}
-                      disabled={processing}
-                      variant="solid"
-                      color="green"
-                      size="sm"
-                    >
-                      <CheckCircleIcon className="size-4" />
-                      Mark Completed
-                    </Button>
-                    <Button
-                      onClick={() => handleStatusChange(selectedRequest.id, 'rejected')}
-                      disabled={processing}
-                      variant="outline"
-                      color="red"
-                      size="sm"
-                    >
-                      <XCircleIcon className="size-4" />
-                      Reject
-                    </Button>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="p-6 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
-              <div className="flex justify-end gap-2">
-                <Button
-                  onClick={() => { setShowModal(false); setSelectedRequest(null); }}
-                  variant="outline"
-                >
-                  Close
-                </Button>
-              </div>
-            </div>
+function Modal({ title, subtitle, onClose, children }: { title: string; subtitle?: string; onClose: () => void; children: React.ReactNode }) {
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white dark:bg-gray-800 rounded-lg shadow-xl max-w-3xl w-full max-h-[90vh] overflow-y-auto">
+        <div className="p-6 border-b border-gray-200 dark:border-gray-700 flex justify-between items-start">
+          <div>
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white">{title}</h3>
+            {subtitle && <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">{subtitle}</p>}
           </div>
+          <Button isIcon variant="ghost" onClick={onClose}><XCircleIcon className="size-6" /></Button>
+        </div>
+        <div className="p-6 space-y-5">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+function NewRequestModal({ onClose, onCreated }: { onClose: () => void; onCreated: (id: string) => void }) {
+  const [emails, setEmails] = useState('');
+  const [type, setType] = useState<RequestType>('data_deletion');
+  const [source, setSource] = useState('');
+  const [requestedAt, setRequestedAt] = useState('');
+  const [notes, setNotes] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const submit = async () => {
+    setSaving(true);
+    setError(null);
+    try {
+      const row = await apiFetch('/privacy-requests', {
+        method: 'POST',
+        body: JSON.stringify({
+          emails,
+          request_type: type,
+          source: source || undefined,
+          requested_at: requestedAt ? new Date(requestedAt).toISOString() : undefined,
+          notes: notes || undefined,
+        }),
+      });
+      onCreated(row.id);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Modal title="New privacy request" onClose={onClose}>
+      <div>
+        <label className="block text-sm font-medium mb-1">Email addresses</label>
+        <textarea value={emails} onChange={(e) => setEmails(e.target.value)} rows={2} placeholder="One or more, separated by commas"
+          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800" />
+        <p className="text-xs text-gray-500 mt-1">The preview also finds other addresses recorded for the same person.</p>
+      </div>
+      <div className="grid grid-cols-2 gap-4">
+        <div>
+          <label className="block text-sm font-medium mb-1">Type</label>
+          <select value={type} onChange={(e) => setType(e.target.value as RequestType)} className={`${SELECT_CLASS} w-full`}>
+            {Object.entries(REQUEST_TYPE_LABELS).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
+        </div>
+        <div>
+          <label className="block text-sm font-medium mb-1">Received</label>
+          <Input type="datetime-local" value={requestedAt} onChange={(e) => setRequestedAt(e.target.value)} />
+          <p className="text-xs text-gray-500 mt-1">When the person asked. Due one month later.</p>
+        </div>
+      </div>
+      <div>
+        <label className="block text-sm font-medium mb-1">Source</label>
+        <Input value={source} onChange={(e) => setSource(e.target.value)} placeholder="e.g. LF Privacy team, DL ticket" />
+      </div>
+      <div>
+        <label className="block text-sm font-medium mb-1">Notes</label>
+        <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3}
+          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800" />
+      </div>
+      {error && <p className="text-sm text-red-600">{error}</p>}
+      <div className="flex justify-end gap-2">
+        <Button variant="outline" onClick={onClose}>Cancel</Button>
+        <Button onClick={submit} disabled={saving || !emails.trim()}>{saving ? 'Saving...' : 'Create request'}</Button>
+      </div>
+    </Modal>
+  );
+}
+
+function RequestModal({ request: r, onClose, onChanged }: { request: PrivacyRequest; onClose: () => void; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [confirm, setConfirm] = useState('');
+  const isErasure = r.request_type === 'data_deletion';
+  const plan = r.plan;
+  const planFresh = !!r.plan_built_at && Date.now() - new Date(r.plan_built_at).getTime() < 24 * 3600_000;
+  const canErase = isErasure && r.plan_status === 'ready' && planFresh && (plan?.blockers.length ?? 1) === 0
+    && ['none', 'failed'].includes(r.execute_status) && emailsOf(r).includes(confirm.trim().toLowerCase());
+
+  const run = async (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    setError(null);
+    try { await fn(); onChanged(); } catch (e) { setError((e as Error).message); } finally { setBusy(false); }
+  };
+
+  const downloadReport = () => run(async () => {
+    const md = await apiFetch(`/privacy-requests/${r.id}/report.md`);
+    const blob = new Blob([md], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `erasure-report-${r.id}.md`;
+    a.click();
+    URL.revokeObjectURL(url);
+  });
+
+  const setStatus = (status: Status) => run(() => apiFetch(`/privacy-requests/${r.id}/status`, { method: 'POST', body: JSON.stringify({ status }) }));
+
+  const identifiedEmails = Array.isArray(r.identifiers?.emails) ? r.identifiers!.emails as string[] : [];
+
+  return (
+    <Modal title={REQUEST_TYPE_LABELS[r.request_type] ?? r.request_type} subtitle={`Request ${r.id}`} onClose={onClose}>
+      <div className="grid grid-cols-2 gap-4 text-sm">
+        <div><div className="text-xs uppercase text-gray-500">Subject</div>{r.redacted_at ? 'Addresses replaced with hashes' : emailsOf(r).join(', ')}</div>
+        <div><div className="text-xs uppercase text-gray-500">Status</div><StatusBadge status={r.status} /></div>
+        <div><div className="text-xs uppercase text-gray-500">Received</div>{formatDate(r.requested_at)}</div>
+        <div><div className="text-xs uppercase text-gray-500">Due</div>{formatDate(r.due_at)} (<DueBadge r={r} />)</div>
+        <div><div className="text-xs uppercase text-gray-500">Source</div>{r.source ?? '-'}</div>
+        <div><div className="text-xs uppercase text-gray-500">Filed by</div>{r.submitted_by ?? '-'}</div>
+      </div>
+      {r.notes && <p className="text-sm whitespace-pre-wrap">{r.notes}</p>}
+
+      {isErasure && r.execute_status === 'none' && r.status === 'pending' && (
+        <div className="flex gap-2">
+          <Button variant="outline" disabled={busy} onClick={() => setStatus('rejected')}>Reject request</Button>
         </div>
       )}
-    </div>
+
+      {!isErasure && r.status !== 'completed' && r.status !== 'rejected' && (
+        <div className="flex gap-2">
+          <Button variant="outline" disabled={busy} onClick={() => setStatus('in_progress')}>Mark in progress</Button>
+          <Button variant="outline" disabled={busy} onClick={() => setStatus('completed')}>Mark completed</Button>
+          <Button variant="outline" disabled={busy} onClick={() => setStatus('rejected')}>Reject</Button>
+        </div>
+      )}
+
+      {isErasure && (
+        <>
+          <section className="space-y-3">
+            <div className="flex items-center justify-between">
+              <h4 className="font-semibold">1. Preview</h4>
+              {r.execute_status !== 'erased' && !r.redacted_at && (
+                <Button variant="outline" disabled={busy || ['queued', 'running'].includes(r.plan_status)} onClick={() => run(() => apiFetch(`/privacy-requests/${r.id}/preview`, { method: 'POST' }))} className="gap-1">
+                  <ArrowPathIcon className="size-4" />
+                  {r.plan_status === 'none' ? 'Build preview' : 'Rebuild preview'}
+                </Button>
+              )}
+            </div>
+            {['queued', 'running'].includes(r.plan_status) && <p className="text-sm text-gray-500">Building the preview. This can take a minute on large databases.</p>}
+            {r.plan_status === 'failed' && <p className="text-sm text-red-600">Preview failed: {r.plan_error}</p>}
+            {plan && r.plan_status === 'ready' && (
+              <div className="space-y-3 text-sm">
+                <p>
+                  Matched {plan.summary.people} person record(s), {plan.summary.emails} email address(es) and {plan.summary.auth_users} sign-in account(s).
+                  {' '}{plan.summary.rows} rows across {plan.summary.tables} tables. Built {formatDate(plan.built_at)}{planFresh ? '' : ' (more than 24 hours ago; rebuild before erasing)'}.
+                </p>
+                {identifiedEmails.length > 0 && <p className="text-xs text-gray-500">Addresses: {identifiedEmails.join(', ')}</p>}
+                {plan.blockers.map((b, i) => (
+                  <div key={`b${i}`} className="flex gap-2 p-2 rounded bg-red-50 dark:bg-red-900/20 text-red-800 dark:text-red-200">
+                    <ExclamationTriangleIcon className="size-4 shrink-0 mt-0.5" />
+                    <span><strong>{b.table}{b.column ? `.${b.column}` : ''}</strong>{b.rows ? ` (${b.rows} rows)` : ''}: {b.detail}</span>
+                  </div>
+                ))}
+                {plan.warnings.map((w, i) => (
+                  <div key={`w${i}`} className="flex gap-2 p-2 rounded bg-yellow-50 dark:bg-yellow-900/20 text-yellow-800 dark:text-yellow-200">
+                    <ExclamationTriangleIcon className="size-4 shrink-0 mt-0.5" />
+                    <span>{w.table ? <strong>{w.table}: </strong> : null}{w.detail}</span>
+                  </div>
+                ))}
+                {plan.tables.length > 0 && (
+                  <Table>
+                    <THead><Tr><Th>Table</Th><Th>Action</Th><Th>Rows</Th><Th>Notes</Th></Tr></THead>
+                    <TBody>
+                      {plan.tables.map((t) => (
+                        <Tr key={`${t.table}/${t.entry}`}>
+                          <Td>{t.table}{t.entry !== 'default' ? ` (${t.entry})` : ''}</Td>
+                          <Td>{t.action === 'delete' ? 'Delete' : 'Remove identifiers'}</Td>
+                          <Td>{t.rows}</Td>
+                          <Td className="text-xs">{t.retain ? `Kept: ${t.retain.reason}` : t.note ?? ''}</Td>
+                        </Tr>
+                      ))}
+                    </TBody>
+                  </Table>
+                )}
+              </div>
+            )}
+          </section>
+
+          <section className="space-y-3">
+            <h4 className="font-semibold">2. Erase</h4>
+            {r.execute_status === 'erased' ? (
+              <p className="text-sm text-green-700 dark:text-green-300">Database erasure committed {formatDate(r.executed_at)} by {r.executed_by}. Every address is now suppressed.</p>
+            ) : ['queued', 'running'].includes(r.execute_status) ? (
+              <p className="text-sm text-gray-500">Erasure running. It runs as one transaction: either everything is removed or nothing is.</p>
+            ) : (
+              <>
+                {r.execute_status === 'failed' && <p className="text-sm text-red-600">The last attempt failed and was rolled back: {r.error_message}</p>}
+                <p className="text-sm">This permanently deletes or anonymises every row in the preview and cannot be undone. Type one of the request addresses to confirm.</p>
+                <div className="flex gap-2">
+                  <Input value={confirm} onChange={(e) => setConfirm(e.target.value)} placeholder="Email address" className="flex-1" />
+                  <Button color="red" disabled={busy || !canErase} onClick={() => run(() => apiFetch(`/privacy-requests/${r.id}/execute`, { method: 'POST', body: JSON.stringify({ confirm_email: confirm }) }))} className="gap-1">
+                    <TrashIcon className="size-4" />
+                    Erase
+                  </Button>
+                </div>
+              </>
+            )}
+          </section>
+
+          {r.execute_status === 'erased' && (
+            <section className="space-y-3">
+              <div className="flex items-center justify-between">
+                <h4 className="font-semibold">3. Outside services and manual steps</h4>
+                {!r.redacted_at && r.processors.some((p) => p.status === 'failed') && (
+                  <Button variant="outline" disabled={busy} onClick={() => run(() => apiFetch(`/privacy-requests/${r.id}/retry-processors`, { method: 'POST' }))}>Retry failed</Button>
+                )}
+              </div>
+              <ul className="text-sm space-y-1">
+                {r.processors.map((p) => (
+                  <li key={p.id}><strong>{p.name}</strong>: {p.status}{p.detail ? `. ${p.detail}` : ''}</li>
+                ))}
+              </ul>
+              {r.checklist.length > 0 && (
+                <ul className="text-sm space-y-2">
+                  {r.checklist.map((c) => (
+                    <li key={c.id} className="flex gap-2 items-start">
+                      <input type="checkbox" checked={c.done} disabled={busy || !!r.redacted_at} className="mt-1"
+                        onChange={(e) => run(() => apiFetch(`/privacy-requests/${r.id}/checklist/${encodeURIComponent(c.id)}`, { method: 'POST', body: JSON.stringify({ done: e.target.checked }) }))} />
+                      <span><strong>{c.title}</strong>{c.detail ? `. ${c.detail}` : ''}{c.done_at ? <span className="text-xs text-gray-500"> (done {formatDate(c.done_at)})</span> : null}</span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {r.redacted_at && <p className="text-sm text-green-700 dark:text-green-300">Completed {formatDate(r.processing_completed_at)}. The request now holds only hashes of the addresses.</p>}
+            </section>
+          )}
+
+          <div className="flex justify-end">
+            <Button variant="outline" disabled={busy} onClick={downloadReport} className="gap-1">
+              <DocumentArrowDownIcon className="size-4" />
+              Download report
+            </Button>
+          </div>
+        </>
+      )}
+      {error && <p className="text-sm text-red-600">{error}</p>}
+    </Modal>
   );
 }
