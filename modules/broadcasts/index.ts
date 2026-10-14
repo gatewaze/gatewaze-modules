@@ -7,7 +7,7 @@ const broadcastsModule: GatewazeModule = {
   visibility: 'public',
   name: 'Broadcasts',
   description: 'Send a single scheduled, timezone-aware email to a segment, with an AI segment copilot',
-  version: '0.2.3',
+  version: '0.2.4',
   features: [
     'broadcasts',
     'broadcasts.send',
@@ -169,7 +169,9 @@ const broadcastsModule: GatewazeModule = {
     // Reject a broadcast_sends insert without a preheader (Gmail spams mail without one).
     'migrations/029_require_send_preheader.sql',
     // Duplicating a broadcast clones its audience segment; splits copies that already share one.
-    'migrations/030_duplicate_copies_segment.sql',
+    // 030 (same fix, but copied all members in one statement) timed out on AAIF
+    // prod and is retired; 031 supersedes it and replaces its functions where it ran.
+    'migrations/031_duplicate_copies_segment.sql',
   ],
 
   adminRoutes: [

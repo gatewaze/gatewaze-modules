@@ -5,7 +5,7 @@ import { BroadcastsTable } from '../BroadcastsTable.js';
 import type { Broadcast } from '../../lib/broadcastService.js';
 
 vi.mock('react-router', () => ({ useNavigate: () => vi.fn() }));
-vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
+vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn(), loading: vi.fn(), dismiss: vi.fn() } }));
 vi.mock('../../lib/broadcastService.js', async () => {
   const actual = await vi.importActual<typeof import('../../lib/broadcastService.js')>('../../lib/broadcastService.js');
   return {
