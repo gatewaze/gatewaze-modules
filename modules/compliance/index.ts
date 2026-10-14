@@ -7,7 +7,7 @@ const complianceModule: GatewazeModule = {
   visibility: 'public',
   name: 'Compliance',
   description: 'GDPR, CCPA, and SOC 2 compliance tools — consent records, privacy requests with erasure, data breach tracking, and audit logging',
-  version: '1.1.0',
+  version: '1.1.1',
   features: [
     'compliance',
     'compliance.consent',
@@ -23,6 +23,8 @@ const complianceModule: GatewazeModule = {
     'migrations/002_erasure_engine.sql',
     // Where personal data lives in core and the open source modules.
     'migrations/003_personal_data_registry.sql',
+    // Missing-column check moves from the preview to a maintainer function.
+    'migrations/004_registry_checks.sql',
   ],
 
   workers: [
