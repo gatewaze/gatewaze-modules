@@ -210,11 +210,15 @@ export function BroadcastsTable({ broadcasts, folders = [], organizeMode = false
   };
 
   const handleDuplicate = useCallback(async (id: string) => {
+    // Large audiences take a few seconds to copy (members are recalculated in batches).
+    const pending = toast.loading('Duplicating broadcast and its audience…');
     try {
       await duplicateBroadcast(id);
+      toast.dismiss(pending);
       toast.success('Broadcast duplicated');
       onChanged?.();
     } catch (err) {
+      toast.dismiss(pending);
       toast.error(err instanceof Error ? err.message : 'Failed to duplicate broadcast');
     }
   }, [onChanged]);
