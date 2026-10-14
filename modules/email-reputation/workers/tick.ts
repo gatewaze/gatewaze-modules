@@ -10,6 +10,7 @@
  */
 
 import { createClient } from '@supabase/supabase-js';
+import pg from 'pg';
 import { promises as dns } from 'node:dns';
 import type { Job } from 'bullmq';
 import { parseConfig } from '../lib/config';
@@ -24,6 +25,25 @@ const EVALUATE_AFTER_MS = 24 * 3_600_000;
 const NOTIFY_WITHIN_MS = 3 * 24 * 3_600_000;
 const DNS_TIMEOUT_MS = 3_000;
 const DNS_CONCURRENCY = 20;
+
+// Large sends (150k recipients on AAIF) read ~40k table pages to aggregate,
+// over 8s cold, so through PostgREST they always timed out. When the worker
+// has a direct database URL, measure sends over it with a longer limit.
+const DIRECT_STATEMENT_TIMEOUT = '120s';
+
+async function directDb(): Promise<pg.Client | null> {
+  const url = process.env.DATABASE_URL;
+  if (!url) return null;
+  try {
+    const c = new pg.Client({ connectionString: url, application_name: 'email-reputation' });
+    await c.connect();
+    await c.query(`SET statement_timeout = '${DIRECT_STATEMENT_TIMEOUT}'`);
+    return c;
+  } catch (e) {
+    console.warn(`[email-reputation] direct database connection failed, using the API: ${(e as Error).message}`);
+    return null;
+  }
+}
 
 function client() {
   const url = process.env.SUPABASE_URL;
@@ -72,11 +92,24 @@ export default async function handleTick(_job: Job) {
     p_limit: 50,
   });
   if (dueErr) throw new Error(`[email-reputation] due_sends failed: ${dueErr.message}`);
-  for (const s of (due ?? []) as Array<{ send_kind: string; send_id: string }>) {
-    if (overBudget()) { result.stoppedEarly = true; break; }
-    const { error } = await supabase.rpc('email_reputation_compute_send', { p_kind: s.send_kind, p_send_id: s.send_id });
-    if (error) { console.warn(`[email-reputation] compute ${s.send_kind}/${s.send_id} failed: ${error.message}`); continue; }
-    result.computed++;
+  const db = (due ?? []).length > 0 ? await directDb() : null;
+  try {
+    for (const s of (due ?? []) as Array<{ send_kind: string; send_id: string }>) {
+      if (overBudget()) { result.stoppedEarly = true; break; }
+      try {
+        if (db) {
+          await db.query('SELECT public.email_reputation_compute_send($1, $2)', [s.send_kind, s.send_id]);
+        } else {
+          const { error } = await supabase.rpc('email_reputation_compute_send', { p_kind: s.send_kind, p_send_id: s.send_id });
+          if (error) throw new Error(error.message);
+        }
+        result.computed++;
+      } catch (e) {
+        console.warn(`[email-reputation] compute ${s.send_kind}/${s.send_id} failed: ${(e as Error).message}`);
+      }
+    }
+  } finally {
+    if (db) await db.end().catch(() => {});
   }
 
   // 2. Look up MX records for recipient domains with no provider yet.

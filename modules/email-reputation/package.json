@@ -16,6 +16,7 @@
   },
   "peerDependencies": {
     "@gatewaze/shared": "*",
-    "@supabase/supabase-js": "*"
+    "@supabase/supabase-js": "*",
+    "pg": "*"
   }
 }
