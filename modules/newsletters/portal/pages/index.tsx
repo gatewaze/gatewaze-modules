@@ -7,6 +7,7 @@ import { getSupabaseClient } from '@/lib/supabase/client'
 import { editionFolderSlug } from '@gatewaze-modules/newsletters/lib/edition-slug'
 import { NewsletterSignup, SubscribedPanel, useNewsletterSubscription } from '../components/NewsletterSignup'
 import { ConsentNote } from '../components/ConsentNote'
+import { ConfirmSubscription } from '../components/ConfirmSubscription'
 // When the onboarding module is installed + enabled it registers the
 // 'newsletters:signup' slot (the email→chat morph). Importing ModuleSlot runs
 // the generated slot registrations as a side-effect.
@@ -145,6 +146,7 @@ export default function NewsletterListingPage() {
     return (
       <div className="pub-wrap">
         <div className="pub-h"><h1>Newsletters</h1></div>
+        <ConfirmSubscription />
         <div className="pub-empty">Loading…</div>
       </div>
     )
@@ -154,6 +156,7 @@ export default function NewsletterListingPage() {
     return (
       <div className="pub-wrap">
         <div className="pub-h"><h1>Newsletters</h1></div>
+        <ConfirmSubscription />
         <div className="pub-empty">No newsletters available yet.</div>
       </div>
     )
@@ -165,6 +168,9 @@ export default function NewsletterListingPage() {
         <h1>Newsletters</h1>
         <p>Subscribe to a newsletter and catch up on recent editions.</p>
       </div>
+
+      {/* Double opt-in: /newsletters?confirm=<token> from the confirmation email. */}
+      <ConfirmSubscription />
 
       {data.map(({ newsletter, editions }) => {
         const editionHref = (ed: Edition) =>

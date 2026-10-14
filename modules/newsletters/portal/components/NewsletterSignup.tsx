@@ -11,8 +11,9 @@ import { ConsentNote } from './ConsentNote'
  *
  * Submits via the Supabase functions URL (the way the portal makes every other client-side backend
  * call — event registration, people-signup, etc.), NOT the separate API host, which the portal client
- * can't reach. The `newsletter-signup` edge function creates the person + auth record and subscribes
- * the email to the newsletter's manually-linked list. (Interim — to be replaced by the onboarding module.)
+ * can't reach. Subscribing is double opt-in: the `newsletter-signup` edge function emails a
+ * confirmation link and only subscribes once it is confirmed — except for a signed-in user
+ * subscribing their own address, which goes straight through (their JWT is sent for that).
  *
  * Signed-in users get a subscription-aware surface instead of a bare email
  * field: already-subscribed → "You're subscribed as …" + Unsubscribe; not
@@ -119,7 +120,9 @@ export function NewsletterSignup({ collectionSlug, subscription }: {
   const own = useNewsletterSubscription(collectionSlug)
   const { user, sub, setSub, unsubState, unsubscribe } = subscription ?? own
   const [email, setEmail] = useState('')
-  const [state, setState] = useState<'idle' | 'submitting' | 'done' | 'invalid' | 'error'>('idle')
+  const [state, setState] = useState<'idle' | 'submitting' | 'done' | 'pending' | 'invalid' | 'error' | 'busy'>('idle')
+  const [pendingEmail, setPendingEmail] = useState('')
+  const { session } = useAuth()
 
   // Prefill the signed-in user's address once known.
   useEffect(() => {
@@ -133,15 +136,25 @@ export function NewsletterSignup({ collectionSlug, subscription }: {
     setState('submitting')
     try {
       const config = getClientBrandConfig()
+      // Signed in: send the user's JWT so their own address is subscribed
+      // directly. Anyone else gets a confirmation email.
+      const bearer = session?.access_token || config.supabaseAnonKey
       const res = await fetch(fnUrl(), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', apikey: config.supabaseAnonKey, Authorization: `Bearer ${config.supabaseAnonKey}` },
+        headers: { 'Content-Type': 'application/json', apikey: config.supabaseAnonKey, Authorization: `Bearer ${bearer}` },
         body: JSON.stringify({ email: value, collection: collectionSlug }),
       })
-      if (!res.ok) throw new Error()
-      setState('done')
+      if (res.status === 429) { setState('busy'); return }
+      const data = res.ok ? await res.json().catch(() => ({})) : null
+      if (!data) throw new Error()
+      if (data.subscribed) {
+        setState('done')
+        setSub((prev) => (prev === null ? null : { subscribed: true, email: value.toLowerCase() }))
+      } else {
+        setPendingEmail(value.toLowerCase())
+        setState('pending')
+      }
       if (!user) setEmail('')
-      setSub((prev) => (prev === null ? null : { subscribed: true, email: value.toLowerCase() }))
     } catch {
       setState('error')
     }
@@ -150,6 +163,15 @@ export function NewsletterSignup({ collectionSlug, subscription }: {
   // Signed in + already subscribed → status + unsubscribe instead of the form.
   if (sub?.subscribed) {
     return <SubscribedPanel sub={sub} unsubState={unsubState} unsubscribe={unsubscribe} />
+  }
+
+  if (state === 'pending') {
+    return (
+      <p className="pub-nl-signup-msg ok" style={{ marginTop: 14 }}>
+        Check your inbox — we’ve sent a confirmation link to <strong>{pendingEmail}</strong>.
+        You’ll be subscribed once you confirm.
+      </p>
+    )
   }
 
   if (state === 'done') {
@@ -173,7 +195,7 @@ export function NewsletterSignup({ collectionSlug, subscription }: {
           inputMode="email"
           autoComplete="email"
           value={email}
-          onChange={(e) => { setEmail(e.target.value); if (state === 'invalid' || state === 'error') setState('idle') }}
+          onChange={(e) => { setEmail(e.target.value); if (state === 'invalid' || state === 'error' || state === 'busy') setState('idle') }}
           placeholder="Email address"
           aria-label="Email address"
           className="pub-nl-signup-input"
@@ -183,6 +205,7 @@ export function NewsletterSignup({ collectionSlug, subscription }: {
         </button>
         {state === 'invalid' && <p className="pub-nl-signup-msg err">Please enter a valid email address.</p>}
         {state === 'error' && <p className="pub-nl-signup-msg err">Couldn’t subscribe right now — please try again.</p>}
+        {state === 'busy' && <p className="pub-nl-signup-msg err">Too many signups from here just now — please try again later.</p>}
       </form>
       {/* Per-brand marketing-consent note (renders nothing when unconfigured). */}
       <ConsentNote />
