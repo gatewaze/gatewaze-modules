@@ -91,12 +91,28 @@ BEGIN
   -- and an absent one must NOT abort the whole DO block (which would roll back
   -- the roles + publication too). Missing tables are reported, not fatal.
   DECLARE
+    -- In-scope source tables (§8.1). Table names differ between deployments, so
+    -- both naming variants are listed and whichever exists here is used; the
+    -- rest are reported, not fatal. Covers people, event engagement, email and
+    -- newsletter engagement, and list consent.
     v_intended text[] := ARRAY[
-      'people','person_emails','people_events','events',
-      'event_registrations','send_log','email_interactions','newsletter_sends'];
+      -- people
+      'people','people_events','people_profiles','people_merge_audit',
+      'person_member_organizations','person_emails',
+      -- events
+      'events','events_registrations','event_registrations',
+      -- email engagement
+      'email_interactions','email_events','email_send_log','send_log',
+      -- newsletter engagement
+      'newsletter_sends','newsletters_editions','newsletter_send_batches',
+      'newsletter_send_recipients',
+      -- list consent / subscriptions
+      'lists','list_subscriptions','email_subscriptions'];
     v_present text[];
     v_missing text[];
+    v_to_add  text[];
     v_list    text;
+    v_tbl     text;
   BEGIN
     SELECT array_agg(t ORDER BY t) INTO v_present
       FROM unnest(v_intended) AS t
@@ -116,12 +132,31 @@ BEGIN
     EXECUTE 'GRANT SELECT ON ' || v_list || ' TO snowflake_reader';
     EXECUTE 'GRANT SELECT ON ' || v_list || ' TO snowflake_verifier';
 
-    -- Publication — explicit table list, NOT "FOR ALL TABLES".
+    -- Publication — explicit table list, NOT "FOR ALL TABLES". When it already
+    -- exists the intended set is RECONCILED into it rather than skipped: a new
+    -- module adds tables over time and "the publication already exists" quietly
+    -- left them unreplicated, which is invisible until someone notices the data
+    -- never arrived. Tables are only ever added here, never dropped, so removing
+    -- something from scope stays a deliberate manual ALTER PUBLICATION (§8.1).
     IF NOT EXISTS (SELECT 1 FROM pg_catalog.pg_publication WHERE pubname = 'snowflake_cdc') THEN
       EXECUTE 'CREATE PUBLICATION snowflake_cdc FOR TABLE ' || v_list;
       RAISE NOTICE '[warehouse-sync/003] created publication snowflake_cdc for: %', v_list;
     ELSE
-      RAISE NOTICE '[warehouse-sync/003] publication snowflake_cdc already exists — ALTER PUBLICATION to change scope (§8.1).';
+      SELECT array_agg(t ORDER BY t) INTO v_to_add
+        FROM unnest(v_present) AS t
+        WHERE NOT EXISTS (
+          SELECT 1 FROM pg_catalog.pg_publication_tables
+          WHERE pubname = 'snowflake_cdc' AND schemaname = 'public' AND tablename = t
+        );
+
+      IF v_to_add IS NULL THEN
+        RAISE NOTICE '[warehouse-sync/003] publication snowflake_cdc already covers every in-scope table.';
+      ELSE
+        FOREACH v_tbl IN ARRAY v_to_add LOOP
+          EXECUTE format('ALTER PUBLICATION snowflake_cdc ADD TABLE public.%I', v_tbl);
+        END LOOP;
+        RAISE NOTICE '[warehouse-sync/003] added to publication snowflake_cdc: %', array_to_string(v_to_add, ', ');
+      END IF;
     END IF;
 
     IF v_missing IS NOT NULL THEN

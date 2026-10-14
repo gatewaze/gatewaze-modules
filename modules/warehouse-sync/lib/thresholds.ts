@@ -34,6 +34,13 @@ export function thresholdsFromConfig(cfg: Record<string, unknown>): SlotThreshol
 export interface SlotSample {
   slot_name: string;
   active: boolean;
+  /**
+   * pg_replication_slots.wal_status: reserved | extended | unreserved | lost.
+   * 'unreserved' means retained WAL has passed max_slot_wal_keep_size and is at
+   * risk of removal; 'lost' means it has been removed and the slot can no longer
+   * be resumed from. Older samples predate this column, hence optional.
+   */
+  wal_status?: string | null;
   retained_bytes: number;
   flush_lag_bytes: number;
   /** Seconds since the slot was last active; null when currently active. */
@@ -46,7 +53,12 @@ export type AlertSeverity = 'warning' | 'critical';
 
 export interface SlotAlert {
   slot_name: string;
-  code: 'retained_wal' | 'replication_lag' | 'slot_inactive' | 'slot_missing';
+  code:
+    | 'retained_wal'
+    | 'replication_lag'
+    | 'slot_inactive'
+    | 'slot_missing'
+    | 'slot_invalidated';
   severity: AlertSeverity;
   message: string;
   value: number | null;
@@ -59,6 +71,32 @@ export interface SlotAlert {
  */
 export function evaluateSlot(s: SlotSample, t: SlotThresholds, businessHours: boolean): SlotAlert[] {
   const alerts: SlotAlert[] = [];
+
+  // Slot invalidation (§10.4). Postgres marks a slot 'unreserved' once its
+  // retained WAL passes max_slot_wal_keep_size, then 'lost' when that WAL is
+  // actually removed. 'lost' is terminal: CDC cannot resume and the slot must be
+  // dropped and recreated, which costs a fresh snapshot. This is checked first
+  // and independently of retained_bytes because a lost slot has a NULL
+  // restart_lsn, so retained_bytes reads as 0 and every size threshold goes
+  // quiet exactly when the thing they guard has already happened.
+  const walStatus = (s.wal_status ?? '').toLowerCase();
+  if (walStatus === 'lost') {
+    alerts.push({
+      slot_name: s.slot_name,
+      code: 'slot_invalidated',
+      severity: 'critical',
+      value: null,
+      message: `slot invalidated (wal_status=lost) — retained WAL was removed, CDC cannot resume; drop and recreate the slot, next sync needs a full snapshot (§10.4)`,
+    });
+  } else if (walStatus === 'unreserved') {
+    alerts.push({
+      slot_name: s.slot_name,
+      code: 'slot_invalidated',
+      severity: 'critical',
+      value: null,
+      message: `slot WAL is unreserved — retained WAL has passed max_slot_wal_keep_size and will be removed; restart the connector now or the slot is lost (§10.4)`,
+    });
+  }
 
   if (s.retained_bytes > t.retainedWalBytes) {
     alerts.push({

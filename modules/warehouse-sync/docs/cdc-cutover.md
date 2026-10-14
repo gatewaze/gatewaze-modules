@@ -36,6 +36,26 @@ Add-ons → Dedicated IPv4 address** → enable. (~$4/mo.) Wait for the A record
 dig +short A db.ktkkanmhbygivyzzyfex.supabase.co   # should now return an IPv4
 ```
 
+## Incident: the slot was invalidated unnoticed (2026-09-02 → 2026-10-14)
+
+Syncing stopped on 2 Sep. The slot sat inactive, retained WAL passed
+`max_slot_wal_keep_size`, and Postgres marked it `unreserved` and then `lost`,
+discarding the WAL to protect the disk. The cap did its job. The monitor that
+should have caught it first did not, for two reasons now fixed:
+
+- `warehouse_sync_slot_health()` failed on every call with "structure of query
+  does not match function result type". `EXTRACT()` returns `numeric` on PG14+
+  and one branch was not cast. No sample was ever written, no alert ever raised.
+  Fixed in migration 008, which also adds `wal_status` so invalidation is
+  representable at all. **After applying it, run `NOTIFY pgrst, 'reload schema';`**
+  or PostgREST keeps serving the old signature and the worker keeps failing.
+- Both workers read `ctx.moduleConfig`, which the worker host never populates, so
+  `airbyte-status` reported Airbyte as unconfigured on every tick. They now read
+  `installed_modules` like every other module (`lib/module-config.ts`).
+
+A `lost` slot cannot be resumed. It must be dropped and recreated, and the next
+sync is necessarily a full snapshot.
+
 ## Cutover sequence (run once IPv4 is live)
 
 Order matters — the slot-monitor guard must be watching *before* a slot exists.

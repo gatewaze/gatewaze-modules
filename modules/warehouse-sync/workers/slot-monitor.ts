@@ -22,6 +22,7 @@ import {
   isBusinessHoursUtc,
   thresholdsFromConfig,
 } from '../lib/thresholds.js';
+import { loadModuleConfig } from '../lib/module-config.js';
 
 if (typeof (globalThis as Record<string, unknown>).WebSocket === 'undefined') {
   (globalThis as Record<string, unknown>).WebSocket = class {
@@ -48,12 +49,15 @@ async function postWebhook(url, alert, logger) {
 
 export default async function handler(job, ctx) {
   const logger = ctx?.logger ?? console;
-  const cfg = (ctx?.moduleConfig ?? {}) as Record<string, unknown>;
   const supabase =
     ctx?.supabase ??
     createClient(process.env.SUPABASE_URL ?? '', process.env.SUPABASE_SERVICE_ROLE_KEY ?? '', {
       auth: { autoRefreshToken: false, persistSession: false },
     });
+
+  // The worker host does not populate ctx.moduleConfig, so read the persisted
+  // row. Without this the monitor silently ran on default thresholds.
+  const cfg = await loadModuleConfig(supabase, ctx);
 
   const slotName = (job?.data?.slotName as string) ?? (cfg.replicationSlotName as string) ?? 'snowflake_cdc';
   const thresholds = thresholdsFromConfig(cfg);
@@ -100,6 +104,7 @@ export default async function handler(job, ctx) {
     const sample = {
       slot_name: s.slot_name,
       active: !!s.active,
+      wal_status: s.wal_status ?? null,
       retained_bytes: Number(s.retained_bytes ?? 0),
       flush_lag_bytes: Number(s.flush_lag_bytes ?? 0),
       inactive_seconds: s.inactive_seconds == null ? null : Number(s.inactive_seconds),
@@ -116,6 +121,7 @@ export default async function handler(job, ctx) {
     await supabase.from('warehouse_sync_slot_health').insert({
       slot_name: sample.slot_name,
       active: sample.active,
+      wal_status: sample.wal_status,
       retained_bytes: sample.retained_bytes,
       flush_lag_bytes: sample.flush_lag_bytes,
       inactive_seconds: sample.inactive_seconds,
