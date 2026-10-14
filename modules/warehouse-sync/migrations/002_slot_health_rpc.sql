@@ -23,6 +23,7 @@ CREATE OR REPLACE FUNCTION public.warehouse_sync_slot_health(p_slot_name text DE
 RETURNS TABLE (
   slot_name        text,
   active           boolean,
+  wal_status       text,
   retained_bytes   bigint,
   flush_lag_bytes  bigint,
   inactive_seconds double precision,
@@ -44,9 +45,14 @@ BEGIN
       AND attname = 'inactive_since' AND NOT attisdropped
   ) INTO v_has_inactive;
 
+  -- EXTRACT() returns numeric on PG14+, so every branch MUST be cast to double
+  -- precision. Without the cast the column type does not match the declared
+  -- RETURNS TABLE and every call fails with "structure of query does not match
+  -- function result type", which is exactly how this monitor sat broken while
+  -- the slot it was watching was invalidated.
   v_inactive_expr := CASE
     WHEN v_has_inactive THEN
-      'CASE WHEN s.active THEN NULL ELSE EXTRACT(EPOCH FROM (now() - s.inactive_since)) END'
+      '(CASE WHEN s.active THEN NULL ELSE EXTRACT(EPOCH FROM (now() - s.inactive_since)) END)::double precision'
     ELSE 'NULL::double precision'
   END;
 
@@ -54,6 +60,7 @@ BEGIN
     SELECT
       s.slot_name::text,
       s.active,
+      s.wal_status::text                                                    AS wal_status,
       pg_wal_lsn_diff(pg_current_wal_lsn(), s.restart_lsn)::bigint          AS retained_bytes,
       pg_wal_lsn_diff(pg_current_wal_lsn(), s.confirmed_flush_lsn)::bigint  AS flush_lag_bytes,
       %s                                                                    AS inactive_seconds,
