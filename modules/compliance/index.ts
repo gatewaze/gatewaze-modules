@@ -7,7 +7,7 @@ const complianceModule: GatewazeModule = {
   visibility: 'public',
   name: 'Compliance',
   description: 'GDPR, CCPA, and SOC 2 compliance tools — consent records, privacy requests, data breach tracking, and audit logging',
-  version: '1.0.0',
+  version: '1.0.1',
   features: [
     'compliance',
     'compliance.consent',

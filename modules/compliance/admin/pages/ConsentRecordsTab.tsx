@@ -65,6 +65,46 @@ export function ConsentRecordsTab() {
     fetchConsents();
   }, [page, consentFilter, typeFilter]);
 
+  // PostgREST caps a response at 1000 rows, so the totals must be counted
+  // server-side rather than by fetching every row and counting in the browser.
+  const fetchStats = async () => {
+    const countQuery = () =>
+      supabase.from('compliance_consent_records').select('id', { count: 'exact', head: true });
+
+    const [totalRes, activeRes, withdrawnRes] = await Promise.all([
+      countQuery(),
+      countQuery().eq('consented', true).is('withdrawn_at', null),
+      countQuery().not('withdrawn_at', 'is', null),
+    ]);
+    const countError = totalRes.error || activeRes.error || withdrawnRes.error;
+    if (countError) throw countError;
+
+    // No GROUP BY over PostgREST, so page through the type column. The types
+    // in use are open-ended (e.g. 'cookies'), so a count per known type
+    // would miss some.
+    const byType: Record<string, number> = {};
+    const chunk = 1000;
+    for (let from = 0; ; from += chunk) {
+      const { data, error } = await supabase
+        .from('compliance_consent_records')
+        .select('consent_type')
+        .order('id')
+        .range(from, from + chunk - 1);
+      if (error) throw error;
+      for (const row of data || []) {
+        byType[row.consent_type] = (byType[row.consent_type] || 0) + 1;
+      }
+      if (!data || data.length < chunk) break;
+    }
+
+    return {
+      total: totalRes.count ?? 0,
+      active: activeRes.count ?? 0,
+      withdrawn: withdrawnRes.count ?? 0,
+      byType,
+    };
+  };
+
   const fetchConsents = async () => {
     setLoading(true);
     try {
@@ -87,16 +127,11 @@ export function ConsentRecordsTab() {
         query = query.eq('consent_type', typeFilter);
       }
 
-      if (searchQuery) {
-        // Search by email through a subquery
-        const { data: customerIds } = await supabase
-          .from('people')
-          .select('id')
-          .ilike('email', `%${searchQuery}%`);
-
-        if (customerIds && customerIds.length > 0) {
-          query = query.in('person_id', customerIds.map(c => c.id));
-        }
+      const search = searchQuery.trim();
+      if (search) {
+        // Every record carries its own email (anonymous cookie consents have
+        // no person), so match on that. Escape LIKE wildcards in the input.
+        query = query.ilike('email', `%${search.replace(/[\\%_]/g, '\\$&')}%`);
       }
 
       const { data, error } = await query;
@@ -107,23 +142,8 @@ export function ConsentRecordsTab() {
       setHasMore((data || []).length === pageSize);
 
       // Calculate stats (on first page)
-      if (page === 1 && consentFilter === 'all' && typeFilter === 'all' && !searchQuery) {
-        const { data: allConsents } = await supabase
-          .from('compliance_consent_records')
-          .select('consent_type, consented, withdrawn_at');
-
-        if (allConsents) {
-          const total = allConsents.length;
-          const active = allConsents.filter(c => c.consented && !c.withdrawn_at).length;
-          const withdrawn = allConsents.filter(c => c.withdrawn_at).length;
-          const byType: Record<string, number> = {};
-
-          allConsents.forEach(c => {
-            byType[c.consent_type] = (byType[c.consent_type] || 0) + 1;
-          });
-
-          setStats({ total, active, withdrawn, byType });
-        }
+      if (page === 1 && consentFilter === 'all' && typeFilter === 'all' && !search) {
+        setStats(await fetchStats());
       }
     } catch (error) {
       console.error('Error fetching consent records:', error);
