@@ -59,7 +59,7 @@ END $$;
 
 Keys: `table`, `entry`, `owner`, `action` (`delete` / `anonymise` / `ignore`), `person`, `profile`, `registration`, `auth`, `cio`, `email`, `email_array`, `phone`, `json_email`, `parent`, `clear`, `replace`, `covers`, `retain`, `note`, `order`. See the header of migration 003 for how to choose an action.
 
-The engine fails closed. The preview stops the erasure if the person has rows in a table that links to `people`, `people_profiles` or `events_registrations` without a registry entry, or in an unregistered column that looks like an email address. `compliance_erasure_coverage()` lists every personal-looking column no entry covers; the admin API exposes it at `GET /api/modules/compliance/coverage`.
+The engine fails closed. The preview stops the erasure if the person has rows in a table that links to `people`, `people_profiles` or `events_registrations` without a registry entry, or in an unregistered column that looks like an email address. `compliance_erasure_coverage()` lists every personal-looking column no entry covers, and `compliance_registry_missing_columns()` lists registry entries that name a column this database doesn't have (usually a module whose later migrations haven't run here). The admin API returns both at `GET /api/modules/compliance/coverage`.
 
 ### Suppression
 

@@ -461,7 +461,7 @@ function RequestModal({ request: r, onClose, onChanged }: { request: PrivacyRequ
                 {plan.warnings.map((w, i) => (
                   <div key={`w${i}`} className="flex gap-2 p-2 rounded bg-yellow-50 dark:bg-yellow-900/20 text-yellow-800 dark:text-yellow-200">
                     <ExclamationTriangleIcon className="size-4 shrink-0 mt-0.5" />
-                    <span>{w.table ? <strong>{w.table}: </strong> : null}{w.detail}</span>
+                    <span>{w.table ? <strong>{w.table}{w.column ? `.${w.column}` : ''}: </strong> : null}{w.detail}</span>
                   </div>
                 ))}
                 {plan.tables.length > 0 && (
