@@ -21,6 +21,11 @@ import { deriveJoinState, hasJoinFlag } from './_lib/joinState'
  * an arbitrary email. `?join=1` triggers the request once on return from
  * sign-in. Status comes from `integrations_my_slack_invitations` (own rows only).
  *
+ * Embedded (`embedAuth` given — the portal's /embed/slack widget in an iframe
+ * on another site): the user, the Supabase client and sign-in come from the
+ * embed host instead of the portal session, sign-in is the LFID popup rather
+ * than a page redirect, and links open in a new tab. Same RPCs, same rules.
+ *
  * All hooks sit above the first return; the deps they name are declared above
  * them (see the slack portal-syntax test).
  */
@@ -37,10 +42,24 @@ interface Props {
   workspaceName: string
   workspaceUrl: string | null
   primaryColor?: string
+  /** From the portal embed host (components/embed/EmbedHost.tsx). */
+  embedAuth?: {
+    client: any
+    user: { id: string; email: string | null } | null
+    loading: boolean
+    signingIn: boolean
+    signIn: () => Promise<boolean>
+    cancelSignIn: () => void
+    notify: (name: string) => void
+  }
 }
 
-export function JoinSlackCard({ workspaceName, workspaceUrl, primaryColor }: Props) {
-  const { user, isLoading: authLoading } = useAuth()
+export function JoinSlackCard({ workspaceName, workspaceUrl, primaryColor, embedAuth }: Props) {
+  const portalAuth = useAuth()
+  const embedded = !!embedAuth
+  const user = embedded ? embedAuth.user : portalAuth.user
+  const authLoading = embedded ? embedAuth.loading : portalAuth.isLoading
+  const embedClient = embedded ? embedAuth.client : null
   const [data, setData] = useState(undefined) // undefined = loading, null = none/signed out
   const [chosenEmail, setChosenEmail] = useState('')
   const [phase, setPhase] = useState('idle') // idle | working | error
@@ -50,27 +69,36 @@ export function JoinSlackCard({ workspaceName, workspaceUrl, primaryColor }: Pro
 
   const loadStatus = useCallback(async () => {
     try {
-      const sb = getSupabaseClient()
+      const sb = embedded ? embedClient : getSupabaseClient()
+      if (!sb) throw new Error('signed out')
       const { data: res, error } = await sb.rpc('integrations_my_slack_invitations')
       if (error) throw error
       setData(res ?? { emails: [], invitations: [] })
     } catch {
       setData({ emails: [], invitations: [] })
     }
-  }, [])
+  }, [embedded, embedClient])
 
   const request = useCallback(async (email) => {
     setPhase('working')
     setErrorText('')
     try {
-      const sb = getSupabaseClient()
-      // getSession() refreshes an expired access token before the call; a tab
-      // left open past the token lifetime otherwise sends a stale JWT.
-      const { data: sess } = await sb.auth.getSession()
-      if (!sess || !sess.session) throw new Error('Your sign-in has expired — please sign in again.')
+      let sb
+      if (embedded) {
+        // The embed host signs the widget out before its token expires.
+        sb = embedClient
+        if (!sb) throw new Error('Your sign-in has expired — please sign in again.')
+      } else {
+        sb = getSupabaseClient()
+        // getSession() refreshes an expired access token before the call; a tab
+        // left open past the token lifetime otherwise sends a stale JWT.
+        const { data: sess } = await sb.auth.getSession()
+        if (!sess || !sess.session) throw new Error('Your sign-in has expired — please sign in again.')
+      }
       const { error } = await sb.rpc('integrations_request_my_slack_invitation', email ? { p_email: email } : {})
       if (error) throw error
       setPhase('idle')
+      if (embedded) embedAuth.notify('requested')
       await loadStatus()
     } catch (e) {
       // PostgREST messages are short and generic (our own RAISEs, or
@@ -79,17 +107,17 @@ export function JoinSlackCard({ workspaceName, workspaceUrl, primaryColor }: Pro
       setErrorText(msg)
       setPhase('error')
     }
-  }, [loadStatus])
+  }, [loadStatus, embedded, embedClient, embedAuth])
 
   // The sign-in round trip returns here with ?join=1. Read it once and strip it
   // so a reload does not re-request.
   useEffect(() => {
-    if (typeof window === 'undefined') return
+    if (typeof window === 'undefined' || embedded) return
     if (hasJoinFlag(window.location.search)) {
       setJoinFlag(true)
       try { window.history.replaceState(null, '', PATH) } catch { /* ignore */ }
     }
-  }, [])
+  }, [embedded])
 
   useEffect(() => {
     if (authLoading) return
@@ -109,11 +137,42 @@ export function JoinSlackCard({ workspaceName, workspaceUrl, primaryColor }: Pro
   let slotAvailable = false
   try { slotAvailable = hasPortalSlot('sign-in:providers', new Set(SIGN_IN_MODULE_IDS), new Set(SIGN_IN_FEATURES)) } catch { slotAvailable = false }
 
+  // In an iframe a plain link would try to load Slack inside the frame.
+  const linkTarget = embedded ? '_blank' : undefined
   const openSlack = workspaceUrl ? (
     <p className="pub-nl-signup-msg" style={{ marginTop: 10 }}>
-      Already in {workspaceName}? <a href={workspaceUrl} rel="noopener noreferrer">Open Slack</a>
+      Already in {workspaceName}? <a href={workspaceUrl} target={linkTarget} rel="noopener noreferrer">Open Slack</a>
     </p>
   ) : null
+
+  // ---- signed out, embedded: the LFID popup ------------------------------
+  if (embedded && !authLoading && !user) {
+    return (
+      <div className="pub-nl-card">
+        <h2 className="pub-nl-name">Get your invitation</h2>
+        <p className="pub-nl-desc">
+          Sign in with your LFID and we&apos;ll send a Slack invitation to the address on your account.
+        </p>
+        <div style={{ marginTop: 14 }}>
+          {embedAuth.signingIn ? (
+            <>
+              <p className="pub-nl-signup-msg">Finish signing in in the window that opened…</p>
+              <button type="button" className="pub-nl-unsub-btn" onClick={embedAuth.cancelSignIn}>Cancel</button>
+            </>
+          ) : (
+            <button
+              type="button"
+              className="pub-nl-signup-btn"
+              onClick={async () => { if (await embedAuth.signIn()) setJoinFlag(true) }}
+            >
+              Sign in with LFID
+            </button>
+          )}
+        </div>
+        {openSlack}
+      </div>
+    )
+  }
 
   // ---- signed out -------------------------------------------------------
   if (!authLoading && !user) {
@@ -192,7 +251,7 @@ export function JoinSlackCard({ workspaceName, workspaceUrl, primaryColor }: Pro
           <p className="pub-nl-signup-msg ok">{state.email} is already a member of {workspaceName}.</p>
           {workspaceUrl && (
             <p style={{ marginTop: 14 }}>
-              <a className="pub-nl-signup-btn" href={workspaceUrl} rel="noopener noreferrer">Open Slack</a>
+              <a className="pub-nl-signup-btn" href={workspaceUrl} target={linkTarget} rel="noopener noreferrer">Open Slack</a>
             </p>
           )}
         </>
