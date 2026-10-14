@@ -148,7 +148,9 @@ async function kick(enqueue: Enqueue | undefined, action: string, id: string, ac
   try {
     await enqueue('jobs', ERASURE_JOB, { kind: ERASURE_JOB, action, requestId: id, actor: actorLabel(actor) }, { attempts: 1 });
   } catch (e) {
-    console.warn(`[compliance] could not enqueue ${action} for ${id}; the sweep will pick it up`, e);
+    // Fixed message only: the request row says what is queued, and the
+    // sweep picks it up within a minute.
+    console.warn('[compliance] could not enqueue an erasure job; the sweep will pick it up:', (e as Error)?.message);
   }
 }
 
