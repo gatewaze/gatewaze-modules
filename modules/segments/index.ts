@@ -62,6 +62,8 @@ const segmentsModule: GatewazeModule = {
     'migrations/017_module_event_sources.sql',
     // Indexes email engagement conditions need; skipped on large tables (build CONCURRENTLY by hand).
     'migrations/018_email_engagement_indexes.sql',
+    // Geocode a place to the median of its contacts, not the mean (outliers moved centres).
+    'migrations/019_geocode_place_median.sql',
   ],
 
   publicApiScopes: [
