@@ -85,6 +85,11 @@ export default async function handleTick(_job: Job) {
   const overBudget = () => Date.now() - started > config.budgetMs;
   const result = { computed: 0, domains: 0, evaluated: 0, alerts: 0, notified: 0, stoppedEarly: false };
 
+  // One direct connection per run (when available) for the two queries that
+  // read many email_send_log rows; everything else uses the API.
+  const db = await directDb();
+  try {
+
   // 1. Measure sends.
   const { data: due, error: dueErr } = await supabase.rpc('email_reputation_due_sends', {
     p_recent_days: config.recentDays,
@@ -92,8 +97,7 @@ export default async function handleTick(_job: Job) {
     p_limit: 50,
   });
   if (dueErr) throw new Error(`[email-reputation] due_sends failed: ${dueErr.message}`);
-  const db = (due ?? []).length > 0 ? await directDb() : null;
-  try {
+  {
     for (const s of (due ?? []) as Array<{ send_kind: string; send_id: string }>) {
       if (overBudget()) { result.stoppedEarly = true; break; }
       try {
@@ -108,16 +112,24 @@ export default async function handleTick(_job: Job) {
         console.warn(`[email-reputation] compute ${s.send_kind}/${s.send_id} failed: ${(e as Error).message}`);
       }
     }
-  } finally {
-    if (db) await db.end().catch(() => {});
   }
 
   // 2. Look up MX records for recipient domains with no provider yet.
   if (!overBudget() && config.domainLookupsPerRun > 0) {
-    const { data: doms, error } = await supabase.rpc('email_reputation_unresolved_domains', {
-      p_days: config.backfillDays,
-      p_limit: config.domainLookupsPerRun,
-    });
+    let doms: Array<{ domain: string }> | null = null;
+    let error: { message: string } | null = null;
+    if (db) {
+      try {
+        doms = (await db.query('SELECT domain FROM public.email_reputation_unresolved_domains($1, $2)', [config.backfillDays, config.domainLookupsPerRun])).rows;
+      } catch (e) {
+        error = { message: (e as Error).message };
+      }
+    } else {
+      ({ data: doms, error } = await supabase.rpc('email_reputation_unresolved_domains', {
+        p_days: config.backfillDays,
+        p_limit: config.domainLookupsPerRun,
+      }));
+    }
     if (error) {
       console.warn(`[email-reputation] unresolved_domains failed: ${error.message}`);
     } else {
@@ -203,6 +215,10 @@ export default async function handleTick(_job: Job) {
         .eq('send_kind', s.send_kind).eq('send_id', s.send_id);
       result.evaluated++;
     }
+  }
+
+  } finally {
+    if (db) await db.end().catch(() => {});
   }
 
   console.log(`[email-reputation] tick ${JSON.stringify(result)} ms=${Date.now() - started}`);
