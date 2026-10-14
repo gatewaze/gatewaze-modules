@@ -1,3 +1,4 @@
+import { createSegmentService } from '@/lib/segments';
 import { applyPreheader } from '../../../newsletters/lib/preheader.js';
 import { supabase } from '@/lib/supabase';
 import type { SegmentDefinition } from '@/lib/segments';
@@ -305,7 +306,16 @@ export async function deleteBroadcast(id: string): Promise<void> {
 export async function duplicateBroadcast(id: string): Promise<string> {
   const { data, error } = await supabase.rpc('duplicate_broadcast', { p_broadcast_id: id });
   if (error) throw error;
-  return data as string;
+  const newId = data as string;
+  // The copy gets its own audience segment (migration 031) holding the same
+  // definition but none of the computed members, which the send fan-out
+  // reads. Fill them the same way saving an audience does: batched, so a
+  // 170k audience doesn't hit the statement timeout.
+  const copy = await getBroadcast(newId);
+  if (copy?.segment_id) {
+    await createSegmentService(supabase).recalculateSegment(copy.segment_id);
+  }
+  return newId;
 }
 
 /** Move a broadcast into a folder (or null to unfile it). */

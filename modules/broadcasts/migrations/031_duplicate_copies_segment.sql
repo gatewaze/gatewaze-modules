@@ -1,24 +1,36 @@
 -- ============================================================================
 -- Module: broadcasts
--- Migration: 030_duplicate_copies_segment
+-- Migration: 031_duplicate_copies_segment
 -- Description: duplicating a broadcast copied its segment_id, so the copy and
 -- the original pointed at the SAME segment row. The Audience step edits that
 -- row in place, so changing either broadcast's audience changed both.
 --
+-- Supersedes 030, which did the same but copied every membership row in one
+-- statement. On AAIF prod that was ~560k rows (one audience alone has 170k
+-- members, shared by four broadcasts) and hit the statement timeout, so 030
+-- never applied there. 030 is retired; where it did apply (small brands) this
+-- replaces its functions. The clone now copies the segment row plus only the
+-- members that recalculation cannot rebuild (manual ones), and the computed
+-- members are filled by segments_calculate_members_batch in 25k pages: by the
+-- admin straight after duplicating, and once after this migration for the
+-- broadcasts it splits.
+--
 -- A broadcast's segment belongs to that broadcast: the Audience step creates
 -- it ("<broadcast> audience") and nothing else ever assigns one. So:
 --
---   1. duplicate_broadcast now clones the segment for the copy, with its
---      memberships. The send fan-out reads segments_memberships, not the
---      definition, so a copy without them would have no recipients until
---      recalculated.
+--   1. duplicate_broadcast now clones the segment for the copy. The send
+--      fan-out reads segments_memberships, not the definition, so the copy's
+--      computed members must be recalculated before it can send; its
+--      cached_count is 0 and last_calculated_at NULL until then, so the admin
+--      shows 0 recipients rather than a stale number.
 --   2. duplicate_broadcast now checks the caller is an admin (or the service
 --      role) and is no longer executable by anon. It runs with the owner's
 --      rights and had no check of its own.
 --   3. Existing broadcasts that already share a segment are split: the
 --      earliest-created one keeps the original row, every other one gets its
 --      own clone, and its not-yet-fanned-out sends (draft / scheduled) are
---      repointed to the clone. Sends already sending or done keep the
+--      repointed to the clone. The clones' computed members are recalculated
+--      after the migration (NOTICE lists them). Sends already sending or done keep the
 --      original segment: their recipients were fixed at fan-out.
 --
 -- The clone keeps the current definition. Where both broadcasts were already
@@ -26,7 +38,7 @@
 -- recoverable; each can now be edited independently.
 -- ============================================================================
 
--- Internal helper: copy a segment and its memberships. Not callable through
+-- Internal helper: copy a segment row and its non-computed members. Not callable through
 -- PostgREST (execute revoked below); SECURITY DEFINER callers run as owner.
 CREATE OR REPLACE FUNCTION public.broadcasts_clone_segment(p_segment_id uuid, p_name text)
 RETURNS uuid
@@ -38,7 +50,7 @@ BEGIN
     created_by, cached_count, last_calculated_at, calculation_duration_ms,
     created_by_person_id, created_via)
   SELECT left(coalesce(p_name, s.name), 255), s.description, s.definition, s.type, s.status, s.account_id,
-    s.created_by, s.cached_count, s.last_calculated_at, s.calculation_duration_ms,
+    s.created_by, 0, NULL, NULL,
     s.created_by_person_id, s.created_via
   FROM public.segments s WHERE s.id = p_segment_id
   RETURNING id INTO v_new;
@@ -46,9 +58,14 @@ BEGIN
   -- Missing source segment: nothing to clone; caller keeps what it had.
   IF v_new IS NULL THEN RETURN NULL; END IF;
 
+  -- Only the members recalculation cannot rebuild: everything in a manual
+  -- segment, and hand-added rows in a computed one. These are small; the
+  -- computed members (source 'calculated') are filled in batches afterwards.
   INSERT INTO public.segments_memberships (segment_id, person_id, joined_at, last_verified_at, added_by, source)
   SELECT v_new, m.person_id, m.joined_at, m.last_verified_at, m.added_by, m.source
-  FROM public.segments_memberships m WHERE m.segment_id = p_segment_id;
+  FROM public.segments_memberships m JOIN public.segments s ON s.id = m.segment_id
+  WHERE m.segment_id = p_segment_id
+    AND (s.type = 'manual' OR coalesce(m.source, '') <> 'calculated');
 
   RETURN v_new;
 END $fn$;
