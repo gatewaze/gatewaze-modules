@@ -124,6 +124,20 @@ describe('sql generation', () => {
     );
   });
 
+  it('hard-delete tombstone keeps only the key and timestamps (erasure)', () => {
+    const t = structuredClone(base.tables[1]);
+    t.columns.push(
+      { name: 'attributes', pg_type: 'jsonb', classification: 'quasi', masking: 'full' },
+      { name: 'auth_user_id', pg_type: 'uuid', classification: 'none', masking: 'none', join_key: true },
+    );
+    const sql = generateStagingModelSql(base, t);
+    expect(sql).toContain('IFF((src."_ab_cdc_deleted_at" IS NOT NULL), NULL, src."attributes") AS "attributes"');
+    expect(sql).toMatch(/IFF\(\(src\."_ab_cdc_deleted_at" IS NOT NULL\), NULL, src\."auth_user_id"[^)]*\) AS "auth_user_id"/);
+    expect(sql).toContain('src."id"::STRING AS "id"');
+    expect(sql).not.toMatch(/IFF\([^)]*\), NULL, src\."id"/);
+    expect(sql).not.toMatch(/IFF\([^)]*\), NULL, CONVERT_TIMEZONE\('UTC', src\."updated_at"\)/);
+  });
+
   it('boolean-flag connector remains expressible (swappability)', () => {
     const sql = generateStagingModelSql(base, base.tables[1], BOOLEAN_FLAG_RAW_META);
     expect(sql).toContain('COALESCE(src."_SNOWFLAKE_DELETED", FALSE) AS "is_deleted"');

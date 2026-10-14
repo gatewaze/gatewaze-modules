@@ -166,12 +166,15 @@ export function generateStagingModelSql(m: Manifest, t: TableSpec, raw: RawMeta 
       `IFF(${tombstonePredicate}, CONVERT_TIMEZONE('UTC', src."${raw.changeTs}")::TIMESTAMP_NTZ, NULL)`;
   }
 
-  // Value expressions. On a hard-delete tombstone, NULL direct/semi identifiers
-  // AND any column derived from one (e.g. email_sha256) — otherwise an erased
-  // person stays joinable by hash. This doubles as GDPR erasure (§7.2.1, §8.3).
-  const identNames = new Set(idents.map((i) => i.name));
-  const nullOnTombstone = (c: ColumnSpec): boolean =>
-    identNames.has(c.name) || (!!c.source_column && identNames.has(c.source_column));
+  // Value expressions. A hard-delete tombstone keeps only the primary key and
+  // the row's timestamps; every other column is NULLed. A hard delete in
+  // Gatewaze is how a compliance erasure lands (§7.2.1, §8.3), so keeping
+  // quasi identifiers (attributes, company, city), pseudonymous join keys
+  // (auth_user_id, lfid) or a derived hash would leave the person readable or
+  // joinable in STAGING. `idents` (direct identifiers) is a subset of this.
+  void idents;
+  const keepOnTombstone = new Set([t.primary_key, t.updated_at, 'created_at']);
+  const nullOnTombstone = (c: ColumnSpec): boolean => !keepOnTombstone.has(c.name);
 
   const valueExprs: string[] = [];
   for (const c of [...src, ...derived]) {

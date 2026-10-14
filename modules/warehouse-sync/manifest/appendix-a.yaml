@@ -58,7 +58,10 @@ tables:
   - name: people
     primary_key: id
     updated_at: updated_at            # change-detection column for the STAGING MERGE
-    delete: { mode: soft, column: deleted_at }   # VERIFY erasure mechanism (§8.3, open Q5)
+    # Hard delete (phase-0 decision 5): Gatewaze has no deleted_at on people.
+    # A compliance erasure deletes the row, and STAGING keeps a tombstone with
+    # every direct identifier and its hash nulled (§7.2.1, §8.3).
+    delete: { mode: hard }
     columns:
       - { name: id,            pg_type: uuid,        classification: none,   masking: none, join_key: true }
       - { name: email,         pg_type: text,        classification: direct, masking: domain_only }
@@ -79,12 +82,11 @@ tables:
       - { name: attributes,    pg_type: jsonb,       classification: quasi,  masking: full }   # AUDITED (161k rows): nests DIRECT PII (email, phone, name, linkedin_url, address, postal_code, ip, coordinates) AND web-push subscription keys (web_push_auth/p256dh/endpoint) — MUST stay masked. Do not flip to none.
       - { name: created_at,    pg_type: timestamptz, classification: none,   masking: none }
       - { name: updated_at,    pg_type: timestamptz, classification: none,   masking: none }
-      - { name: deleted_at,    pg_type: timestamptz, classification: none,   masking: none }
 
   - name: person_emails
     primary_key: id
     updated_at: updated_at
-    delete: { mode: soft, column: deleted_at }
+    delete: { mode: hard }             # erased with the person; no deleted_at column
     columns:
       - { name: id,           pg_type: uuid,        classification: none,   masking: none }
       - { name: person_id,    pg_type: uuid,        classification: none,   masking: none, join_key: true }
@@ -93,7 +95,6 @@ tables:
       - { name: is_primary,   pg_type: boolean,     classification: none,   masking: none }
       - { name: created_at,   pg_type: timestamptz, classification: none,   masking: none }
       - { name: updated_at,   pg_type: timestamptz, classification: none,   masking: none }
-      - { name: deleted_at,   pg_type: timestamptz, classification: none,   masking: none }
 
   - name: people_events
     primary_key: id
