@@ -7,7 +7,7 @@ const segmentsModule: GatewazeModule = {
   visibility: 'public',
   name: 'Segments',
   description: 'Create and manage audience segments for targeted communications and analytics',
-  version: '1.1.0',
+  version: '1.1.1',
   features: [
     'segments',
     'segments.create',
@@ -60,6 +60,8 @@ const segmentsModule: GatewazeModule = {
     // 017 discount_claimed / competition_entered / offer_* read their modules'
     // own tables instead of the people_events stream.
     'migrations/017_module_event_sources.sql',
+    // Indexes email engagement conditions need; skipped on large tables (build CONCURRENTLY by hand).
+    'migrations/018_email_engagement_indexes.sql',
   ],
 
   publicApiScopes: [
