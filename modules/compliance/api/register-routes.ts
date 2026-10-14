@@ -113,10 +113,16 @@ export async function registerRoutes(app: Express, ctx?: RegisterCtx): Promise<v
   });
 
   // Personal-looking columns no registry entry covers, for the admin page.
+  // Registry health for maintainers: personal-looking columns nothing covers,
+  // and registry entries naming columns this database doesn't have.
   r.get('/coverage', async (_req, res) => {
-    const { data, error } = await supabase.rpc('compliance_erasure_coverage');
+    const [unregistered, missing] = await Promise.all([
+      supabase.rpc('compliance_erasure_coverage'),
+      supabase.rpc('compliance_registry_missing_columns'),
+    ]);
+    const error = unregistered.error ?? missing.error;
     if (error) return res.status(500).json({ error: { code: 'QUERY_ERROR', message: error.message } });
-    res.json({ data: data ?? [] });
+    res.json({ data: { unregistered_columns: unregistered.data ?? [], missing_registry_columns: missing.data ?? [] } });
   });
 
   app.use('/api/modules/compliance', r);
