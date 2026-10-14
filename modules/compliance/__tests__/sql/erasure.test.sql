@@ -68,6 +68,8 @@ BEGIN
 
   INSERT INTO public.compliance_privacy_requests (subject_email, subject_emails, request_type, requester_email, submitted_via)
   VALUES ('erasure-test@example.invalid', ARRAY['erasure-test@example.invalid'], 'data_deletion', 'privacy@example.invalid', 'admin');
+  INSERT INTO public.compliance_privacy_requests (subject_email, subject_emails, request_type, requester_email, notes, submitted_via)
+  VALUES ('Erasure-Alias@example.invalid', ARRAY['erasure-alias@example.invalid'], 'data_export', 'erasure-alias@example.invalid', 'asked by phone', 'admin');
 END $$;
 
 -- 1. Identify finds the alias and the profile.
@@ -110,6 +112,14 @@ DECLARE
   v_result jsonb;
   v_n      int;
 BEGIN
+  -- Executing without the worker's claim is refused.
+  BEGIN
+    PERFORM public.compliance_erasure_execute(v_req, 'test');
+    RAISE EXCEPTION 'unclaimed execute should have been refused';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM NOT LIKE '%has not been claimed%' THEN RAISE; END IF;
+  END;
+  UPDATE public.compliance_privacy_requests SET execute_status = 'running' WHERE id = v_req;
   v_result := public.compliance_erasure_execute(v_req, 'test');
   RAISE NOTICE 'erased: %', v_result -> 'database';
 
@@ -133,6 +143,10 @@ BEGIN
   IF NOT public.compliance_is_suppressed('ERASURE-ALIAS@example.invalid ') THEN
     RAISE EXCEPTION 'alias email was not suppressed';
   END IF;
+
+  SELECT count(*) INTO v_n FROM public.compliance_privacy_requests
+   WHERE request_type = 'data_export' AND (subject_email NOT LIKE 'sha256:%' OR requester_email NOT LIKE 'sha256:%' OR notes IS NOT NULL);
+  IF v_n <> 0 THEN RAISE EXCEPTION 'earlier request for the same person kept plain identifiers'; END IF;
 
   IF (SELECT execute_status FROM public.compliance_privacy_requests WHERE id = v_req) <> 'erased' THEN
     RAISE EXCEPTION 'request not marked erased';

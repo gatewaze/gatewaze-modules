@@ -53,6 +53,7 @@ ALTER TABLE public.compliance_privacy_requests
   ADD COLUMN IF NOT EXISTS report                jsonb,
   ADD COLUMN IF NOT EXISTS processors            jsonb NOT NULL DEFAULT '[]'::jsonb,
   ADD COLUMN IF NOT EXISTS checklist             jsonb NOT NULL DEFAULT '[]'::jsonb,
+  ADD COLUMN IF NOT EXISTS processors_ran_at     timestamptz,
   ADD COLUMN IF NOT EXISTS redacted_at           timestamptz;
 
 DO $$
@@ -73,6 +74,14 @@ BEGIN
       CHECK (submitted_via IS NULL OR submitted_via IN ('admin', 'api', 'mcp'));
   END IF;
 END $$;
+
+-- Writes to requests go through the compliance API and worker (service role)
+-- only. The 001 policies let any is_admin() user, which includes editors,
+-- write the table directly, e.g. set execute_status = 'queued' for the sweep
+-- to pick up. Admins still read it through the SELECT policy.
+DROP POLICY IF EXISTS "compliance_privacy_insert" ON public.compliance_privacy_requests;
+DROP POLICY IF EXISTS "compliance_privacy_update" ON public.compliance_privacy_requests;
+DROP POLICY IF EXISTS "compliance_privacy_delete" ON public.compliance_privacy_requests;
 
 CREATE INDEX IF NOT EXISTS idx_compliance_privacy_requests_email_sha256
   ON public.compliance_privacy_requests USING gin (subject_email_sha256);
@@ -370,20 +379,20 @@ BEGIN
     FOREACH v_col IN ARRAY p_entry.email_cols LOOP
       v_type := public.compliance__col_type(v_tbl, v_col);
       IF v_type IN ('text', 'character varying', 'citext') THEN
-        v_parts := v_parts || format('lower(%I) = ANY(%L::text[])', v_col, v_emails);
+        v_parts := v_parts || format('lower(btrim(%I)) = ANY(%L::text[])', v_col, v_emails);
       END IF;
     END LOOP;
     FOREACH v_col IN ARRAY p_entry.email_array_cols LOOP
       v_type := public.compliance__col_type(v_tbl, v_col);
       IF v_type IN ('text[]', 'character varying[]') THEN
         v_parts := v_parts || format(
-          'EXISTS (SELECT 1 FROM unnest(%I) AS x(v) WHERE lower(x.v) = ANY(%L::text[]))', v_col, v_emails);
+          'EXISTS (SELECT 1 FROM unnest(%I) AS x(v) WHERE lower(btrim(x.v)) = ANY(%L::text[]))', v_col, v_emails);
       END IF;
     END LOOP;
     FOR v_j IN SELECT * FROM jsonb_array_elements(p_entry.json_email) LOOP
       v_type := public.compliance__col_type(v_tbl, v_j ->> 'column');
       IF v_type IN ('jsonb', 'json') THEN
-        v_parts := v_parts || format('lower(%I::jsonb #>> %L::text[]) = ANY(%L::text[])',
+        v_parts := v_parts || format('lower(btrim(%I::jsonb #>> %L::text[])) = ANY(%L::text[])',
           v_j ->> 'column', public.compliance__jtext(v_j -> 'path'), v_emails);
       END IF;
     END LOOP;
@@ -676,6 +685,18 @@ BEGIN
     SELECT * FROM public.compliance_personal_data_registry
     ORDER BY sort_order, table_name, entry
   LOOP
+    -- A declared column that doesn't exist matches nothing, so a typo would
+    -- silently skip rows. Flag it.
+    IF to_regclass('public.' || quote_ident(e.table_name)) IS NOT NULL THEN
+      FOREACH v_col IN ARRAY (e.person_cols || e.profile_cols || e.registration_cols || e.auth_cols ||
+                              e.cio_cols || e.email_cols || e.email_array_cols || e.phone_cols) LOOP
+        IF public.compliance__col_type(e.table_name, v_col) IS NULL THEN
+          v_warnings := v_warnings || jsonb_build_object(
+            'kind', 'declared_column_missing', 'table', e.table_name, 'entry', e.entry, 'column', v_col,
+            'detail', 'The registry names a column this table does not have. Fix the registration.');
+        END IF;
+      END LOOP;
+    END IF;
     v_pred := public.compliance__erasure_predicate(e, p_ident);
     IF v_pred IS NULL THEN
       CONTINUE;
@@ -761,10 +782,10 @@ BEGIN
   IF cardinality(v_emails) > 0 THEN
     FOR c IN SELECT * FROM public.compliance_erasure_coverage() cov WHERE cov.is_email LOOP
       IF c.data_type IN ('text[]', 'character varying[]') THEN
-        EXECUTE format('SELECT count(*) FROM public.%I WHERE EXISTS (SELECT 1 FROM unnest(%I) x(v) WHERE lower(x.v) = ANY(%L::text[]))',
+        EXECUTE format('SELECT count(*) FROM public.%I WHERE EXISTS (SELECT 1 FROM unnest(%I) x(v) WHERE lower(btrim(x.v)) = ANY(%L::text[]))',
                        c.table_name, c.column_name, v_emails) INTO v_count;
       ELSE
-        EXECUTE format('SELECT count(*) FROM public.%I WHERE lower(%I) = ANY(%L::text[])',
+        EXECUTE format('SELECT count(*) FROM public.%I WHERE lower(btrim(%I)) = ANY(%L::text[])',
                        c.table_name, c.column_name, v_emails) INTO v_count;
       END IF;
       IF v_count > 0 THEN
@@ -849,6 +870,14 @@ BEGIN
   END IF;
   IF r.executed_at IS NOT NULL OR r.status IN ('completed', 'rejected') THEN
     RAISE EXCEPTION 'privacy request % has already been carried out or closed', p_request_id;
+  END IF;
+  -- The API checks these too; enforcing them here means nothing that can
+  -- reach the database directly can skip the preview or the claim.
+  IF r.execute_status <> 'running' THEN
+    RAISE EXCEPTION 'privacy request % has not been claimed for erasure (execute_status=%)', p_request_id, r.execute_status;
+  END IF;
+  IF r.plan_status <> 'ready' OR r.plan_built_at IS NULL OR r.plan_built_at < now() - interval '24 hours' THEN
+    RAISE EXCEPTION 'privacy request % needs a preview from the last 24 hours', p_request_id;
   END IF;
 
   -- Rebuild from scratch: data may have changed since the preview.
@@ -937,7 +966,28 @@ BEGIN
     END IF;
   END LOOP;
 
-  -- 4. Suppress every address so nothing can re-subscribe or email them.
+  -- 4. Earlier or parallel requests about the same person keep only hashes.
+  --    This request keeps its addresses until it completes (the processors
+  --    need them), then compliance_privacy_request_redact clears them.
+  UPDATE public.compliance_privacy_requests o
+     SET subject_email_sha256 = ARRAY(SELECT DISTINCT public.compliance_email_sha256(x)
+                                      FROM unnest(coalesce(o.subject_emails, ARRAY[o.subject_email::text])) x),
+         subject_email = 'sha256:' || public.compliance_email_sha256(o.subject_email),
+         requester_email = CASE WHEN lower(btrim(o.requester_email)) IN (SELECT jsonb_array_elements_text(v_ident -> 'emails'))
+                                THEN 'sha256:' || public.compliance_email_sha256(o.requester_email)
+                                ELSE o.requester_email END,
+         subject_emails = NULL,
+         subject_person_id = NULL,
+         notes = NULL,
+         identifiers = NULL,
+         redacted_at = coalesce(o.redacted_at, now())
+   WHERE o.id <> p_request_id
+     AND o.redacted_at IS NULL
+     AND (lower(btrim(o.subject_email)) IN (SELECT jsonb_array_elements_text(v_ident -> 'emails'))
+          OR EXISTS (SELECT 1 FROM unnest(o.subject_emails) x
+                     WHERE lower(btrim(x)) IN (SELECT jsonb_array_elements_text(v_ident -> 'emails'))));
+
+  -- 5. Suppress every address so nothing can re-subscribe or email them.
   INSERT INTO public.compliance_suppressions (email_sha256, scope, request_id)
   SELECT DISTINCT public.compliance_email_sha256(x), 'all', p_request_id
   FROM jsonb_array_elements_text(v_ident -> 'emails') AS x
@@ -978,8 +1028,13 @@ BEGIN
            SELECT DISTINCT public.compliance_email_sha256(x)
            FROM unnest(coalesce(subject_emails, ARRAY[subject_email::text])) x)),
          subject_email = 'sha256:' || public.compliance_email_sha256(subject_email),
+         requester_email = CASE WHEN lower(btrim(requester_email)) = ANY(
+                                  SELECT lower(btrim(x)) FROM unnest(coalesce(subject_emails, ARRAY[subject_email::text])) x)
+                                THEN 'sha256:' || public.compliance_email_sha256(requester_email)
+                                ELSE requester_email END,
          subject_emails = NULL,
          subject_person_id = NULL,
+         notes = NULL,
          identifiers = CASE WHEN identifiers IS NULL THEN NULL ELSE jsonb_build_object(
            'emails', jsonb_array_length(coalesce(identifiers -> 'emails', '[]')),
            'people', jsonb_array_length(coalesce(identifiers -> 'person_ids', '[]')),

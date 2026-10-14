@@ -401,10 +401,7 @@ function RequestModal({ request: r, onClose, onChanged }: { request: PrivacyRequ
     URL.revokeObjectURL(url);
   });
 
-  const setStatus = (status: Status) => run(async () => {
-    const { error: e } = await supabase.from('compliance_privacy_requests').update({ status }).eq('id', r.id);
-    if (e) throw e;
-  });
+  const setStatus = (status: Status) => run(() => apiFetch(`/privacy-requests/${r.id}/status`, { method: 'POST', body: JSON.stringify({ status }) }));
 
   const identifiedEmails = Array.isArray(r.identifiers?.emails) ? r.identifiers!.emails as string[] : [];
 
@@ -419,6 +416,12 @@ function RequestModal({ request: r, onClose, onChanged }: { request: PrivacyRequ
         <div><div className="text-xs uppercase text-gray-500">Filed by</div>{r.submitted_by ?? '-'}</div>
       </div>
       {r.notes && <p className="text-sm whitespace-pre-wrap">{r.notes}</p>}
+
+      {isErasure && r.execute_status === 'none' && r.status === 'pending' && (
+        <div className="flex gap-2">
+          <Button variant="outline" disabled={busy} onClick={() => setStatus('rejected')}>Reject request</Button>
+        </div>
+      )}
 
       {!isErasure && r.status !== 'completed' && r.status !== 'rejected' && (
         <div className="flex gap-2">

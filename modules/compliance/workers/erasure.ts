@@ -51,8 +51,14 @@ function supabaseClient() {
   });
 }
 
+const UPDATABLE = new Set([
+  'plan_status', 'plan_error', 'execute_status', 'error_message', 'processors', 'checklist',
+  'processors_ran_at', 'status', 'processing_completed_at',
+]);
+
 async function update(client, id, fields) {
   const keys = Object.keys(fields);
+  for (const k of keys) if (!UPDATABLE.has(k)) throw new Error(`compliance:erasure: refusing to update column ${k}`);
   const sets = keys.map((k, i) => `${k} = $${i + 2}`).join(', ');
   await client.query(`UPDATE public.compliance_privacy_requests SET ${sets} WHERE id = $1`,
     [id, ...keys.map((k) => (fields[k] !== null && typeof fields[k] === 'object' ? JSON.stringify(fields[k]) : fields[k]))]);
@@ -131,12 +137,15 @@ async function processorsStep(client, id, log) {
   const fresh = buildChecklist(row.plan, ids, processors);
   // Keep ticks on items that already existed.
   const checklist = fresh.map((item) => existing.find((e) => e.id === item.id) ?? item);
-  await update(client, id, { processors, checklist });
+  await update(client, id, { processors, checklist, processors_ran_at: new Date().toISOString() });
 }
 
 async function finalize(client, id, log) {
   const row = await load(client, id);
   if (!row || row.redacted_at || row.execute_status !== 'erased') return;
+  // Never complete (and so redact the identifiers) before the outside
+  // services and auth deletion have run at least once.
+  if (!row.processors_ran_at) return;
   const processors = Array.isArray(row.processors) ? row.processors : [];
   const checklist = Array.isArray(row.checklist) ? row.checklist : [];
   if (!isComplete(processors, checklist)) {
@@ -189,7 +198,7 @@ async function sweep(client, log) {
   await client.query(
     "UPDATE public.compliance_privacy_requests SET plan_status = 'failed', plan_error = 'The worker stopped while building the preview. Run it again.' WHERE plan_status = 'running' AND updated_at < now() - interval '30 minutes'");
   const { rows } = await client.query(
-    `SELECT id, plan_status, execute_status FROM public.compliance_privacy_requests
+    `SELECT id, plan_status, execute_status, processors_ran_at FROM public.compliance_privacy_requests
       WHERE plan_status = 'queued' OR execute_status = 'queued'
          OR (execute_status = 'erased' AND redacted_at IS NULL)
       ORDER BY updated_at LIMIT 20`);
@@ -197,6 +206,7 @@ async function sweep(client, log) {
     try {
       if (r.execute_status === 'queued') await execute(client, r.id, 'sweep', log);
       else if (r.plan_status === 'queued') await preview(client, r.id, 'sweep', log);
+      else if (!r.processors_ran_at) { await processorsStep(client, r.id, log); await finalize(client, r.id, log); }
       else await finalize(client, r.id, log);
     } catch (e) {
       log.warn?.(`[compliance:erasure] sweep step failed for ${r.id}: ${e.message}`);

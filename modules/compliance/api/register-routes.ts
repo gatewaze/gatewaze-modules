@@ -21,7 +21,7 @@ import { requireJwt } from '../lib/require-jwt.js';
 import { clientIp, rateLimit } from '../lib/rate-limit.js';
 import {
   PrivacyError, parseCreateInput, createRequest, getRequest, queuePreview, queueExecute,
-  queueProcessorRetry, setChecklistItem, reportMarkdown,
+  queueProcessorRetry, setChecklistItem, setManualStatus, reportMarkdown,
 } from '../lib/privacy.js';
 
 interface RegisterCtx {
@@ -35,7 +35,14 @@ function sendError(res, e) {
 }
 
 export async function registerRoutes(app: Express, ctx?: RegisterCtx): Promise<void> {
-  const supabase = createClient(process.env.SUPABASE_URL ?? '', process.env.SUPABASE_SERVICE_ROLE_KEY ?? '', {
+  if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+    // Without the service role nothing here can work; answer 503 rather than
+    // failing at registration.
+    app.use('/api/modules/compliance', (_req, res) => res.status(503).json({ error: { code: 'UNAVAILABLE', message: 'compliance API is not configured' } }));
+    console.warn('[compliance] SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY not set; admin routes disabled');
+    return;
+  }
+  const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY, {
     auth: { autoRefreshToken: false, persistSession: false },
   });
   const enqueue = ctx?.enqueueJob;
@@ -88,6 +95,10 @@ export async function registerRoutes(app: Express, ctx?: RegisterCtx): Promise<v
     try {
       res.status(202).json({ data: await queueExecute(supabase, enqueue, req.params.id, req.body?.confirm_email, req.complianceActor) });
     } catch (e) { sendError(res, e); }
+  });
+
+  r.post('/privacy-requests/:id/status', async (req, res) => {
+    try { res.json({ data: await setManualStatus(supabase, req.params.id, req.body?.status) }); } catch (e) { sendError(res, e); }
   });
 
   r.post('/privacy-requests/:id/retry-processors', async (req, res) => {

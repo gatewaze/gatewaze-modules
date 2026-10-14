@@ -352,6 +352,20 @@ async function updateRowsByIds(deps: EngineDeps, table: string, ids: string[], p
   }
 }
 
+let suppressionTableSeen = false;
+
+/** For tests. */
+export function resetSuppressionState(): void {
+  suppressionTableSeen = false;
+}
+
+/** True when the compliance module is installed, or when we can't tell. */
+async function complianceInstalled(deps: EngineDeps): Promise<boolean> {
+  const { data, error } = await deps.supabase.from('installed_modules').select('id').eq('id', 'compliance').maybeSingle();
+  if (error) return true;
+  return !!data;
+}
+
 /** sha256 of the lowercased, trimmed address; matches compliance_email_sha256(). */
 export function suppressionHash(email: string): string {
   return createHash('sha256').update(email.trim().toLowerCase(), 'utf8').digest('hex');
@@ -372,10 +386,17 @@ export async function splitSuppressed(deps: EngineDeps, rows: Recipient[]): Prom
   for (let i = 0; i < hashes.length; i += 100) {
     const { data, error } = await deps.supabase.from('compliance_suppressions').select('email_sha256').in('email_sha256', hashes.slice(i, i + 100));
     if (error) {
-      const missing = error.code === '42P01' || error.code === 'PGRST205' || /does not exist|schema cache/i.test(error.message ?? '');
-      if (missing) return { allowed: rows, suppressed: [] };
+      // "No such table" is only safe when the compliance module really isn't
+      // installed. PostgREST also reports a missing table while it reloads
+      // its schema cache, so confirm before sending, and never trust it once
+      // this process has seen the table.
+      const looksMissing = error.code === '42P01' || error.code === 'PGRST205';
+      if (looksMissing && !suppressionTableSeen && !(await complianceInstalled(deps))) {
+        return { allowed: rows, suppressed: [] };
+      }
       return { allowed: [], suppressed: [], error };
     }
+    suppressionTableSeen = true;
     for (const d of (data ?? []) as Array<{ email_sha256: string }>) hit.add(d.email_sha256);
   }
   const allowed: Recipient[] = [];

@@ -66,7 +66,8 @@ export function normaliseEmails(input: unknown): string[] {
     const e = v.trim().toLowerCase();
     if (!e) continue;
     if (e.length > 320 || !EMAIL_RE.test(e)) {
-      throw new PrivacyError(400, 'VALIDATION_ERROR', `not a valid email address: ${e.slice(0, 80)}`);
+      // Don't echo the input: it is usually a typo of a real address.
+      throw new PrivacyError(400, 'VALIDATION_ERROR', 'one of the email addresses is not valid');
     }
     out.add(e);
   }
@@ -135,7 +136,7 @@ const COLUMNS =
   'id, request_type, status, subject_email, subject_emails, subject_email_sha256, source, notes, ' +
   'requested_at, due_at, submitted_via, submitted_by, requester_email, plan, plan_status, plan_error, ' +
   'plan_built_at, previewed_by, execute_status, executed_by, executed_at, report, processors, checklist, ' +
-  'identifiers, error_message, processing_completed_at, redacted_at, created_at, updated_at';
+  'identifiers, error_message, processing_completed_at, processors_ran_at, redacted_at, created_at, updated_at';
 
 /**
  * Wake the worker. The request row is the source of truth (plan_status /
@@ -242,6 +243,11 @@ export async function queueExecute(supabase: Supabase, enqueue: Enqueue | undefi
   if ((row.plan.blockers ?? []).length > 0) {
     throw new PrivacyError(409, 'BLOCKED', 'the preview has blockers; resolve them and preview again');
   }
+  // Matching more than one person record needs a human to check they are
+  // the same person, so only an admin, looking at the addresses, can go on.
+  if (actor.via !== 'admin' && (row.plan.warnings ?? []).some((w: { kind?: string }) => w.kind === 'multiple_people')) {
+    throw new PrivacyError(409, 'NEEDS_ADMIN_REVIEW', 'the preview matched more than one person record; an admin must review and run this erasure');
+  }
   const { data: claimed, error } = await supabase
     .from('compliance_privacy_requests')
     .update({ execute_status: 'queued', error_message: null, executed_by: actorLabel(actor) })
@@ -253,6 +259,25 @@ export async function queueExecute(supabase: Supabase, enqueue: Enqueue | undefi
     throw new PrivacyError(409, 'IN_PROGRESS', 'an erasure for this request is already queued or running');
   }
   await kick(enqueue, 'execute', id, actor);
+  return getRequest(supabase, id);
+}
+
+/** Status changes for request types the engine doesn't carry out (export, correction, ...). */
+export async function setManualStatus(supabase: Supabase, id: string, status: unknown) {
+  const allowed = ['pending', 'in_progress', 'completed', 'rejected'];
+  if (typeof status !== 'string' || !allowed.includes(status)) {
+    throw new PrivacyError(400, 'VALIDATION_ERROR', `status must be one of ${allowed.join(', ')}`);
+  }
+  const row = await getRequest(supabase, id);
+  if (row.request_type === 'data_deletion' && status !== 'rejected') {
+    throw new PrivacyError(409, 'UNSUPPORTED', 'erasure requests move through preview and erase; they can only be rejected by hand');
+  }
+  if (row.executed_at) throw new PrivacyError(409, 'CLOSED', 'this request has already been erased');
+  const fields: Record<string, unknown> = { status };
+  if (status === 'completed') fields.processing_completed_at = new Date().toISOString();
+  if (status === 'in_progress') fields.processing_started_at = new Date().toISOString();
+  const { error } = await supabase.from('compliance_privacy_requests').update(fields).eq('id', id);
+  if (error) throw new PrivacyError(500, 'QUERY_ERROR', error.message);
   return getRequest(supabase, id);
 }
 
@@ -307,10 +332,9 @@ export function publicView(row: Record<string, any>) {
     due_at: row.due_at,
     source: row.source,
     submitted_via: row.submitted_via,
-    submitted_by: row.submitted_by,
     preview: {
       status: row.plan_status,
-      error: row.plan_error,
+      error: row.plan_status === 'failed' ? 'The preview failed. An admin can see the details.' : null,
       built_at: row.plan_built_at,
       identifiers: counts,
       summary: row.plan?.summary ?? null,
@@ -321,8 +345,8 @@ export function publicView(row: Record<string, any>) {
     erasure: {
       status: row.execute_status,
       executed_at: row.executed_at,
-      executed_by: row.executed_by,
-      error: row.error_message,
+      // Raw database errors can quote key values; admins see them in the UI.
+      error: row.execute_status === 'failed' ? 'The erasure failed and was rolled back. An admin can see the details.' : null,
     },
     processors: row.processors ?? [],
     checklist: row.checklist ?? [],
@@ -343,7 +367,7 @@ export function reportMarkdown(row: Record<string, any>): string {
   lines.push(`- Received: ${row.requested_at}`);
   if (row.due_at) lines.push(`- Due: ${row.due_at}`);
   lines.push(`- Status: ${row.status}`);
-  if (row.executed_at) lines.push(`- Database erasure: ${row.executed_at} by ${row.executed_by}`);
+  if (row.executed_at) lines.push(`- Database erasure: ${row.executed_at}`);
   if (row.processing_completed_at) lines.push(`- Completed: ${row.processing_completed_at}`);
   lines.push('');
 
@@ -372,7 +396,7 @@ export function reportMarkdown(row: Record<string, any>): string {
   }
 
   lines.push('## What was kept, and why', '');
-  lines.push('- A one-way hash (sha256) of each erased email address, so the address can never be subscribed or emailed again. The hash cannot be turned back into the address.');
+  lines.push('- A sha256 hash of each erased email address, with no other data, used only to stop the address being subscribed or emailed again. The address itself is not stored.');
   lines.push('- This request record, with the addresses replaced by their hashes, as the record that the request was handled (GDPR Art. 5(2)).');
   for (const t of retained) {
     lines.push(`- ${t.table}: ${t.retain!.reason}. Basis: ${t.retain!.basis}. Period: ${t.retain!.period}`);

@@ -121,6 +121,11 @@ describe('queueExecute', () => {
     expect(claim?.filters).toContainEqual(['in', 'execute_status', ['none', 'failed']]);
     expect(jobs).toHaveLength(1);
   });
+  it('leaves a preview that matched several people to an admin', async () => {
+    const row = readyRow({ plan: { tables: [], blockers: [], warnings: [{ kind: 'multiple_people' }] } });
+    await expect(queueExecute(fakeSupabase(row), undefined, ID, 'person@example.com', actor)).rejects.toMatchObject({ code: 'NEEDS_ADMIN_REVIEW' });
+    await expect(queueExecute(fakeSupabase(row), undefined, ID, 'person@example.com', { via: 'admin', label: 'u' })).resolves.toBeTruthy();
+  });
   it('still queues when the host has no job queue (the sweep picks it up)', async () => {
     const sb = fakeSupabase(readyRow());
     await expect(queueExecute(sb, undefined, ID, 'person@example.com', actor)).resolves.toBeTruthy();
@@ -148,6 +153,15 @@ describe('publicView', () => {
     expect(JSON.stringify(view)).not.toContain('alias@example.com');
     expect(view.preview.tables).toEqual([{ table: 'people', action: 'delete', rows: 1, retain: null }]);
   });
+  it('does not pass raw database errors or actor ids to API callers', () => {
+    const view = publicView(readyRow({ execute_status: 'failed', error_message: 'Key (email)=(x@y.com) violates', submitted_by: 'api:key (id)', executed_by: 'mcp:p via key' }));
+    expect(JSON.stringify(view)).not.toContain('x@y.com');
+    expect(JSON.stringify(view)).not.toContain('api:key');
+  });
+  it('does not echo an invalid address in the error', () => {
+    expect(() => normaliseEmails(['typo@exampl'])).toThrow(/not valid/);
+    try { normaliseEmails(['typo@exampl']); } catch (e) { expect((e as Error).message).not.toContain('typo'); }
+  });
   it('hides the addresses once redacted', () => {
     expect(publicView(readyRow({ redacted_at: new Date().toISOString() })).emails).toBeNull();
   });
@@ -163,7 +177,7 @@ describe('reportMarkdown', () => {
     }));
     expect(md).toContain('| people | deleted | 1 |');
     expect(md).toContain('payments_stripe_customers: Payment records. Basis: Art. 17(3)(b). Period: 7 years');
-    expect(md).toContain('one-way hash');
+    expect(md).toContain('sha256 hash of each erased email address');
   });
 });
 
