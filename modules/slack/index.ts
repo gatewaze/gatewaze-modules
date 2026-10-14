@@ -7,7 +7,7 @@ const slackIntegrationModule: GatewazeModule = {
   visibility: 'public',
   name: 'Slack',
   description: 'Send notifications, manage channels, and automate workflows via Slack',
-  version: '1.3.2',
+  version: '1.4.0',
   features: [
     'slack',
     'slack.notifications',
@@ -56,6 +56,17 @@ const slackIntegrationModule: GatewazeModule = {
   },
   portalRoutes: [
     { path: '/slack', component: () => import('./portal/pages/index') },
+  ],
+
+  // The "Join our Slack" card as an embeddable widget: <portal>/embed/slack,
+  // for an iframe on another site (the portal's embed host supplies popup
+  // LFID sign-in). Framing is allowed only for EMBED_FRAME_ANCESTORS.
+  portalSlots: [
+    {
+      slotName: 'embed:slack',
+      component: () => import('./portal/embeds/SlackEmbed'),
+      requiredFeature: 'slack',
+    },
   ],
 
   // Injects a "Slack" section into the people-detail dashboard: send an invite to
