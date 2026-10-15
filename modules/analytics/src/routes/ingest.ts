@@ -288,7 +288,9 @@ export function createIngestRoutes(deps: IngestRoutesDeps) {
   // client IP + UA (so umami's click sessions get correct geo/device) and
   // passes the 307 Location back without following it. Rate-limited per IP
   // with the same budget as collect.
-  const SLUG_RE = /^[A-Za-z0-9._~-]{1,100}$/;
+  // `&+()[]` occur in links migrated from Short.io; the slug is
+  // percent-encoded before it reaches umami.
+  const SLUG_RE = /^[A-Za-z0-9._~&+()[\]-]{1,100}$/;
 
   async function shortLinkRedirect(req: Request, res: Response): Promise<void> {
     const slug = req.params['slug'] ?? '';
