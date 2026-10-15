@@ -7,7 +7,7 @@ const segmentsModule: GatewazeModule = {
   visibility: 'public',
   name: 'Segments',
   description: 'Create and manage audience segments for targeted communications and analytics',
-  version: '1.1.1',
+  version: '1.1.2',
   features: [
     'segments',
     'segments.create',
@@ -64,6 +64,8 @@ const segmentsModule: GatewazeModule = {
     'migrations/018_email_engagement_indexes.sql',
     // Geocode a place to the median of its contacts, not the mean (outliers moved centres).
     'migrations/019_geocode_place_median.sql',
+// Suppression lists: uploaded hashed exclusions, usable as an audience condition.
+'migrations/020_suppression_lists.sql',
   ],
 
   publicApiScopes: [
@@ -132,6 +134,7 @@ const segmentsModule: GatewazeModule = {
   adminRoutes: [
     { path: 'segments', component: () => import('./admin/pages/index'), requiredFeature: 'segments', guard: 'none' },
     { path: 'segments/create', component: () => import('./admin/pages/create'), requiredFeature: 'segments', guard: 'none' },
+    { path: 'segments/suppression-lists', component: () => import('./admin/pages/suppression'), requiredFeature: 'segments', guard: 'none' },
     { path: 'segments/:id', component: () => import('./admin/pages/[id]/index'), requiredFeature: 'segments', guard: 'none' },
     { path: 'segments/:id/edit', component: () => import('./admin/pages/[id]/index'), requiredFeature: 'segments', guard: 'none' },
   ],
