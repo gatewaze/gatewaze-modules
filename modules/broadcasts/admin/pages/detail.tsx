@@ -259,6 +259,10 @@ function AudienceStep({ b, editable, setHeaderActions, onSaved }: { b: Broadcast
   const [definition, setDefinition] = useState<SegmentDefinition>(createEmptySegmentDefinition());
   const [hasDefinition, setHasDefinition] = useState(false);
   const [loadedSeg, setLoadedSeg] = useState(false);
+  // A fixed (manual) segment is a list of people, not criteria: it is shown
+  // read-only, and replacing it creates a new segment rather than editing it.
+  const [fixed, setFixed] = useState<{ name: string; description: string | null; count: number } | null>(null);
+  const [segmentIsFixed, setSegmentIsFixed] = useState(false);
   const [saving, setSaving] = useState(false);
   const [suggestedName, setSuggestedName] = useState<string>('');
   const [count, setCount] = useState<number | null>(null);
@@ -272,7 +276,20 @@ function AudienceStep({ b, editable, setHeaderActions, onSaved }: { b: Broadcast
   useEffect(() => {
     if (!b.segment_id) { setLoadedSeg(true); return; }
     createSegmentService(supabase).getSegment(b.segment_id)
-      .then((seg) => { if (seg?.definition) { setDefinition(seg.definition); setHasDefinition(true); } })
+      .then((seg) => {
+        if (!seg) return;
+        if (seg.type === 'manual') {
+          setSegmentIsFixed(true);
+          setFixed({ name: seg.name, description: seg.description ?? null, count: seg.cached_count ?? 0 });
+          return;
+        }
+        // Only a definition with a conditions array can drive the builder; any
+        // other shape would crash it, so it is treated as no criteria yet.
+        if (seg.definition && Array.isArray((seg.definition as { conditions?: unknown }).conditions)) {
+          setDefinition(seg.definition);
+          setHasDefinition(true);
+        }
+      })
       .catch(() => {})
       .finally(() => setLoadedSeg(true));
   }, [b.segment_id]);
@@ -319,7 +336,8 @@ function AudienceStep({ b, editable, setHeaderActions, onSaved }: { b: Broadcast
     try {
       const svc = createSegmentService(supabase);
       const name = (suggestedName || `${b.name} audience`).slice(0, 120);
-      let segmentId = b.segment_id;
+      // Never overwrite a fixed list with criteria: give the broadcast a new segment.
+      let segmentId = segmentIsFixed ? null : b.segment_id;
       if (segmentId) {
         await svc.updateSegment(segmentId, { definition });
         await svc.recalculateSegment(segmentId).catch(() => {});
@@ -340,14 +358,42 @@ function AudienceStep({ b, editable, setHeaderActions, onSaved }: { b: Broadcast
   // Register the top-right header Save action (count lives in the panel status bar).
   useEffect(() => {
     if (!editable) { setHeaderActions(null); return () => setHeaderActions(null); }
+    if (fixed) {
+      setHeaderActions(<Button variant="solid" onClick={() => onSaved(b)}>Continue</Button>);
+      return () => setHeaderActions(null);
+    }
     setHeaderActions(
       <Button variant="solid" onClick={saveAndContinue} disabled={saving || !hasDefinition}>{saving ? 'Saving…' : 'Save audience & continue'}</Button>,
     );
     return () => setHeaderActions(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [editable, saving, hasDefinition, definition, suggestedName]);
+  }, [editable, saving, hasDefinition, definition, suggestedName, fixed]);
 
   if (!loadedSeg) return <div className="py-10 text-center text-sm text-[var(--gray-10)]">Loading audience…</div>;
+
+  if (fixed) {
+    return (
+      <div className="max-w-2xl rounded-xl border border-[var(--gray-5)] bg-[var(--gray-2)] p-6 space-y-3">
+        <div className="text-xs font-medium uppercase tracking-wider text-[var(--gray-10)]">Fixed audience</div>
+        <h2 className="text-lg font-semibold text-[var(--gray-12)]">{fixed.name}</h2>
+        <p className="text-sm text-[var(--gray-12)]">{fixed.count.toLocaleString()} {fixed.count === 1 ? 'person' : 'people'}</p>
+        {fixed.description && <p className="text-sm text-[var(--gray-11)]">{fixed.description}</p>}
+        <p className="text-xs text-[var(--gray-10)]">
+          This audience is a list of people chosen once, not a set of criteria, so it does not change as people are added or updated.
+          Only people subscribed to the broadcast&apos;s unsubscribe list receive it. The Sending step shows how many that is.
+        </p>
+        {editable && (
+          <button
+            type="button"
+            onClick={() => setFixed(null)}
+            className="px-3 py-1.5 text-sm rounded-md border border-[var(--gray-a6)] text-[var(--gray-12)] hover:bg-[var(--gray-a3)]"
+          >
+            Replace with criteria
+          </button>
+        )}
+      </div>
+    );
+  }
 
   return (
     <div ref={wrapRef} className="-mb-6 flex gap-4 overflow-hidden" style={{ height: height != null ? `${height}px` : 'calc(100vh - 260px)' }}>
