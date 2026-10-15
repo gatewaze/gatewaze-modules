@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   normaliseEmails, parseCreateInput, queueExecute, queuePreview, publicView, reportMarkdown,
-  emailSha256, PrivacyError, type Actor,
+  PrivacyError, type Actor,
 } from '../lib/privacy';
 
 const actor: Actor = { via: 'api', label: 'test-key' };
@@ -177,13 +177,7 @@ describe('reportMarkdown', () => {
     }));
     expect(md).toContain('| people | deleted | 1 |');
     expect(md).toContain('payments_stripe_customers: Payment records. Basis: Art. 17(3)(b). Period: 7 years');
-    expect(md).toContain('sha256 hash of each erased email address');
-  });
-});
-
-describe('emailSha256', () => {
-  it('matches the SQL normalisation (lowercase, trimmed)', () => {
-    expect(emailSha256('  Person@Example.com ')).toBe(emailSha256('person@example.com'));
-    expect(emailSha256('person@example.com')).toMatch(/^[0-9a-f]{64}$/);
+    expect(md).toContain('keyed hash (HMAC-SHA256)');
+    expect(md).toContain('signs up again themselves');
   });
 });

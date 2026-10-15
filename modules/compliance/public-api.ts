@@ -2,7 +2,7 @@ import type { PublicApiContext } from '@gatewaze/shared';
 import type { Router, Request, Response } from 'express';
 import {
   PrivacyError, parseCreateInput, createRequest, getRequest, findByEmail, queuePreview,
-  queueExecute, publicView, reportMarkdown, normaliseEmails, emailSha256, isUuid, type Actor,
+  queueExecute, publicView, reportMarkdown, normaliseEmails, isUuid, type Actor,
 } from './lib/privacy';
 
 /**
@@ -48,7 +48,7 @@ export function registerPublicApi(router: Router, ctx: PublicApiContext) {
   router.get('/requests', ctx.requireScope('read') as never, async (req: Request, res: Response) => {
     try {
       const [email] = normaliseEmails(String(req.query.email ?? ''));
-      const rows = await findByEmail(supabase, email, emailSha256(email));
+      const rows = await findByEmail(supabase, email);
       ctx.setCache(res, { kind: 'no-store' });
       res.json({ data: rows.map(publicView) });
     } catch (e) { sendError(res, e); }

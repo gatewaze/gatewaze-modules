@@ -221,6 +221,30 @@ async function confirmInfo(supabase: Sb, token: string): Promise<ConfirmResult> 
   return { ok: true, email: r.email, newsletter, already: false }
 }
 
+/**
+ * Whether the compliance module holds a suppression for this address (an
+ * erasure or a marketing objection). False when compliance isn't installed.
+ */
+async function isSuppressed(supabase: Sb, email: string): Promise<boolean> {
+  const { data, error } = await supabase.rpc('compliance_is_suppressed', { p_email: email })
+  if (error) {
+    if (error.code === 'PGRST202' || error.code === '42883') return false
+    throw new Error(`suppression check failed: ${error.message}`)
+  }
+  return data === true
+}
+
+/**
+ * The person confirmed the emailed link, which proves they control the
+ * address, so their new consent replaces any compliance suppression.
+ */
+async function liftSuppression(supabase: Sb, email: string): Promise<void> {
+  const { error } = await supabase.rpc('compliance_lift_suppression', { p_email: email, p_reason: 'double_opt_in' })
+  if (error && error.code !== 'PGRST202' && error.code !== '42883') {
+    throw new Error(`could not lift suppression: ${error.message}`)
+  }
+}
+
 async function confirm(supabase: Sb, token: string, req: Request): Promise<ConfirmResult> {
   const r = await findRequest(supabase, token)
   if (!r) return { ok: false, reason: 'invalid' }
@@ -239,6 +263,7 @@ async function confirm(supabase: Sb, token: string, req: Request): Promise<Confi
   if (!claimed || claimed.length === 0) return { ok: true, email: r.email, newsletter, already: true }
 
   try {
+    await liftSuppression(supabase, r.email)
     await subscribeConfirmed(supabase, {
       listId: r.list_id,
       email: r.email,
@@ -252,6 +277,16 @@ async function confirm(supabase: Sb, token: string, req: Request): Promise<Confi
         collection: r.collection_slug,
       },
     })
+    // A suppression the lift didn't clear (e.g. the compliance functions were
+    // briefly unavailable) makes the database keep the row unsubscribed.
+    // Don't tell the person they're subscribed when they aren't.
+    const { data: row } = await supabase
+      .from('list_subscriptions')
+      .select('subscribed')
+      .eq('list_id', r.list_id)
+      .eq('email', r.email)
+      .maybeSingle()
+    if (!row?.subscribed) throw new Error('subscription was not applied')
   } catch (err) {
     // Release the claim so the link still works once the problem is fixed.
     await supabase.from(CONFIRMATIONS).update({ confirmed_at: null, confirm_ip: null }).eq('id', r.id)
@@ -439,8 +474,11 @@ async function handler(req: Request): Promise<Response> {
     // Signed in and subscribing one of their own addresses: the address is
     // already proven theirs, so subscribe now (this is also how someone who
     // unsubscribed changes their mind).
+    // A suppressed address (erased, or objected to marketing) must confirm by
+    // email even when signed in: accounts can be created without proving
+    // the address, so only the emailed link shows the person controls it.
     const owned = await callerEmails(supabase, req)
-    if (owned && owned.includes(email)) {
+    if (owned && owned.includes(email) && !(await isSuppressed(supabase, email))) {
       const consentHtml = await consentText(supabase)
       await subscribeConfirmed(supabase, {
         listId: col.list_id,

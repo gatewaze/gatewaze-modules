@@ -7,7 +7,7 @@ const complianceModule: GatewazeModule = {
   visibility: 'public',
   name: 'Compliance',
   description: 'GDPR, CCPA, and SOC 2 compliance tools — consent records, privacy requests with erasure, data breach tracking, and audit logging',
-  version: '1.1.1',
+  version: '1.2.0',
   features: [
     'compliance',
     'compliance.consent',
@@ -25,6 +25,8 @@ const complianceModule: GatewazeModule = {
     'migrations/003_personal_data_registry.sql',
     // Missing-column check moves from the preview to a maintainer function.
     'migrations/004_registry_checks.sql',
+    // Keyed suppression hashes, self sign-up after erasure, 30-day request retention.
+    'migrations/005_hmac_and_self_consent.sql',
   ],
 
   workers: [
