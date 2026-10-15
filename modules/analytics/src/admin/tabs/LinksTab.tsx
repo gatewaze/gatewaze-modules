@@ -2,9 +2,10 @@
  * Links tab — trackable short links (Umami Links via the redirects
  * provider) for this property's domains.
  *
- * Links are host-scoped: a slug lives at https://{domain}/go/{slug},
- * and every domain (the portal, each sites-module site) has its own
- * slug space. Creation/deletion go through the platform's
+ * Links are host-scoped: a slug lives at https://{domain}/go/{slug}
+ * (or https://{domain}/{slug} on a SHORT_LINK_HOSTS domain), and every
+ * domain has its own slug space. The list is paged and searched
+ * server-side because a migrated domain can hold thousands of links. Creation/deletion go through the platform's
  * /api/redirects surface; click counts come from the per-link Umami
  * stats endpoint.
  */
@@ -23,43 +24,95 @@ interface RedirectRow {
   created_at: string;
 }
 
+const PAGE_SIZE = 50;
+
+/** Same charset as POST /api/redirects/create-bulk (Short.io-era links use & + ( ) [ ]). */
+const SLUG_RE = /^[A-Za-z0-9._~&+()[\]-]{1,80}$/;
+
+interface DomainInfo {
+  total: number;
+  /** Links on this host are served at /<slug> (SHORT_LINK_HOSTS) rather than /go/<slug>. */
+  rootPath: boolean;
+}
+
+function redirectsUrl(domain: string, opts: { search?: string; limit: number; offset: number }): string {
+  const q = new URLSearchParams({ domain, provider: 'umami', limit: String(opts.limit), offset: String(opts.offset) });
+  if (opts.search) q.set('search', opts.search);
+  return `${API()}/api/redirects?${q.toString()}`;
+}
+
 export default function LinksTab({ propertyId }: { propertyId: string }) {
   const [domains, setDomains] = useState<string[]>([]);
+  const [domainInfo, setDomainInfo] = useState<Record<string, DomainInfo>>({});
+  const [domain, setDomain] = useState('');
+  const [searchInput, setSearchInput] = useState('');
+  const [search, setSearch] = useState('');
   const [links, setLinks] = useState<RedirectRow[]>([]);
+  const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
-    setLoading(true);
-    setError(null);
+  // Property domains, plus a count and serving shape per domain (one
+  // 1-row request each), so the picker can show totals and the create
+  // form the right path prefix.
+  const loadDomains = useCallback(async () => {
     try {
       const prop = await authedFetch(`${API()}/api/modules/analytics/properties/${propertyId}`).then((r) => r.json()) as
         { property: { domains: string[] } };
       const ds = (prop.property?.domains ?? []).filter((d) => d !== '*');
+      const info: Record<string, DomainInfo> = {};
+      await Promise.all(ds.map(async (d) => {
+        const r = await authedFetch(redirectsUrl(d, { limit: 1, offset: 0 }));
+        const body = r.ok ? (await r.json()) as { redirects?: RedirectRow[]; total?: number } : {};
+        const sample = body.redirects?.[0];
+        info[d] = { total: body.total ?? 0, rootPath: !!sample && !sample.short_url.includes('/go/') };
+      }));
       setDomains(ds);
-      const all: RedirectRow[] = [];
-      for (const d of ds) {
-        const r = await authedFetch(`${API()}/api/redirects?domain=${encodeURIComponent(d)}&provider=umami&limit=200`);
-        if (r.ok) {
-          const body = (await r.json()) as { redirects: RedirectRow[] };
-          all.push(...(body.redirects ?? []));
-        }
-      }
-      all.sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
-      setLinks(all);
+      setDomainInfo(info);
+      setDomain((cur) => (cur && ds.includes(cur) ? cur : ds.find((d) => (info[d]?.total ?? 0) > 0) ?? ds[0] ?? ''));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
-    } finally {
       setLoading(false);
     }
   }, [propertyId]);
 
-  useEffect(() => { void load(); }, [load]);
+  useEffect(() => { void loadDomains(); }, [loadDomains]);
+
+  const loadPage = useCallback(async (offset: number) => {
+    if (!domain) { setLinks([]); setTotal(0); setLoading(false); return; }
+    if (offset === 0) setLoading(true); else setLoadingMore(true);
+    setError(null);
+    try {
+      const r = await authedFetch(redirectsUrl(domain, { search, limit: PAGE_SIZE, offset }));
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const body = (await r.json()) as { redirects: RedirectRow[]; total?: number };
+      setLinks((prev) => (offset === 0 ? body.redirects ?? [] : [...prev, ...(body.redirects ?? [])]));
+      setTotal(body.total ?? 0);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+      setLoadingMore(false);
+    }
+  }, [domain, search]);
+
+  useEffect(() => { void loadPage(0); }, [loadPage]);
+
+  // Debounce the search box into the query.
+  useEffect(() => {
+    const t = setTimeout(() => setSearch(searchInput.trim()), 300);
+    return () => clearTimeout(t);
+  }, [searchInput]);
 
   async function remove(id: string) {
     await authedFetch(`${API()}/api/redirects/link/${id}`, { method: 'DELETE' });
     setLinks((prev) => prev.filter((l) => l.id !== id));
+    setTotal((t) => Math.max(0, t - 1));
   }
+
+  const prefixFor = (d: string) => (domainInfo[d]?.rootPath ? '/' : '/go/');
+  const inputCls = 'px-3 py-1.5 rounded-md border border-[var(--gray-6)] bg-[var(--gray-1)] text-[var(--gray-12)] text-sm';
 
   return (
     <div className="space-y-4">
@@ -70,16 +123,35 @@ export default function LinksTab({ propertyId }: { propertyId: string }) {
       )}
 
       <div className={PANEL}>
-        <div className="flex items-baseline justify-between mb-3">
+        <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
           <h3 className={`font-semibold ${STRONG}`}>Short links</h3>
-          <span className={`text-xs ${MUTED}`}>{links.length} link{links.length === 1 ? '' : 's'}</span>
+          <div className="flex flex-wrap items-center gap-2">
+            {domains.length > 1 && (
+              <select value={domain} onChange={(e) => setDomain(e.target.value)} className={inputCls}>
+                {domains.map((d) => (
+                  <option key={d} value={d}>{d} ({(domainInfo[d]?.total ?? 0).toLocaleString()})</option>
+                ))}
+              </select>
+            )}
+            <input
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              placeholder="Search slug, destination or label"
+              className={`${inputCls} w-64`}
+            />
+            <span className={`text-xs ${MUTED}`}>
+              {links.length.toLocaleString()} of {total.toLocaleString()} link{total === 1 ? '' : 's'}
+            </span>
+          </div>
         </div>
         {loading ? (
           <p className={`text-sm ${MUTED} py-4`}>Loading links…</p>
         ) : links.length === 0 ? (
           <p className={`text-sm ${MUTED} py-4`}>
-            No short links yet for {domains.join(', ') || 'this property'}. Create one below — it will live at{' '}
-            <code>https://{domains[0] ?? '<domain>'}/go/&lt;slug&gt;</code>.
+            {search
+              ? <>No links match “{search}”.</>
+              : <>No short links yet for {domain || 'this property'}. Create one below — it will live at{' '}
+                <code>https://{domain || '<domain>'}{prefixFor(domain)}&lt;slug&gt;</code>.</>}
           </p>
         ) : (
           <div className="overflow-x-auto">
@@ -97,11 +169,22 @@ export default function LinksTab({ propertyId }: { propertyId: string }) {
                 {links.map((l) => <LinkRow key={l.id} link={l} onDelete={() => remove(l.id)} />)}
               </tbody>
             </table>
+            {links.length < total && (
+              <div className="pt-3 text-center">
+                <Button onClick={() => void loadPage(links.length)} disabled={loadingMore}>
+                  {loadingMore ? 'Loading…' : `Load ${Math.min(PAGE_SIZE, total - links.length)} more`}
+                </Button>
+              </div>
+            )}
           </div>
         )}
       </div>
 
-      <CreateLinkForm domains={domains} onCreated={load} />
+      <CreateLinkForm
+        domains={domains}
+        prefixFor={prefixFor}
+        onCreated={() => { void loadDomains(); void loadPage(0); }}
+      />
     </div>
   );
 }
@@ -149,7 +232,7 @@ function LinkRow({ link, onDelete }: { link: RedirectRow; onDelete: () => void }
   );
 }
 
-function CreateLinkForm({ domains, onCreated }: { domains: string[]; onCreated: () => void }) {
+function CreateLinkForm({ domains, prefixFor, onCreated }: { domains: string[]; prefixFor: (d: string) => string; onCreated: () => void }) {
   const [domain, setDomain] = useState('');
   const [slug, setSlug] = useState('');
   const [url, setUrl] = useState('');
@@ -159,7 +242,7 @@ function CreateLinkForm({ domains, onCreated }: { domains: string[]; onCreated: 
 
   useEffect(() => { if (!domain && domains.length) setDomain(domains[0]); }, [domains, domain]);
 
-  const slugOk = /^[A-Za-z0-9._~-]{1,80}$/.test(slug);
+  const slugOk = SLUG_RE.test(slug);
   const urlOk = /^https?:\/\/.+/.test(url) && url.length <= 500;
 
   async function create() {
@@ -204,7 +287,7 @@ function CreateLinkForm({ domains, onCreated }: { domains: string[]; onCreated: 
         ) : (
           <span className={`text-sm font-mono ${MUTED}`}>{domain || '—'}</span>
         )}
-        <span className={`text-sm ${MUTED}`}>/go/</span>
+        <span className={`text-sm ${MUTED}`}>{prefixFor(domain)}</span>
         <input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="summer-launch" className={`${inputCls} font-mono w-44`} />
         <span className={`text-sm ${MUTED}`}>→</span>
         <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://destination.example/page" className={`${inputCls} font-mono flex-1 min-w-64`} />
@@ -213,7 +296,7 @@ function CreateLinkForm({ domains, onCreated }: { domains: string[]; onCreated: 
           {saving ? 'Creating…' : 'Create link'}
         </Button>
       </div>
-      {slug && !slugOk && <p className={`text-xs ${MUTED} mt-2`}>Slugs: letters, numbers, dots, dashes, underscores (max 80).</p>}
+      {slug && !slugOk && <p className={`text-xs ${MUTED} mt-2`}>Slugs: letters, numbers and . _ ~ - & + ( ) [ ] (max 80).</p>}
       {error && <p className="text-sm text-[var(--red-11)] mt-2">{error}</p>}
     </div>
   );
