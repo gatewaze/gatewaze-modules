@@ -106,6 +106,9 @@ export function sanitiseFilename(name: string): string {
     .replace(/[^a-zA-Z0-9._-]+/g, '-')
     .replace(/^[.-]+/, '')
     .replace(/-+/g, '-')
+    // A run of dots inside a name ("a..b.mp4") would read as traversal to the
+    // storage key check and fail the upload; one dot is what was meant.
+    .replace(/\.{2,}/g, '.')
     .slice(0, 180);
   return cleaned || 'upload';
 }

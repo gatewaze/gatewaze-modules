@@ -82,6 +82,11 @@ describe('sanitiseFilename', () => {
     expect(sanitiseFilename('a/b/c/d.mp4')).toBe('d.mp4');
   });
 
+  it('collapses a run of dots so the key check does not read it as traversal', () => {
+    expect(sanitiseFilename('a..b.mp4')).toBe('a.b.mp4');
+    expect(sanitiseFilename('talk....mp4')).toBe('talk.mp4');
+  });
+
   it('strips a leading dot so nothing becomes a hidden file', () => {
     expect(sanitiseFilename('.hidden.mp4')).toBe('hidden.mp4');
     expect(sanitiseFilename('...mp4')).toBe('mp4');
