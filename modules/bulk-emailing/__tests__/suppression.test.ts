@@ -35,11 +35,12 @@ describe('splitSuppressed', () => {
   beforeEach(() => resetSuppressionState());
 
   it('skips suppressed addresses whatever their case', async () => {
-    const { deps: d, calls } = deps({ data: ['erased@example.com'] });
+    // The database matches case-insensitively and returns the inputs as given.
+    const { deps: d, calls } = deps({ data: [' Erased@Example.com'] });
     const out = await splitSuppressed(d, [rec('1', ' Erased@Example.com'), rec('2', 'ok@example.com'), rec('3', null)]);
     expect(out.suppressed.map((r) => r.id)).toEqual(['1']);
     expect(out.allowed.map((r) => r.id)).toEqual(['2', '3']);
-    expect(calls[0]).toEqual(['erased@example.com', 'ok@example.com']);
+    expect(calls[0]).toEqual([' Erased@Example.com', 'ok@example.com']);
   });
   it('sends normally when the compliance module is not installed', async () => {
     const { deps: d } = deps({ error: missing, installed: false });

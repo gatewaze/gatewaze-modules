@@ -277,6 +277,16 @@ async function confirm(supabase: Sb, token: string, req: Request): Promise<Confi
         collection: r.collection_slug,
       },
     })
+    // A suppression the lift didn't clear (e.g. the compliance functions were
+    // briefly unavailable) makes the database keep the row unsubscribed.
+    // Don't tell the person they're subscribed when they aren't.
+    const { data: row } = await supabase
+      .from('list_subscriptions')
+      .select('subscribed')
+      .eq('list_id', r.list_id)
+      .eq('email', r.email)
+      .maybeSingle()
+    if (!row?.subscribed) throw new Error('subscription was not applied')
   } catch (err) {
     // Release the claim so the link still works once the problem is fixed.
     await supabase.from(CONFIRMATIONS).update({ confirmed_at: null, confirm_ip: null }).eq('id', r.id)

@@ -458,5 +458,11 @@ BEGIN
   REVOKE ALL ON FUNCTION public.compliance__hmac_key() FROM service_role;
 END $$;
 
+-- Pending newsletter confirmations hold the address, IP and user agent for
+-- up to 7 days. Erase them with the person, which also voids any link sent
+-- before the erasure.
+SELECT public.compliance_register_personal_data(
+  '{"table":"newsletters_signup_confirmations","owner":"newsletters","action":"delete","email":["email"],"note":"Pending double opt-in requests."}');
+
 -- The plain sha256 helper is no longer used for anything personal.
 DROP FUNCTION IF EXISTS public.compliance_email_sha256(text);

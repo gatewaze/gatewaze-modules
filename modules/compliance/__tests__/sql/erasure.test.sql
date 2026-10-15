@@ -188,6 +188,11 @@ BEGIN
   PERFORM set_config('request.jwt.claims', '', true);
   SELECT subscribed INTO v_sub FROM public.list_subscriptions WHERE email = 'erasure-test@example.invalid';
   IF v_sub THEN RAISE EXCEPTION 'a signed-in user re-subscribed a suppressed address'; END IF;
+  -- An UPDATE flipping the existing row back on is blocked too.
+  UPDATE public.list_subscriptions SET subscribed = true, source = 'subscription-centre'
+   WHERE email = 'erasure-test@example.invalid';
+  SELECT subscribed INTO v_sub FROM public.list_subscriptions WHERE email = 'erasure-test@example.invalid';
+  IF v_sub THEN RAISE EXCEPTION 'an UPDATE re-subscribed a suppressed address'; END IF;
   DELETE FROM public.list_subscriptions WHERE email = 'erasure-test@example.invalid';
   IF NOT public.compliance_is_suppressed('erasure-test@example.invalid') THEN
     RAISE EXCEPTION 'a subscription write lifted the suppression';

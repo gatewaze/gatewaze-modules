@@ -374,7 +374,9 @@ async function complianceInstalled(deps: EngineDeps): Promise<boolean> {
  * address.
  */
 export async function splitSuppressed(deps: EngineDeps, rows: Recipient[]): Promise<{ allowed: Recipient[]; suppressed: Recipient[]; error?: unknown }> {
-  const emails = [...new Set(rows.map((r) => r.email?.trim().toLowerCase()).filter((e): e is string => !!e))];
+  // Send the addresses exactly as stored; the database normalises them the
+  // same way it did when it hashed the suppression.
+  const emails = [...new Set(rows.map((r) => r.email).filter((e): e is string => !!e))];
   if (emails.length === 0) return { allowed: rows, suppressed: [] };
   const hit = new Set<string>();
   for (let i = 0; i < emails.length; i += 200) {
@@ -392,14 +394,11 @@ export async function splitSuppressed(deps: EngineDeps, rows: Recipient[]): Prom
       return { allowed: [], suppressed: [], error };
     }
     suppressionTableSeen = true;
-    for (const e of (data ?? []) as string[]) hit.add(e.trim().toLowerCase());
+    for (const e of (data ?? []) as string[]) hit.add(e);
   }
   const allowed: Recipient[] = [];
   const suppressed: Recipient[] = [];
-  for (const r of rows) {
-    const e = r.email?.trim().toLowerCase();
-    (e && hit.has(e) ? suppressed : allowed).push(r);
-  }
+  for (const r of rows) (r.email && hit.has(r.email) ? suppressed : allowed).push(r);
   return { allowed, suppressed };
 }
 
