@@ -73,12 +73,16 @@ export default function SuppressionListsPage() {
     if (!appendTo && !name.trim()) { toast.error('Give the list a name'); return; }
     const batches = chunk(parsed.hashes);
     setUploading({ done: 0, total: parsed.hashes.length });
+    // A new list that fails partway is deleted, so a half-uploaded list never
+    // quietly under-suppresses an audience that excludes it.
+    let createdId: string | null = null;
     try {
       let listId = appendTo;
       if (!listId) {
         const { data, error } = await supabase.rpc('segments_suppression_create', { p_name: name.trim() });
         if (error) throw error;
         listId = data as string;
+        createdId = listId;
       }
       let done = 0;
       for (const batch of batches) {
@@ -91,7 +95,14 @@ export default function SuppressionListsPage() {
       setParsed(null); setFileName(''); setName(''); setAppendTo('');
       await load();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Upload failed');
+      const msg = err instanceof Error ? err.message : 'Upload failed';
+      if (createdId) {
+        await supabase.rpc('segments_suppression_delete', { p_list_id: createdId });
+        toast.error(`${msg}. Nothing was saved; please try again.`);
+      } else {
+        toast.error(`${msg}. The list now holds only part of this file; upload the file again to finish it.`);
+      }
+      await load();
     } finally {
       setUploading(null);
     }

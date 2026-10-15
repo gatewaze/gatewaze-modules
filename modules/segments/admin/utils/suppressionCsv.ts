@@ -5,7 +5,9 @@
  * hex SHA-256 hash. Addresses are hashed here, before anything is uploaded, so
  * the server only ever receives hashes. The hash is the hex SHA-256 of the
  * UTF-8 bytes of the address trimmed and lowercased, the same expression the
- * database uses to match people (migration 020).
+ * database uses to match people (migration 020). Addresses with non-ASCII
+ * characters are hashed the same way, but JavaScript and Postgres may lowercase
+ * them differently, so such an address might not match.
  */
 
 const HASH_RX = /^[0-9a-f]{64}$/i;

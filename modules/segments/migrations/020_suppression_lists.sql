@@ -77,7 +77,7 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM public.segments_suppression_lists WHERE id = p_list_id) THEN
     RAISE EXCEPTION 'suppression list not found' USING ERRCODE = 'no_data_found';
   END IF;
-  IF coalesce(array_length(p_hashes, 1), 0) > 5000 THEN
+  IF cardinality(p_hashes) > 5000 THEN
     RAISE EXCEPTION 'at most 5000 hashes per call' USING ERRCODE = 'invalid_parameter_value';
   END IF;
   IF EXISTS (SELECT 1 FROM unnest(p_hashes) h WHERE h IS NULL OR h !~ '^[0-9a-f]{64}$') THEN
@@ -102,6 +102,9 @@ BEGIN
     RAISE EXCEPTION 'admin access required' USING ERRCODE = 'insufficient_privilege';
   END IF;
   UPDATE public.segments_suppression_lists SET name = btrim(p_name), updated_at = now() WHERE id = p_list_id;
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'suppression list not found' USING ERRCODE = 'no_data_found';
+  END IF;
 END $$;
 
 CREATE OR REPLACE FUNCTION public.segments_suppression_delete(p_list_id uuid)
@@ -156,7 +159,7 @@ AS $$
       FROM public.segments_suppression_lists l
       WHERE p_search IS NULL OR l.name ILIKE '%' || p_search || '%'
       ORDER BY l.created_at DESC
-      LIMIT p_limit
+      LIMIT LEAST(GREATEST(COALESCE(p_limit, 200), 1), 500)
     ) x), '[]'::jsonb) END
 $$;
 
@@ -182,12 +185,17 @@ REVOKE ALL ON FUNCTION public.segments_suppression_create(text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.segments_suppression_add(uuid, text[]) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.segments_suppression_rename(uuid, text) FROM PUBLIC;
 REVOKE ALL ON FUNCTION public.segments_suppression_delete(uuid) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.segments_suppression_to_sql(jsonb) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.segments_suppression_vocab(text, integer) FROM PUBLIC;
 DO $$ BEGIN
   REVOKE ALL ON FUNCTION public.segments_suppression_create(text) FROM anon;
   REVOKE ALL ON FUNCTION public.segments_suppression_add(uuid, text[]) FROM anon;
   REVOKE ALL ON FUNCTION public.segments_suppression_rename(uuid, text) FROM anon;
   REVOKE ALL ON FUNCTION public.segments_suppression_delete(uuid) FROM anon;
   REVOKE ALL ON FUNCTION public.segments_suppression_vocab(text, integer) FROM anon;
+  REVOKE ALL ON FUNCTION public.segments_suppression_to_sql(jsonb) FROM anon;
+  GRANT EXECUTE ON FUNCTION public.segments_suppression_to_sql(jsonb) TO authenticated, service_role;
+  GRANT EXECUTE ON FUNCTION public.segments_suppression_vocab(text, integer) TO authenticated, service_role;
   GRANT EXECUTE ON FUNCTION public.segments_suppression_create(text) TO authenticated, service_role;
   GRANT EXECUTE ON FUNCTION public.segments_suppression_add(uuid, text[]) TO authenticated, service_role;
   GRANT EXECUTE ON FUNCTION public.segments_suppression_rename(uuid, text) TO authenticated, service_role;
