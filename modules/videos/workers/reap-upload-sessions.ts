@@ -19,6 +19,7 @@
  */
 
 import { MAX_BYTES, type UploadKind } from '../lib/upload-rules.js';
+import { storeFor } from '../lib/storage.js';
 
 const BATCH = 50;
 
@@ -37,7 +38,7 @@ export async function reapUploadSessions(
 
   const { data: stale, error } = await supabase
     .from('video_upload_sessions')
-    .select('id, asset_id, storage_bucket, storage_path, expected_bytes, expected_mime')
+    .select('id, asset_id, storage_bucket, storage_provider, storage_path, expected_bytes, expected_mime')
     .eq('state', 'open')
     .lt('expires_at', nowIso)
     .limit(BATCH);
@@ -52,7 +53,17 @@ export async function reapUploadSessions(
   let bytesRemoved = 0;
 
   for (const s of stale) {
-    const head = await headObject(supabase, s.storage_bucket, s.storage_path);
+    // The session says which store holds it. A session whose store cannot be
+    // resolved (S3 row, S3 no longer configured) is left alone rather than
+    // failed, because the object may well be there and nothing can check.
+    let store;
+    try {
+      store = storeFor(supabase, s);
+    } catch (err) {
+      log(`session ${s.id}: ${String((err as Error)?.message ?? err)} — skipped`);
+      continue;
+    }
+    const head = await store.head(s.storage_path);
 
     // The bytes made it but `complete` never ran. Finish the job rather than
     // throwing away a successful upload over a timing race.
@@ -84,12 +95,8 @@ export async function reapUploadSessions(
     // Nothing usable arrived. Remove whatever partial object exists so an
     // abandoned upload does not sit in the bucket being paid for.
     if (head.ok) {
-      try {
-        await supabase.storage.from(s.storage_bucket).remove([s.storage_path]);
-        bytesRemoved += head.bytes;
-      } catch {
-        /* best effort */
-      }
+      await store.remove(s.storage_path);
+      bytesRemoved += head.bytes;
     }
     await supabase
       .from('video_assets')
@@ -140,26 +147,6 @@ function mimeMatches(stored: string, expected: string | null | undefined): boole
   if (!stored) return false;
   if (!expected) return true;
   return stored.toLowerCase().split(';')[0].trim() === String(expected).toLowerCase().split(';')[0].trim();
-}
-
-async function headObject(
-  supabase,
-  bucket: string,
-  path: string,
-): Promise<{ ok: boolean; bytes: number; contentType: string }> {
-  try {
-    const signed = await supabase.storage.from(bucket).createSignedUrl(path, 60);
-    if (signed.error || !signed.data?.signedUrl) return { ok: false, bytes: 0, contentType: '' };
-    const r = await fetch(signed.data.signedUrl, { method: 'HEAD' });
-    if (!r.ok) return { ok: false, bytes: 0, contentType: '' };
-    return {
-      ok: true,
-      bytes: Number(r.headers.get('content-length') ?? 0),
-      contentType: String(r.headers.get('content-type') ?? '').split(';')[0].trim(),
-    };
-  } catch {
-    return { ok: false, bytes: 0, contentType: '' };
-  }
 }
 
 export default async function reapUploadSessionsHandler(_job, ctx): Promise<void> {

@@ -38,6 +38,11 @@ export interface TicketPayload {
   session_id: string;
   storage_bucket: string;
   storage_path: string;
+  /**
+   * Which storage API the bucket belongs to. Absent on tickets minted before
+   * migration 014, which were all Supabase; `complete` reads it that way.
+   */
+  storage_provider?: 'supabase' | 's3';
   /** The mime type claimed at mint and enforced at complete. */
   mime_type: string;
   /** Hard ceiling for the stored object, enforced at complete. */
@@ -134,6 +139,9 @@ export function verifyTicket(
     if (typeof p[k] !== 'string' || !(p[k] as string).length) return { ok: false, error: 'malformed' };
   }
   if (typeof p.max_bytes !== 'number' || !Number.isFinite(p.max_bytes) || p.max_bytes <= 0) {
+    return { ok: false, error: 'malformed' };
+  }
+  if (p.storage_provider !== undefined && p.storage_provider !== 'supabase' && p.storage_provider !== 's3') {
     return { ok: false, error: 'malformed' };
   }
   if (typeof p.exp !== 'number' || !Number.isFinite(p.exp)) return { ok: false, error: 'malformed' };

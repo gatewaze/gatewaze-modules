@@ -24,8 +24,9 @@
  */
 
 import type { Request, Response, Router } from 'express';
-import { rejectUpload, buildStoragePath, bucketFor, MAX_BYTES, allowedMimes, type UploadKind } from '../lib/upload-rules.js';
+import { rejectUpload, buildStoragePath, MAX_BYTES, allowedMimes, type UploadKind } from '../lib/upload-rules.js';
 import { mintTicket, verifyTicket, ticketsAvailable, TICKET_TTL_SECONDS } from '../lib/upload-tickets.js';
+import { storeForNew, storeFor } from '../lib/storage.js';
 import { generateCopy } from '../lib/titles.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -827,13 +828,17 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
         if (link.error) logger.warn('could not link video to unit', { error: link.error.message });
       }
 
-      const bucket = bucketFor(kind);
+      // Masters and shorts go to the S3 store when one is configured, so the
+      // row records both the bucket and which API it belongs to.
+      const store = storeForNew(supabase, kind);
+      const bucket = store.bucket;
       const assetIns = await supabase
         .from('video_assets')
         .insert({
           video_id: videoId,
           kind,
           storage_bucket: bucket,
+          storage_provider: store.provider,
           // Rewritten below once the asset id exists; a path must be unique
           // per asset and the id is what makes it so.
           storage_path: 'pending',
@@ -859,12 +864,18 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
       });
       await supabase.from('video_assets').update({ storage_path: storagePath }).eq('id', assetId);
 
-      const signed = await supabase.storage.from(bucket).createSignedUploadUrl(storagePath);
-      if (signed.error) {
+      let uploadUrl: string;
+      try {
+        uploadUrl = await store.signUpload(storagePath, String(f.mime_type ?? ''), TICKET_TTL_SECONDS, Number(f.bytes));
+      } catch (err) {
+        // The detail names buckets and endpoints; it goes to the log and the
+        // row, not to a third-party editor.
+        const msg = String((err as Error)?.message ?? err);
+        logger.warn('could not sign upload', { asset: assetId, error: msg });
         await supabase.from('video_assets')
-          .update({ state: 'failed', error: `could not sign upload: ${signed.error.message}` })
+          .update({ state: 'failed', error: `could not sign upload: ${msg}` })
           .eq('id', assetId);
-        out.push({ filename: String(f.filename ?? ''), status: 'failed', reason: signed.error.message });
+        out.push({ filename: String(f.filename ?? ''), status: 'failed', reason: 'could not sign the upload' });
         continue;
       }
 
@@ -873,6 +884,7 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
         .insert({
           asset_id: assetId,
           storage_bucket: bucket,
+          storage_provider: store.provider,
           storage_path: storagePath,
           expected_bytes: Number(f.bytes),
           expected_mime: String(f.mime_type ?? ''),
@@ -893,13 +905,17 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
         video_id: videoId,
         asset_id: assetId,
         storage_path: storagePath,
-        // The browser PUTs here. Rewritten to the public host because
-        // SUPABASE_URL is often an internal name a browser cannot resolve.
-        upload_url: externalise(String(signed.data?.signedUrl ?? '')),
+        // The browser PUTs here. The store has already rewritten a Supabase
+        // URL to the public host; an S3 URL is public as signed.
+        upload_url: uploadUrl,
+        // The browser must send exactly this Content-Type: on S3 it is part of
+        // the signature, and on both stores it is what `complete` enforces.
+        upload_headers: { 'Content-Type': String(f.mime_type ?? '') },
         ticket: mintTicket({
           asset_id: assetId,
           session_id: String(sessionIns.data.id),
           storage_bucket: bucket,
+          storage_provider: store.provider,
           storage_path: storagePath,
           mime_type: String(f.mime_type ?? ''),
           max_bytes: MAX_BYTES[kind],
@@ -945,8 +961,23 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
     if (asset.state === 'ready') {
       return res.json({ status: 'already_complete', asset_id: asset.id, video_id: asset.video_id });
     }
+    // Only an upload in flight can be completed. A failed or superseded asset
+    // stays that way: an S3 presigned PUT can be replayed until it expires,
+    // and this is what stops a second PUT reviving a row that was closed.
+    if (asset.state !== 'uploading') {
+      return res.status(409).json({ error: `asset is ${asset.state}` });
+    }
 
-    const head = await headObject(t.storage_bucket, t.storage_path);
+    // The ticket says which store signed the upload; a pre-014 ticket is
+    // Supabase. storeFor refuses an S3 bucket other than the configured one.
+    let store;
+    try {
+      store = storeFor(supabase, { storage_provider: t.storage_provider ?? 'supabase', storage_bucket: t.storage_bucket });
+    } catch (err) {
+      logger.warn('could not resolve the asset store', { asset: t.asset_id, error: String((err as Error)?.message ?? err) });
+      return res.status(500).json({ error: 'storage is not configured for this asset' });
+    }
+    const head = await store.head(t.storage_path);
     if (!head.ok) {
       await supabase.from('video_assets')
         .update({ state: 'failed', error: 'stored object not found' })
@@ -957,7 +988,7 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
     // 10% tolerance mirrors event-media's completion check: storage can
     // report a slightly different length than the client measured.
     if (head.bytes > t.max_bytes * 1.1) {
-      await removeObject(t.storage_bucket, t.storage_path);
+      await store.remove(t.storage_path);
       await supabase.from('video_assets')
         .update({ state: 'failed', error: 'file too large' })
         .eq('id', t.asset_id);
@@ -967,7 +998,7 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
     // The client controls Content-Type on a signed PUT. This is where the
     // mint-time claim is enforced. Fail CLOSED on an empty stored type.
     if (!head.contentType || head.contentType.toLowerCase() !== t.mime_type.toLowerCase()) {
-      await removeObject(t.storage_bucket, t.storage_path);
+      await store.remove(t.storage_path);
       await supabase.from('video_assets')
         .update({ state: 'failed', error: `mime mismatch: stored ${head.contentType || 'none'}` })
         .eq('id', t.asset_id);
@@ -1226,7 +1257,7 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
 
     const { data: asset } = await supabase
       .from('video_assets')
-      .select('video_id, storage_bucket, storage_path, state')
+      .select('video_id, storage_bucket, storage_provider, storage_path, state')
       .eq('id', assetId)
       .maybeSingle();
     if (!asset || asset.state !== 'ready') return res.status(404).json({ error: 'no playable asset' });
@@ -1234,11 +1265,13 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
     // is the single most important place to scope by the owning subject.
     if (await denyUnlessVideo(req, res, String(asset.video_id))) return;
 
-    const signed = await supabase.storage
-      .from(asset.storage_bucket)
-      .createSignedUrl(asset.storage_path, 3600);
-    if (signed.error) return res.status(500).json({ error: signed.error.message });
-    res.json({ url: externalise(String(signed.data?.signedUrl ?? '')), expires_in: 3600 });
+    try {
+      const url = await storeFor(supabase, asset).signRead(asset.storage_path, 3600);
+      res.json({ url, expires_in: 3600 });
+    } catch (err) {
+      logger.warn('could not sign playback', { asset: assetId, error: String((err as Error)?.message ?? err) });
+      res.status(500).json({ error: 'could not sign a playback URL' });
+    }
   });
 
   // ── helpers ────────────────────────────────────────────────────────────────
@@ -1248,45 +1281,6 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
     const n = Number(v);
     if (!Number.isFinite(n) || n <= 0) return null;
     return Math.min(Math.round(n), max);
-  }
-
-  /**
-   * Rewrite an internal Supabase URL to the public one.
-   *
-   * SUPABASE_URL is often an in-cluster name (http://supabase-kong:8000) that
-   * a browser cannot resolve, so a signed URL built from it is useless to the
-   * editor. Same split as host-media's buildPublicUrl.
-   */
-  function externalise(url: string): string {
-    const internal = (process.env.SUPABASE_URL ?? '').replace(/\/+$/, '');
-    const external = (process.env.SUPABASE_PUBLIC_URL ?? internal).replace(/\/+$/, '');
-    if (!internal || internal === external) return url;
-    return url.startsWith(internal) ? external + url.slice(internal.length) : url;
-  }
-
-  /** The stored object's real size and content type. */
-  async function headObject(bucket: string, path: string): Promise<{ ok: boolean; bytes: number; contentType: string }> {
-    try {
-      const signed = await supabase.storage.from(bucket).createSignedUrl(path, 60);
-      if (signed.error || !signed.data?.signedUrl) return { ok: false, bytes: 0, contentType: '' };
-      const r = await fetch(signed.data.signedUrl, { method: 'HEAD' });
-      if (!r.ok) return { ok: false, bytes: 0, contentType: '' };
-      return {
-        ok: true,
-        bytes: Number(r.headers.get('content-length') ?? 0),
-        contentType: String(r.headers.get('content-type') ?? '').split(';')[0].trim(),
-      };
-    } catch {
-      return { ok: false, bytes: 0, contentType: '' };
-    }
-  }
-
-  async function removeObject(bucket: string, path: string): Promise<void> {
-    try {
-      await supabase.storage.from(bucket).remove([path]);
-    } catch {
-      /* best effort: a stray object is better than a wrong row */
-    }
   }
 
   /**

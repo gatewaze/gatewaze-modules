@@ -134,6 +134,8 @@ export interface MintedFile {
   asset_id?: string;
   storage_path?: string;
   upload_url?: string;
+  /** Headers the PUT must carry; on S3 the Content-Type is part of the signature. */
+  upload_headers?: Record<string, string>;
   ticket?: string;
 }
 

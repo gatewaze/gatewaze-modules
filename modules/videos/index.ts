@@ -21,7 +21,7 @@ const videosModule: GatewazeModule = {
   description:
     'Video masters, shorts and scheduled publication. Editors upload against a talk or episode; '
     + 'Gatewaze holds the file and publishes on a schedule.',
-  version: '1.9.0',
+  version: '1.10.0',
   features: ['videos', 'videos.manage', 'videos.edit'],
 
   dependencies: ['content-platform'],
@@ -56,6 +56,10 @@ const videosModule: GatewazeModule = {
     // accepted 'podcast' since 010 while the table's CHECK rejected it, so
     // the function accepted the value and the INSERT then failed.
     'migrations/013_podcast_subject.sql',
+    // 014 records which storage API holds each asset, so masters can live in
+    // an S3-compatible bucket (Backblaze B2 on AAIF) while thumbnails and
+    // every earlier row stay on Supabase Storage.
+    'migrations/014_storage_provider.sql',
   ],
 
   apiRoutes: async (app: unknown, ctx?: unknown) => {
@@ -70,6 +74,12 @@ const videosModule: GatewazeModule = {
       path: 'videos/unassigned',
       component: () => import('./admin/components/UnassignedVideos'),
       requiredFeature: 'videos.edit',
+      guard: 'none',
+    },
+    {
+      path: 'videos/imports',
+      component: () => import('./admin/components/VideoImports'),
+      requiredFeature: 'videos.manage',
       guard: 'none',
     },
     {
@@ -107,6 +117,16 @@ const videosModule: GatewazeModule = {
       defaultLocation: 'sidebar',
       order: 66,
     },
+    {
+      path: '/videos/imports',
+      label: 'Video imports',
+      // ArrowDownTrayIcon.
+      icon: 'ArrowDownTray',
+      requiredFeature: 'videos.manage',
+      defaultSection: 'Content',
+      defaultLocation: 'sidebar',
+      order: 67,
+    },
   ],
 
   workers: [
@@ -127,6 +147,11 @@ const videosModule: GatewazeModule = {
       handler: './workers/import-from-youtube.ts',
       // One video at a time. Each one streams a whole file through the worker,
       // so concurrency here would multiply both memory and egress.
+      concurrency: 1,
+    },
+    {
+      name: 'videos:import-masters-from-drive',
+      handler: './workers/import-masters-from-drive.ts',
       concurrency: 1,
     },
   ],
@@ -170,6 +195,16 @@ const videosModule: GatewazeModule = {
       description:
         'The run stops once it has pulled this much, so an import cannot quietly consume '
         + 'tens of gigabytes. Defaults to 30 GB, about one conference.',
+    },
+    drive_import_run_cap_bytes: {
+      key: 'drive_import_run_cap_bytes',
+      type: 'number',
+      required: false,
+      default: '322122547200',
+      label: 'Total budget per Drive import run (bytes)',
+      description:
+        'The Takeout import stops once it has copied this much into the master store. '
+        + 'Defaults to 300 GB, about one conference of original uploads. Re-run to continue.',
     },
   },
 
