@@ -39,7 +39,7 @@ const warehouseSyncModule: GatewazeModule = {
   name: 'Warehouse Sync',
   description:
     'Replicates a curated, governed subset of the Gatewaze Supabase Postgres into a data warehouse (Snowflake, BigQuery, Redshift, …) via Airbyte, with replication-slot safety monitoring, PII masking, delete/erasure propagation, and reconciliation tests. Snowflake is the first destination.',
-  version: '0.2.4',
+  version: '0.2.5',
 
   features: [
     'warehouse-sync',
