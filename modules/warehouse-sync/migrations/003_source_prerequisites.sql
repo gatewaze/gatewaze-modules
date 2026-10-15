@@ -106,8 +106,12 @@ BEGIN
       -- newsletter engagement
       'newsletter_sends','newsletters_editions','newsletter_send_batches',
       'newsletter_send_recipients',
-      -- list consent / subscriptions
-      'lists','list_subscriptions','email_subscriptions'];
+      -- list consent / subscriptions. NOT email_subscriptions: it belongs to the
+      -- older bulk-emailing module and is dead here (zero rows, and zero inserts,
+      -- updates or deletes in pg_stat_user_tables). Listing it only republished an
+      -- empty table into the warehouse for modellers to trip over. Re-add it if an
+      -- instance turns out to use it.
+      'lists','list_subscriptions'];
     v_present text[];
     v_missing text[];
     v_to_add  text[];
