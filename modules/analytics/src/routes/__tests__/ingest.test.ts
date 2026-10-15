@@ -361,6 +361,19 @@ describe('createIngestRoutes — shortLinkRedirect', () => {
     const res2 = fakeRes();
     await routes.shortLinkRedirect(fakeReq({ params: { slug: 'bad slug!' } }), res2);
     expect(res2._status).toBe(404);
+
+    const res3 = fakeRes();
+    await routes.shortLinkRedirect(fakeReq({ params: { slug: 'a/b' } }), res3);
+    expect(res3._status).toBe(404);
+  });
+
+  it('accepts the Short.io-era slug characters & + ( ) [ ]', async () => {
+    const resolver = vi.fn(async () => ({ status: 307, location: 'https://x.example/' }));
+    const routes = createIngestRoutes(baseDeps({ umamiResolveLink: resolver }));
+    const res = fakeRes();
+    (res as unknown as { redirect: (c: number, u: string) => void }).redirect = () => undefined;
+    await routes.shortLinkRedirect(fakeReq({ params: { slug: 'go.mlops.community--l&l+x(1)[a]' } }), res);
+    expect(resolver.mock.calls[0]![0]).toBe('go.mlops.community--l&l+x(1)[a]');
   });
 
   it('forwards client ip + UA to the resolver', async () => {
