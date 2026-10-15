@@ -7,7 +7,7 @@ const segmentsModule: GatewazeModule = {
   visibility: 'public',
   name: 'Segments',
   description: 'Create and manage audience segments for targeted communications and analytics',
-  version: '1.1.3',
+  version: '1.1.4',
   features: [
     'segments',
     'segments.create',
@@ -70,6 +70,8 @@ const segmentsModule: GatewazeModule = {
     'migrations/021_email_activity_condition.sql',
     // Suppression predicate as a per-person lookup, so it stays fast under any plan.
     'migrations/022_suppression_predicate_lookup.sql',
+    // Per-person lookups marked PARALLEL SAFE so audience scans can use parallel workers.
+    'migrations/023_parallel_safe_lookups.sql',
   ],
 
   workers: [
