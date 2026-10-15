@@ -334,14 +334,22 @@ export default function SegmentsPage() {
       <WorkspaceLayout
         title="Segments"
         actions={
-          <Button
-            color="primary"
-            onClick={() => navigate('/segments/create')}
-            className="gap-2"
-          >
-            <PlusIcon className="size-4" />
-            Create Segment
-          </Button>
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              onClick={() => navigate('/segments/suppression-lists')}
+            >
+              Suppression lists
+            </Button>
+            <Button
+              color="primary"
+              onClick={() => navigate('/segments/create')}
+              className="gap-2"
+            >
+              <PlusIcon className="size-4" />
+              Create Segment
+            </Button>
+          </div>
         }
       >
         <div className="space-y-6">
