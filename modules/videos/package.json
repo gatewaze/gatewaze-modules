@@ -1,6 +1,6 @@
 {
   "name": "@gatewaze-modules/videos",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "license": "Apache-2.0",
   "description": "Video masters, shorts and scheduled publication; editors upload against a talk or episode",
   "main": "index.ts",

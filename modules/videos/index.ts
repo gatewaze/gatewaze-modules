@@ -21,7 +21,7 @@ const videosModule: GatewazeModule = {
   description:
     'Video masters, shorts and scheduled publication. Editors upload against a talk or episode; '
     + 'Gatewaze holds the file and publishes on a schedule.',
-  version: '1.10.0',
+  version: '1.11.0',
   features: ['videos', 'videos.manage', 'videos.edit'],
 
   dependencies: ['content-platform'],
@@ -60,6 +60,9 @@ const videosModule: GatewazeModule = {
     // an S3-compatible bucket (Backblaze B2 on AAIF) while thumbnails and
     // every earlier row stay on Supabase Storage.
     'migrations/014_storage_provider.sql',
+    // 015 names a master adopted from an object that was put in the bucket
+    // by something outside the module (a local yt-dlp run shipped up).
+    'migrations/015_bucket_import_source.sql',
   ],
 
   apiRoutes: async (app: unknown, ctx?: unknown) => {
@@ -152,6 +155,12 @@ const videosModule: GatewazeModule = {
     {
       name: 'videos:import-masters-from-drive',
       handler: './workers/import-masters-from-drive.ts',
+      concurrency: 1,
+    },
+    {
+      // Rows only, no bytes moved: adopts objects already in the S3 bucket.
+      name: 'videos:adopt-from-bucket',
+      handler: './workers/adopt-from-bucket.ts',
       concurrency: 1,
     },
   ],

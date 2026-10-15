@@ -277,16 +277,23 @@ export async function importYoutubeVideos(
         }, { onConflict: 'video_id,subject_type,subject_id', ignoreDuplicates: true });
       }
       // The publication that describes what is ALREADY public on YouTube.
-      await supabase.from('video_publications').upsert({
-        video_id: videoId,
-        platform: 'youtube',
-        state: 'published',
-        requested_visibility: 'public',
-        external_id: t.youtubeId,
-        external_url: `https://youtu.be/${t.youtubeId}`,
-        external_visibility: 'public',
-        published_at: new Date().toISOString(),
-      }, { onConflict: 'platform,external_id', ignoreDuplicates: true });
+      // Select then insert rather than upsert: the (platform, external_id)
+      // unique index is partial and PostgREST cannot name it as a conflict
+      // target, so the upsert this used to be never wrote a row.
+      const { data: pubs } = await supabase
+        .from('video_publications').select('id').eq('platform', 'youtube').eq('external_id', t.youtubeId).limit(1);
+      if (!(pubs ?? []).length) {
+        await supabase.from('video_publications').insert({
+          video_id: videoId,
+          platform: 'youtube',
+          state: 'published',
+          requested_visibility: 'public',
+          external_id: t.youtubeId,
+          external_url: `https://youtu.be/${t.youtubeId}`,
+          external_visibility: 'public',
+          published_at: new Date().toISOString(),
+        });
+      }
 
       const store = storeForNew(supabase, 'master');
       const assetIns = await supabase

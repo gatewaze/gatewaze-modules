@@ -8,7 +8,7 @@
 
 import { describe, it, expect } from 'vitest';
 import {
-  s3SettingsFromEnv, providerForNew, bucketForNew, storeFor, storeForNew, assertSafeKey, externalise,
+  s3SettingsFromEnv, providerForNew, bucketForNew, storeFor, storeForNew, assertSafeKey, assertFolderPrefix, externalise,
 } from '../lib/storage.js';
 
 const S3_ENV = {
@@ -94,6 +94,14 @@ describe('assertSafeKey', () => {
     for (const bad of ['../x', 'a/../b', '/abs', 'a\u0000b', '']) {
       expect(() => assertSafeKey(bad)).toThrow(/unsafe/);
     }
+  });
+});
+
+describe('assertFolderPrefix', () => {
+  it('requires the trailing slash so a prefix cannot match a sibling folder', () => {
+    expect(assertFolderPrefix('local-import/')).toBe('local-import/');
+    expect(() => assertFolderPrefix('local-import')).toThrow(/end in/);
+    expect(() => assertFolderPrefix('../x/')).toThrow(/unsafe/);
   });
 });
 
