@@ -7,13 +7,6 @@
  * dependency-free. The Supabase client and the job enqueuer are passed in.
  */
 
-import { createHash } from 'node:crypto';
-
-/** Same normalisation as the SQL compliance_email_sha256(). */
-export function emailSha256(email: string): string {
-  return createHash('sha256').update(email.trim().toLowerCase(), 'utf8').digest('hex');
-}
-
 export const REQUEST_TYPES = [
   'data_deletion',
   'data_export',
@@ -133,7 +126,7 @@ export function parseCreateInput(body: unknown): CreateInput {
 }
 
 const COLUMNS =
-  'id, request_type, status, subject_email, subject_emails, subject_email_sha256, source, notes, ' +
+  'id, request_type, status, subject_email, subject_emails, subject_email_hmac, source, notes, ' +
   'requested_at, due_at, submitted_via, submitted_by, requester_email, plan, plan_status, plan_error, ' +
   'plan_built_at, previewed_by, execute_status, executed_by, executed_at, report, processors, checklist, ' +
   'identifiers, error_message, processing_completed_at, processors_ran_at, redacted_at, created_at, updated_at';
@@ -185,20 +178,20 @@ export async function getRequest(supabase: Supabase, id: string) {
 }
 
 /** Requests for an email, matched exactly (by hash once a request is redacted). */
-export async function findByEmail(supabase: Supabase, email: string, sha256: string) {
-  // Two plain filters rather than one .or() string, so the address never
-  // becomes part of a PostgREST filter expression.
-  const [open, redacted] = await Promise.all([
-    supabase.from('compliance_privacy_requests').select(COLUMNS)
-      .contains('subject_emails', [email]).order('requested_at', { ascending: false }).limit(20),
-    supabase.from('compliance_privacy_requests').select(COLUMNS)
-      .contains('subject_email_sha256', [sha256]).order('requested_at', { ascending: false }).limit(20),
-  ]);
-  const error = open.error ?? redacted.error;
+export async function findByEmail(supabase: Supabase, email: string) {
+  // Matching happens in the database: redacted requests only hold a keyed
+  // hash, and the key never leaves the database.
+  const { data: ids, error } = await supabase.rpc('compliance_find_requests_by_email', { p_email: email });
   if (error) throw new PrivacyError(500, 'QUERY_ERROR', error.message);
-  const byId = new Map<string, Record<string, unknown>>();
-  for (const r of [...(open.data ?? []), ...(redacted.data ?? [])]) byId.set(r.id, r);
-  return [...byId.values()].sort((a, b) => String(b.requested_at).localeCompare(String(a.requested_at)));
+  const list = ((ids ?? []) as Array<string | { compliance_find_requests_by_email: string }>)
+    .map((r) => (typeof r === 'string' ? r : r.compliance_find_requests_by_email))
+    .filter(isUuid)
+    .slice(0, 50);
+  if (list.length === 0) return [];
+  const { data, error: e2 } = await supabase.from('compliance_privacy_requests').select(COLUMNS)
+    .in('id', list).order('requested_at', { ascending: false });
+  if (e2) throw new PrivacyError(500, 'QUERY_ERROR', e2.message);
+  return data ?? [];
 }
 
 export async function queuePreview(supabase: Supabase, enqueue: Enqueue | undefined, id: string, actor: Actor) {
@@ -398,8 +391,8 @@ export function reportMarkdown(row: Record<string, any>): string {
   }
 
   lines.push('## What was kept, and why', '');
-  lines.push('- A sha256 hash of each erased email address, with no other data, used only to stop the address being subscribed or emailed again. The address itself is not stored.');
-  lines.push('- This request record, with the addresses replaced by their hashes, as the record that the request was handled (GDPR Art. 5(2)).');
+  lines.push('- A keyed hash (HMAC-SHA256) of each erased email address, with no other data. It is used only to stop us or a third party adding the address again through an import or a partner or event list. If the person signs up again themselves and confirms by a link emailed to that address, the hash is removed. The address itself is not stored, and the hash cannot be checked without a key held in our database.');
+  lines.push('- This request record, with the addresses replaced by keyed hashes, for 30 days after completion. It is then deleted; the privacy team keeps the master record.');
   for (const t of retained) {
     lines.push(`- ${t.table}: ${t.retain!.reason}. Basis: ${t.retain!.basis}. Period: ${t.retain!.period}`);
   }

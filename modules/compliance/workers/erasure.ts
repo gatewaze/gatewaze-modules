@@ -193,6 +193,10 @@ async function execute(client, id, actor, log) {
  * with a direct job is safe.
  */
 async function sweep(client, log) {
+  // Closed requests are deleted after 30 days; the privacy team keeps the
+  // master record. Suppressions are kept (their request_id is set null).
+  const purged = await client.query('SELECT public.compliance_purge_requests(30) AS n');
+  if (purged.rows[0]?.n > 0) log.info?.(`[compliance:erasure] deleted ${purged.rows[0].n} closed request(s) past retention`);
   await client.query(
     "UPDATE public.compliance_privacy_requests SET execute_status = 'failed', error_message = 'The worker stopped during the erasure; the transaction was rolled back. Preview again and retry.' WHERE execute_status = 'running' AND updated_at < now() - interval '30 minutes'");
   await client.query(

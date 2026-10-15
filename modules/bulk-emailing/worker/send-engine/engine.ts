@@ -15,7 +15,7 @@
  * Wired in by each domain's dispatch cron (newsletters/broadcasts/bulk-emailing
  * workers) — always active.
  */
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import { resolveChannelProvider } from './channels/registry.js';
 import type { MessageAttachment } from './channels/types.js';
 
@@ -366,42 +366,40 @@ async function complianceInstalled(deps: EngineDeps): Promise<boolean> {
   return !!data;
 }
 
-/** sha256 of the lowercased, trimmed address; matches compliance_email_sha256(). */
-export function suppressionHash(email: string): string {
-  return createHash('sha256').update(email.trim().toLowerCase(), 'utf8').digest('hex');
-}
-
 /**
  * Split claimed rows into suppressed and allowed using the compliance
- * module's suppression table. Without the compliance module there is no
+ * module's suppression list. Without the compliance module there is no
  * table and nothing is suppressed. Any other lookup failure is returned as
  * an error so the caller holds the batch rather than risk mailing an erased
  * address.
  */
 export async function splitSuppressed(deps: EngineDeps, rows: Recipient[]): Promise<{ allowed: Recipient[]; suppressed: Recipient[]; error?: unknown }> {
-  const withHash = rows.map((r) => ({ r, h: r.email ? suppressionHash(r.email) : null }));
-  const hashes = [...new Set(withHash.map((x) => x.h).filter((h): h is string => !!h))];
-  if (hashes.length === 0) return { allowed: rows, suppressed: [] };
+  const emails = [...new Set(rows.map((r) => r.email?.trim().toLowerCase()).filter((e): e is string => !!e))];
+  if (emails.length === 0) return { allowed: rows, suppressed: [] };
   const hit = new Set<string>();
-  for (let i = 0; i < hashes.length; i += 100) {
-    const { data, error } = await deps.supabase.from('compliance_suppressions').select('email_sha256').in('email_sha256', hashes.slice(i, i + 100));
+  for (let i = 0; i < emails.length; i += 200) {
+    // The suppression list is a keyed hash whose key stays in the database,
+    // so the database does the matching.
+    const { data, error } = await deps.supabase.rpc('compliance_suppressed_emails', { p_emails: emails.slice(i, i + 200) });
     if (error) {
-      // "No such table" is only safe when the compliance module really isn't
-      // installed. PostgREST also reports a missing table while it reloads
-      // its schema cache, so confirm before sending, and never trust it once
-      // this process has seen the table.
-      const looksMissing = error.code === '42P01' || error.code === 'PGRST205';
+      // "No such function" is only safe when the compliance module really
+      // isn't installed. PostgREST also reports it while reloading its schema
+      // cache, so confirm before sending, and never trust it once seen.
+      const looksMissing = error.code === 'PGRST202' || error.code === '42883';
       if (looksMissing && !suppressionTableSeen && !(await complianceInstalled(deps))) {
         return { allowed: rows, suppressed: [] };
       }
       return { allowed: [], suppressed: [], error };
     }
     suppressionTableSeen = true;
-    for (const d of (data ?? []) as Array<{ email_sha256: string }>) hit.add(d.email_sha256);
+    for (const e of (data ?? []) as string[]) hit.add(e.trim().toLowerCase());
   }
   const allowed: Recipient[] = [];
   const suppressed: Recipient[] = [];
-  for (const { r, h } of withHash) (h && hit.has(h) ? suppressed : allowed).push(r);
+  for (const r of rows) {
+    const e = r.email?.trim().toLowerCase();
+    (e && hit.has(e) ? suppressed : allowed).push(r);
+  }
   return { allowed, suppressed };
 }
 
