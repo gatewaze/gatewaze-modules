@@ -59,7 +59,7 @@ DO $$ BEGIN
   GRANT ALL ON public.segments_email_activity, public.segments_email_activity_state TO service_role;
 EXCEPTION WHEN undefined_object THEN NULL; END $$;
 
--- Rebuild from email_send_log and the reply tables. Takes about 35s on AAIF,
+-- Rebuild from email_send_log and the reply tables. Takes about 30s on AAIF,
 -- so only the worker (direct connection, long statement limit) calls it.
 CREATE OR REPLACE FUNCTION public.segments_refresh_email_activity()
 RETURNS jsonb
@@ -72,6 +72,12 @@ DECLARE
   v_tbl    text;
   v_union  text[] := '{}';
 BEGIN
+  -- One rebuild at a time: a retry or a manual run alongside the cron waits
+  -- for nothing and returns.
+  IF NOT pg_try_advisory_xact_lock(hashtext('segments_refresh_email_activity')) THEN
+    RETURN jsonb_build_object('skipped', 'another refresh is running');
+  END IF;
+
   CREATE TEMP TABLE IF NOT EXISTS _seg_activity_new (
     email text PRIMARY KEY, last_sent_at timestamptz, last_opened_at timestamptz,
     last_clicked_at timestamptz, last_replied_at timestamptz
@@ -95,13 +101,24 @@ BEGIN
   END LOOP;
   IF cardinality(v_union) > 0 THEN
     EXECUTE format(
-      'INSERT INTO _seg_activity_new AS n (email, last_replied_at)
-       SELECT email, max(created_at) FROM (%s) r GROUP BY email
-       ON CONFLICT (email) DO UPDATE SET last_replied_at = EXCLUDED.last_replied_at',
+      -- Only addresses we have emailed: reply senders are not authenticated,
+      -- so a stranger's reply must not add rows or mark another address.
+      'UPDATE _seg_activity_new n SET last_replied_at = r.last_replied_at
+         FROM (SELECT email, max(created_at) AS last_replied_at FROM (%s) x GROUP BY email) r
+        WHERE n.email = r.email',
       array_to_string(v_union, ' UNION ALL '));
   END IF;
 
   SELECT count(*) INTO v_rows FROM _seg_activity_new;
+
+  -- An empty rebuild over a populated summary means the send log is missing
+  -- or unreadable, not that nobody was ever emailed. Keep the old summary:
+  -- emptying it would make every "not opened" or "not replied" exclusion
+  -- match everyone.
+  IF v_rows = 0 AND EXISTS (SELECT 1 FROM public.segments_email_activity) THEN
+    RETURN jsonb_build_object('skipped', 'rebuild found no activity; kept the previous summary');
+  END IF;
+  ANALYZE _seg_activity_new;
 
   -- Upsert only changed rows, then drop addresses with no activity left.
   INSERT INTO public.segments_email_activity AS a (email, last_sent_at, last_opened_at, last_clicked_at, last_replied_at)

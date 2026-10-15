@@ -22,6 +22,8 @@ export default async function handler(_job: Job): Promise<unknown> {
     return { skipped: 'no DATABASE_URL' };
   }
   const c = new pg.Client({ connectionString: url, application_name: 'segments-email-activity' });
+  // A dropped connection emits 'error'; unhandled, it would crash the worker.
+  c.on('error', (e) => console.warn(`[segments] refresh-email-activity connection error: ${e.message}`));
   await c.connect();
   try {
     await c.query('BEGIN');
