@@ -63,7 +63,15 @@ The engine fails closed. The preview stops the erasure if the person has rows in
 
 ### Suppression
 
-Every erased address is stored in `compliance_suppressions` as `sha256(lower(trim(email)))`, with no other data. The send engine skips suppressed recipients for every channel, and a trigger on `list_subscriptions`, `email_subscriptions` and `calendars_members` stops anything re-subscribing a suppressed address. The hash format matches warehouse-sync's `email_sha256`.
+Every erased address is stored in `compliance_suppressions` as an HMAC-SHA256 of the lowercased, trimmed address, with no other data. The key is generated once into Supabase Vault (`compliance_suppression_hmac_key`), or into the locked `compliance_hmac_key` table where Vault isn't installed, and isn't sent to application code (a database owner can still read it). Rotating it un-suppresses every erased address.
+
+The suppression stops us or a third party adding the person again: the send engine skips suppressed recipients (it asks `compliance_suppressed_emails()`), and a trigger on `list_subscriptions`, `email_subscriptions` and `calendars_members` refuses to subscribe a suppressed address, whatever source or metadata the row claims and whoever writes it.
+
+The person can sign up again themselves. The only way to lift a suppression is `compliance_lift_suppression(email, 'double_opt_in')`, which the newsletter sign-up function calls after the person confirms a link emailed to that address, proving they control the mailbox. A signed-in sign-up for a suppressed address is sent through that emailed confirmation too, since accounts can be created without proving the address. So an erased person re-subscribes through the newsletter sign-up form, not the portal's subscription or profile pages. Confirming lifts the suppression for that address everywhere, including a marketing objection, because the person has given new consent. The trigger never lifts anything, because signed-in users and some service-role endpoints can put any source or metadata on a subscription row.
+
+### Retention
+
+Completed and rejected requests are deleted 30 days after they close, by the sweep (`compliance_purge_requests(30)`). The privacy team keeps the master record of each request. Suppressions stay after their request is deleted.
 
 ### Public API and MCP
 

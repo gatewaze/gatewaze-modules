@@ -145,7 +145,7 @@ BEGIN
   END IF;
 
   SELECT count(*) INTO v_n FROM public.compliance_privacy_requests
-   WHERE request_type = 'data_export' AND (subject_email NOT LIKE 'sha256:%' OR requester_email NOT LIKE 'sha256:%' OR notes IS NOT NULL);
+   WHERE request_type = 'data_export' AND (subject_email NOT LIKE 'hmac:%' OR requester_email NOT LIKE 'hmac:%' OR notes IS NOT NULL);
   IF v_n <> 0 THEN RAISE EXCEPTION 'earlier request for the same person kept plain identifiers'; END IF;
 
   IF (SELECT execute_status FROM public.compliance_privacy_requests WHERE id = v_req) <> 'erased' THEN
@@ -153,11 +153,15 @@ BEGIN
   END IF;
 END $$;
 
--- 4. A suppressed address can't be re-subscribed.
+-- 4. Nothing written to a subscription table can re-add a suppressed
+--    address or lift its suppression, whatever source or metadata it claims,
+--    including a signed-in user. Only the explicit lift (called after a
+--    confirmed double opt-in) does.
 DO $$
 DECLARE
   v_list uuid;
   v_sub  boolean;
+  v_src  text;
 BEGIN
   IF to_regclass('public.list_subscriptions') IS NULL THEN
     RETURN;
@@ -166,11 +170,59 @@ BEGIN
   IF v_list IS NULL THEN
     RETURN;
   END IF;
-  INSERT INTO public.list_subscriptions (list_id, email, subscribed)
-  VALUES (v_list, 'erasure-test@example.invalid', true)
+
+  FOREACH v_src IN ARRAY ARRAY['import:partner-list', 'subscription-centre', 'newsletter-signup', 'portal'] LOOP
+    INSERT INTO public.list_subscriptions (list_id, email, subscribed, source, metadata)
+    VALUES (v_list, 'erasure-test@example.invalid', true, v_src, '{"consent":{"method":"double_opt_in"}}')
+    RETURNING subscribed INTO v_sub;
+    IF v_sub THEN RAISE EXCEPTION 'a % write re-subscribed a suppressed address', v_src; END IF;
+    DELETE FROM public.list_subscriptions WHERE email = 'erasure-test@example.invalid';
+  END LOOP;
+
+  -- As a signed-in portal user claiming to be the person, through RLS.
+  PERFORM set_config('request.jwt.claims', '{"role":"authenticated","email":"erasure-test@example.invalid"}', true);
+  SET LOCAL ROLE authenticated;
+  INSERT INTO public.list_subscriptions (list_id, email, subscribed, source, metadata)
+  VALUES (v_list, 'erasure-test@example.invalid', true, 'portal', '{"consent":{"method":"double_opt_in"}}');
+  RESET ROLE;
+  PERFORM set_config('request.jwt.claims', '', true);
+  SELECT subscribed INTO v_sub FROM public.list_subscriptions WHERE email = 'erasure-test@example.invalid';
+  IF v_sub THEN RAISE EXCEPTION 'a signed-in user re-subscribed a suppressed address'; END IF;
+  -- An UPDATE flipping the existing row back on is blocked too.
+  UPDATE public.list_subscriptions SET subscribed = true, source = 'subscription-centre'
+   WHERE email = 'erasure-test@example.invalid';
+  SELECT subscribed INTO v_sub FROM public.list_subscriptions WHERE email = 'erasure-test@example.invalid';
+  IF v_sub THEN RAISE EXCEPTION 'an UPDATE re-subscribed a suppressed address'; END IF;
+  DELETE FROM public.list_subscriptions WHERE email = 'erasure-test@example.invalid';
+  IF NOT public.compliance_is_suppressed('erasure-test@example.invalid') THEN
+    RAISE EXCEPTION 'a subscription write lifted the suppression';
+  END IF;
+
+  -- The confirmed double opt-in path: lift, then subscribe.
+  BEGIN
+    PERFORM public.compliance_lift_suppression('erasure-test@example.invalid', 'admin');
+    RAISE EXCEPTION 'lift accepted an unsupported reason';
+  EXCEPTION WHEN raise_exception THEN
+    IF SQLERRM NOT LIKE '%unsupported reason%' THEN RAISE; END IF;
+  END;
+  IF NOT public.compliance_lift_suppression('Erasure-Test@example.invalid ', 'double_opt_in') THEN
+    RAISE EXCEPTION 'lift found nothing to remove';
+  END IF;
+  INSERT INTO public.list_subscriptions (list_id, email, subscribed, source)
+  VALUES (v_list, 'erasure-test@example.invalid', true, 'newsletter-signup')
   RETURNING subscribed INTO v_sub;
-  IF v_sub THEN
-    RAISE EXCEPTION 'suppressed address was re-subscribed';
+  IF NOT v_sub THEN RAISE EXCEPTION 'the person could not sign up after confirming'; END IF;
+  IF NOT public.compliance_is_suppressed('erasure-alias@example.invalid') THEN
+    RAISE EXCEPTION 'the alias suppression was lifted too';
+  END IF;
+END $$;
+
+-- 4b. Suppressions are keyed hashes, not plain sha256.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM public.compliance_suppressions
+             WHERE email_hmac = encode(sha256(convert_to('erasure-alias@example.invalid', 'UTF8')), 'hex')) THEN
+    RAISE EXCEPTION 'suppression stored a plain sha256';
   END IF;
 END $$;
 
@@ -197,8 +249,25 @@ DECLARE
 BEGIN
   PERFORM public.compliance_privacy_request_redact(v_req);
   SELECT * INTO r FROM public.compliance_privacy_requests WHERE id = v_req;
-  IF r.subject_email NOT LIKE 'sha256:%' OR r.subject_emails IS NOT NULL OR r.identifiers::text LIKE '%example.invalid%' THEN
+  IF r.subject_email NOT LIKE 'hmac:%' OR r.subject_emails IS NOT NULL OR r.identifiers::text LIKE '%example.invalid%' THEN
     RAISE EXCEPTION 'request still holds plain identifiers: %', row_to_json(r);
+  END IF;
+END $$;
+
+-- 7. Retention deletes requests that closed more than 30 days ago.
+DO $$
+DECLARE
+  v_req uuid := (SELECT id FROM public.compliance_privacy_requests WHERE subject_email LIKE 'hmac:%' AND request_type = 'data_deletion' LIMIT 1);
+BEGIN
+  UPDATE public.compliance_privacy_requests
+     SET status = 'completed', processing_completed_at = now() - interval '31 days'
+   WHERE id = v_req;
+  PERFORM public.compliance_purge_requests(30);
+  IF EXISTS (SELECT 1 FROM public.compliance_privacy_requests WHERE id = v_req) THEN
+    RAISE EXCEPTION 'retention did not delete a closed request';
+  END IF;
+  IF NOT public.compliance_is_suppressed('erasure-alias@example.invalid') THEN
+    RAISE EXCEPTION 'retention removed a suppression';
   END IF;
 END $$;
 
