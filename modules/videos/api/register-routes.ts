@@ -42,6 +42,7 @@ import { createClient } from '@supabase/supabase-js';
 import { rateLimit } from 'express-rate-limit';
 import { createPublicVideoRoutes, mountPublicVideoRoutes } from './public-routes.js';
 import { mountEditorRoutes } from './editor-routes.js';
+import { mountImportsRoutes } from './imports-routes.js';
 
 interface RegisterCtx {
   enqueueJob?: (
@@ -171,5 +172,34 @@ export function registerRoutes(app: Express, ctx?: RegisterCtx): void {
   // /api/videos/:id, so it gets its own prefix instead.
   app.use('/api/video-editor', editorRouter);
 
-  console.log('[videos] module routes registered (public reads + editor workflow)');
+  // The importers: operator-only. Under /api/modules so the platform's
+  // super-admin gate applies, and checked again here against admin_profiles
+  // so this router does not depend on that gate being in front of it.
+  const importsRouter = Router();
+  importsRouter.use(rateLimit({ windowMs: 60_000, limit: 60, standardHeaders: true, legacyHeaders: false }));
+  importsRouter.use(json({ limit: '16kb' }));
+  importsRouter.use(requireUser);
+  importsRouter.use(async (req, res, next) => {
+    try {
+      const { data } = await userClient(req).auth.getUser();
+      const userId = data?.user?.id;
+      const { data: profile } = await supabase
+        .from('admin_profiles').select('role, is_active').eq('user_id', userId ?? '').maybeSingle();
+      if (!profile?.is_active || !['super_admin', 'admin'].includes(String(profile.role))) {
+        res.status(403).json({ error: 'admin access required' });
+        return;
+      }
+      next();
+    } catch {
+      res.status(403).json({ error: 'admin access required' });
+    }
+  });
+  mountImportsRoutes(importsRouter, {
+    supabase,
+    logger,
+    ...(ctx?.enqueueJob && { enqueueJob: ctx.enqueueJob }),
+  });
+  app.use('/api/modules/videos/imports', importsRouter);
+
+  console.log('[videos] module routes registered (public reads + editor workflow + imports)');
 }
