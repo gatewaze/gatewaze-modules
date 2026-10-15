@@ -38,7 +38,7 @@ const analyticsModule: GatewazeModule = {
   name: 'Umami Analytics',
   description:
     'First-party analytics backed by self-hosted Umami. Auto-provisions a Umami "website" entry per Gatewaze site, portal, and external host; injects per-property tracking snippets; surfaces dashboards (pageviews, sessions, replay deep-link, cohorts, retention) and a generalised custom-script pipeline. Includes first-class Segment integration.',
-  version: '0.2.1',
+  version: '0.2.2',
 
   features: ['analytics', 'tracking-scripts', 'segment-integration'],
 
