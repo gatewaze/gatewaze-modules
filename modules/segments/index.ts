@@ -7,7 +7,7 @@ const segmentsModule: GatewazeModule = {
   visibility: 'public',
   name: 'Segments',
   description: 'Create and manage audience segments for targeted communications and analytics',
-  version: '1.1.2',
+  version: '1.1.4',
   features: [
     'segments',
     'segments.create',
@@ -64,8 +64,29 @@ const segmentsModule: GatewazeModule = {
     'migrations/018_email_engagement_indexes.sql',
     // Geocode a place to the median of its contacts, not the mean (outliers moved centres).
     'migrations/019_geocode_place_median.sql',
-// Suppression lists: uploaded hashed exclusions, usable as an audience condition.
-'migrations/020_suppression_lists.sql',
+    // Suppression lists: uploaded hashed exclusions, usable as an audience condition.
+    'migrations/020_suppression_lists.sql',
+    // Any-email activity condition: opened/clicked, sent, replied within N days.
+    'migrations/021_email_activity_condition.sql',
+    // Suppression predicate as a per-person lookup, so it stays fast under any plan.
+    'migrations/022_suppression_predicate_lookup.sql',
+    // Per-person lookups marked PARALLEL SAFE so audience scans can use parallel workers.
+    'migrations/023_parallel_safe_lookups.sql',
+  ],
+
+  workers: [
+    { name: 'segments:refresh-email-activity', handler: './workers/refresh-email-activity.ts' },
+  ],
+
+  crons: [
+    {
+      name: 'segments-refresh-email-activity',
+      queue: 'jobs',
+      // Rebuilds the per-address activity summary behind the "Any email
+      // activity" condition. A full rebuild takes about a minute on AAIF.
+      schedule: { every: 2 * 60 * 60_000 },
+      data: { kind: 'segments:refresh-email-activity' },
+    },
   ],
 
   publicApiScopes: [
