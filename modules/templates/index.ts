@@ -65,6 +65,9 @@ const templatesModule: GatewazeModule = {
     'migrations/028_sources_token_column_privileges.sql',
     // Blocks a new edition starts with, from the template repo's edition.json.
     'migrations/029_library_new_edition_blocks.sql',
+    // service_role can use the schema: page_blocks row triggers call
+    // templates.walk_media_urls as the invoking role.
+    'migrations/030_service_role_schema_usage.sql',
   ],
 
   // HTTP routes per spec-templates-module §6.9. Mounted under

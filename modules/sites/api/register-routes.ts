@@ -187,10 +187,17 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
     // into public/media/ and references them via relative paths instead of
     // CDN URLs. Per spec-content-modules-git-architecture §14.3.
     const siteConfig = (site.config ?? {}) as {
-      publish?: { embed_media_in_git?: boolean };
+      publish?: { embed_media_in_git?: boolean; output?: 'nextjs' | 'static-html'; canonical_origin?: string };
       theme?: { url?: string; ref?: string; subdir?: string; owns_routing?: boolean };
+      lfx?: { domain?: string };
     };
     const embedMediaInGit = siteConfig.publish?.embed_media_in_git === true;
+    // Static-HTML output: blocks-mode pages are rendered through the
+    // canonical canvas renderer (wrapper + blocks) into
+    // `<full_path>/index.html` and the publish branch becomes a plain
+    // static site. Set by the LFX importer; no Next.js scaffolding is
+    // emitted and the tree is replaced wholesale on each publish.
+    const staticHtml = siteConfig.publish?.output === 'static-html';
     const themeConfig = siteConfig.theme;
     // When the theme owns routing, the theme repo's own `app/` (or
     // `src/app/`) tree is authoritative. The platform still emits
@@ -327,27 +334,68 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
         id: string;
         page_id: string;
         block_def_id: string;
+        parent_brick_id: string | null;
         sort_order: number;
         variant_key: string;
         content: Record<string, unknown>;
+        kind_config: Record<string, unknown> | null;
       }
       const pageBlocksRes = await supabase
         .from('page_blocks')
-        .select('id, page_id, block_def_id, sort_order, variant_key, content')
+        .select('id, page_id, block_def_id, parent_brick_id, sort_order, variant_key, content, kind_config')
         .in('page_id', blocksPageIds)
         .order('sort_order', { ascending: true });
       const pageBlocks = (((pageBlocksRes as { data: PageBlockRow[] | null }).data) ?? []);
 
-      interface BlockDefRow { id: string; key: string; name: string; has_bricks: boolean; }
+      interface BlockDefRow {
+        id: string;
+        key: string;
+        name: string;
+        has_bricks: boolean;
+        html: string;
+        schema: Record<string, unknown>;
+        thumbnail_url: string | null;
+        data_source: { adapter?: string; operation?: string; params?: unknown } | null;
+      }
       const blockDefIds = Array.from(new Set(pageBlocks.map((pb) => pb.block_def_id)));
       const blockDefById = new Map<string, BlockDefRow>();
       if (blockDefIds.length > 0) {
         const blockDefsRes = await supabase
           .from('templates_block_defs')
-          .select('id, key, name, has_bricks')
+          .select('id, key, name, has_bricks, html, schema, thumbnail_url, data_source')
           .in('id', blockDefIds);
         for (const d of (((blockDefsRes as { data: BlockDefRow[] | null }).data) ?? [])) {
           blockDefById.set(d.id, d);
+        }
+      }
+
+      // Data-backed blocks (LFX member logos, upcoming events, latest
+      // news): refresh their list fields from the platform so the
+      // published site is current, and store the snapshot back so the
+      // canvas shows what shipped. Only for static-html (LFX) sites;
+      // blocks without a fill are untouched.
+      if (staticHtml) {
+        const { resolveFill, fillBlockContent, createSupabaseLfxDataProvider } = await import('../lib/lfx-import/index.js');
+        const internalOrigin = (process.env.SUPABASE_URL ?? '').replace(/\/+$/, '');
+        const provider = createSupabaseLfxDataProvider(supabase, {
+          rewriteUrl: (u) => (internalOrigin && publicSupabaseUrl && u.startsWith(internalOrigin) ? publicSupabaseUrl + u.slice(internalOrigin.length) : u),
+          blogBase: process.env.SITES_BLOG_BASE ?? '/blog',
+        });
+        for (const pb of pageBlocks) {
+          const def = blockDefById.get(pb.block_def_id);
+          const fill = def ? resolveFill(def.data_source, pb.kind_config) : null;
+          if (!fill) continue;
+          const filled = await fillBlockContent(pb.content, fill, provider);
+          for (const e of filled.errors) {
+            logger.warn('publish data fill failed — keeping previous snapshot', { siteId, blockId: pb.id, field: e.field, error: e.message });
+          }
+          const changed = JSON.stringify(filled.content) !== JSON.stringify(pb.content);
+          pb.content = filled.content;
+          // Write back only when the rows changed, so an untouched block
+          // is never rewritten over a concurrent canvas save.
+          if (!changed) continue;
+          const upd = await supabase.from('page_blocks').update({ content: filled.content }).eq('id', pb.id);
+          if (upd.error) logger.warn('publish data fill snapshot not stored', { blockId: pb.id, error: upd.error.message });
         }
       }
 
@@ -363,7 +411,8 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
         .filter((pb) => blockDefById.get(pb.block_def_id)?.has_bricks)
         .map((pb) => pb.id);
       const bricksByBlockId = new Map<string, PageBlockBrickRow[]>();
-      const brickDefById = new Map<string, { id: string; key: string }>();
+      interface BrickDefRow { id: string; key: string; html: string; schema: Record<string, unknown> }
+      const brickDefById = new Map<string, BrickDefRow>();
       if (blockIdsWithBricks.length > 0) {
         const bricksRes = await supabase
           .from('page_block_bricks')
@@ -380,12 +429,63 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
         if (brickDefIds.length > 0) {
           const brickDefsRes = await supabase
             .from('templates_brick_defs')
-            .select('id, key')
+            .select('id, key, html, schema')
             .in('id', brickDefIds);
-          for (const d of (((brickDefsRes as { data: { id: string; key: string }[] | null }).data) ?? [])) {
+          for (const d of (((brickDefsRes as { data: BrickDefRow[] | null }).data) ?? [])) {
             brickDefById.set(d.id, d);
           }
         }
+      }
+
+      if (staticHtml) {
+        const { buildStaticHtmlFiles } = await import('../lib/publish-worker/static-html.js');
+        const wrapperIds = new Set<string>();
+        if (site.wrapper_id) wrapperIds.add(site.wrapper_id);
+        for (const p of blocksPages) if (p.wrapper_id) wrapperIds.add(p.wrapper_id);
+        const wrappers = new Map<string, { id: string; key: string; html: string }>();
+        if (wrapperIds.size > 0) {
+          const wrapRes = await supabase
+            .from('templates_wrappers')
+            .select('id, key, html')
+            .in('id', [...wrapperIds]);
+          for (const w of (((wrapRes as { data: Array<{ id: string; key: string; html: string }> | null }).data) ?? [])) {
+            wrappers.set(w.id, w);
+          }
+        }
+        // Only a well-formed https origin reaches sitemap.xml / robots.txt.
+        const originCandidate =
+          siteConfig.publish?.canonical_origin
+          ?? (siteConfig.lfx?.domain ? `https://${siteConfig.lfx.domain}` : null);
+        const canonicalOrigin =
+          typeof originCandidate === 'string' && /^https:\/\/[a-z0-9.-]{1,253}$/i.test(originCandidate.replace(/\/+$/, ''))
+            ? originCandidate.replace(/\/+$/, '')
+            : null;
+        const rendered = buildStaticHtmlFiles({
+          siteId,
+          siteSlug: site.slug,
+          brand: process.env.BRAND_ID ?? 'unknown',
+          siteWrapperId: site.wrapper_id,
+          canonicalOrigin,
+          pages: blocksPages.map((p) => ({
+            id: p.id,
+            slug: p.slug,
+            full_path: p.full_path,
+            title: p.title,
+            wrapper_id: p.wrapper_id,
+            blocks: pageBlocks.filter((pb) => pb.page_id === p.id),
+            bricks: pageBlocks
+              .filter((pb) => pb.page_id === p.id)
+              .flatMap((pb) => bricksByBlockId.get(pb.id) ?? []),
+          })),
+          blockDefs: blockDefById,
+          brickDefs: brickDefById,
+          wrappers,
+        });
+        for (const w of rendered.warnings) logger.warn('static-html render warning', { siteId, ...w });
+        for (const [path, html] of rendered.files) out.set(path, html);
+        // The publish branch is exactly the static site: prune everything else.
+        replaceTree = true;
+        logger.info('static-html output emitted', { siteId, pages: blocksPages.length, files: rendered.files.size });
       }
 
       for (const page of blocksPages) {
@@ -570,7 +670,7 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
     //    sticks to content/ + public/_gatewaze/ deltas.
     const analytics = ((site.config ?? {}) as { analytics?: { provider?: string; umami?: { umamiWebsiteId?: string; umamiShareId?: string | null } } }).analytics ?? null;
 
-    if (!themeOwnsRouting) {
+    if (!themeOwnsRouting && !staticHtml) {
       const routeFiles = await emitNextjsRoutes(
         pages.map((p) => ({
           slug: p.slug,
@@ -597,6 +697,8 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
         },
       );
       for (const [path, content] of routeFiles) out.set(path, content);
+    } else if (staticHtml) {
+      logger.info('skipping emitNextjsRoutes: publish.output=static-html', { siteId });
     } else {
       // Compute the paths the route emitter WOULD have produced and add
       // them to removals so prior publishes' platform-emitted `app/*`
