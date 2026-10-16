@@ -79,7 +79,7 @@ export function ViewOnlineSettings({ collectionId }: { collectionId: string }) {
   if (loading) {
     return (
       <div className="flex justify-center py-8">
-        <LoadingSpinner size="sm" />
+        <LoadingSpinner size="small" />
       </div>
     );
   }

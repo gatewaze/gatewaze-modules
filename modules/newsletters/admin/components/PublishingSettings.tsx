@@ -81,7 +81,7 @@ export function PublishingSettings({ collectionId }: { collectionId: string }) {
     }
   };
 
-  if (loading) return <div className="flex justify-center py-8"><LoadingSpinner size="sm" /></div>;
+  if (loading) return <div className="flex justify-center py-8"><LoadingSpinner size="small" /></div>;
 
   return (
     <div className="border border-[var(--gray-a5)] rounded-lg overflow-hidden">

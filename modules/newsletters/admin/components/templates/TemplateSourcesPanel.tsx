@@ -112,7 +112,7 @@ export function TemplateSourcesPanel({ libraryId, hostKind, uploadHref, blockHre
     return () => { supabase.removeChannel(channel); };
   }, [libraryId, reload]);
 
-  if (loading) return <div className="flex justify-center py-8"><LoadingSpinner size="sm" /></div>;
+  if (loading) return <div className="flex justify-center py-8"><LoadingSpinner size="small" /></div>;
 
   const noun = hostKind === 'broadcasts' ? 'broadcasts' : 'this newsletter';
 
