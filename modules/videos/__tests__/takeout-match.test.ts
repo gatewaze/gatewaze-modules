@@ -7,7 +7,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { normaliseTitle, parseCsv, parseTakeoutCsv, matchFile, isVideoFile } from '../lib/takeout-match.js';
+import { normaliseTitle, parseCsv, parseTakeoutCsv, matchFile, isVideoFile, youtubeIdInFilename, youtubeIdFromKey } from '../lib/takeout-match.js';
 
 const known = [
   { id: 'v1', provider_video_id: 'aaaaaaaaaaa', title: 'Giving Your Agentic Coding AI a Security Brain' },
@@ -70,6 +70,45 @@ describe('matchFile', () => {
 
   it('is null for an empty name', () => {
     expect(matchFile('.mp4', known, csv)).toBeNull();
+  });
+
+  it('matches on a YouTube id in the filename before anything else', () => {
+    expect(matchFile('Some Retitled Upload [bbbbbbbbbbb].mp4', known, csv))
+      .toEqual({ videoId: 'v2', youtubeId: 'bbbbbbbbbbb', by: 'filename' });
+    // An ambiguous title stops being ambiguous once the id is in the name.
+    expect(matchFile('Keynote [ddddddddddd].mp4', known, csv))
+      .toEqual({ videoId: 'v4', youtubeId: 'ddddddddddd', by: 'filename' });
+  });
+
+  it('does not fall back to the title when the id in the name is unknown', () => {
+    expect(matchFile('MCP: Challenges & Opportunities [zzzzzzzzzzz].mp4', known, csv)).toBeNull();
+  });
+});
+
+describe('youtubeIdInFilename', () => {
+  it('reads the id yt-dlp puts in square brackets', () => {
+    expect(youtubeIdInFilename('Scaling Agents [vB0WP8CZx1k].mp4')).toBe('vB0WP8CZx1k');
+    expect(youtubeIdInFilename('Scaling Agents [vB0WP8CZx1k]')).toBe('vB0WP8CZx1k');
+  });
+  it('ignores brackets that are not an id', () => {
+    expect(youtubeIdInFilename('Talk [part 2].mp4')).toBeNull();
+    expect(youtubeIdInFilename('[vB0WP8CZx1k] in front.mp4')).toBeNull();
+  });
+  it('strips the id when normalising the title', () => {
+    expect(normaliseTitle('Scaling Agents [vB0WP8CZx1k].mp4')).toBe('scaling agents');
+  });
+});
+
+describe('youtubeIdFromKey', () => {
+  it('takes the id from the folder, even when the filename was sanitised', () => {
+    expect(youtubeIdFromKey('local-import/5lq5zp6wYbQ/Pull-Requests-Are-Dead-5lq5zp6wYbQ-.mp4')).toBe('5lq5zp6wYbQ');
+  });
+  it('falls back to the brackets in the filename', () => {
+    expect(youtubeIdFromKey('drive-import/abc/Scaling Agents [vB0WP8CZx1k].mp4')).toBe('vB0WP8CZx1k');
+    expect(youtubeIdFromKey('Scaling Agents [vB0WP8CZx1k].mp4')).toBe('vB0WP8CZx1k');
+  });
+  it('is null when neither carries one', () => {
+    expect(youtubeIdFromKey('local-import/misc/notes.mp4')).toBeNull();
   });
 });
 

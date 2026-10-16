@@ -54,7 +54,7 @@ export interface ImportedAsset {
   state: 'uploading' | 'ready' | 'failed' | 'superseded';
   bytes: number | null;
   filename: string | null;
-  source: 'youtube_import' | 'drive_import';
+  source: 'youtube_import' | 'drive_import' | 'bucket_import';
   storage_provider: 'supabase' | 's3';
   error: string | null;
   created_at: string;
@@ -67,6 +67,10 @@ export function queueYoutubeImport(scope: { recap_id?: string; event_id?: string
 
 export function queueDriveImport(args: { folder_id: string; event_id?: string }): Promise<QueuedImport> {
   return authedJson(`${BASE}/drive`, { method: 'POST', body: JSON.stringify(args) });
+}
+
+export function queueBucketAdopt(args: { prefix?: string; event_id?: string }): Promise<QueuedImport & { prefix?: string }> {
+  return authedJson(`${BASE}/bucket`, { method: 'POST', body: JSON.stringify(args) });
 }
 
 export async function listRecentImports(): Promise<ImportedAsset[]> {

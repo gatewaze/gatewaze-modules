@@ -22,6 +22,7 @@ import { Badge, Button, Card, Input, WorkspaceLayout } from '@/components/ui';
 import {
   queueDriveImport,
   queueYoutubeImport,
+  queueBucketAdopt,
   listRecentImports,
   formatBytes,
   type ImportedAsset,
@@ -33,7 +34,9 @@ export default function VideoImports() {
   const [folder, setFolder] = useState('');
   const [driveEvent, setDriveEvent] = useState('');
   const [ytScope, setYtScope] = useState('');
-  const [busy, setBusy] = useState<'drive' | 'youtube' | null>(null);
+  const [bucketPrefix, setBucketPrefix] = useState('local-import/');
+  const [bucketEvent, setBucketEvent] = useState('');
+  const [busy, setBusy] = useState<'drive' | 'youtube' | 'bucket' | null>(null);
   const [recent, setRecent] = useState<ImportedAsset[]>([]);
   const [loadingRecent, setLoadingRecent] = useState(true);
 
@@ -61,6 +64,22 @@ export default function VideoImports() {
       toast.success(`Drive import queued (job ${r.job_id ?? 'pending'})`);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not queue the import');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const submitBucket = async () => {
+    if (!/^[A-Za-z0-9][A-Za-z0-9._/-]{0,200}\/$/.test(bucketPrefix) || bucketPrefix.includes('..')) {
+      return toast.error('Prefix must be a folder path ending in /');
+    }
+    if (bucketEvent.trim() && !UUID_RE.test(bucketEvent.trim())) return toast.error('Event id must be a uuid');
+    setBusy('bucket');
+    try {
+      const r = await queueBucketAdopt({ prefix: bucketPrefix, ...(bucketEvent.trim() ? { event_id: bucketEvent.trim() } : {}) });
+      toast.success(`Bucket adopt queued (job ${r.job_id ?? 'pending'})`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not queue the adopt');
     } finally {
       setBusy(null);
     }
@@ -114,6 +133,30 @@ export default function VideoImports() {
 
         <Card className="p-5 space-y-4">
           <div>
+            <h2 className="text-base font-semibold">Already in the bucket</h2>
+            <p className="text-sm text-muted-foreground mt-1">
+              For files shipped straight to the master bucket by a local yt-dlp run. Nothing is moved: each object
+              named <code>Title [youtubeId].mp4</code> gets an asset row, is attached to the talk the recap matched
+              that id to (or a unique agenda title match within the event), and keeps the metadata file beside it.
+              Multi-hour livestreams are adopted whole for clipping.
+            </p>
+          </div>
+          <label className="block text-sm">
+            <span className="font-medium">Prefix</span>
+            <Input value={bucketPrefix} onChange={(e) => setBucketPrefix(e.target.value)} placeholder="local-import/" className="mt-1" />
+          </label>
+          <label className="block text-sm">
+            <span className="font-medium">Event id (for agenda matching)</span>
+            <Input value={bucketEvent} onChange={(e) => setBucketEvent(e.target.value)} placeholder="event uuid" className="mt-1" />
+          </label>
+          <Button onClick={submitBucket} disabled={busy !== null}>
+            <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
+            {busy === 'bucket' ? 'Queuing…' : 'Adopt from bucket'}
+          </Button>
+        </Card>
+
+        <Card className="p-5 space-y-4">
+          <div>
             <h2 className="text-base font-semibold">From YouTube (fallback)</h2>
             <p className="text-sm text-muted-foreground mt-1">
               Pulls the single progressive stream YouTube serves without a browser session, which is 360p. Use it
@@ -157,7 +200,7 @@ export default function VideoImports() {
                 {recent.map((a) => (
                   <tr key={a.id} className="border-t border-border">
                     <td className="py-1 pr-3 max-w-[28rem] truncate" title={a.error ?? a.filename ?? ''}>{a.filename ?? a.id}</td>
-                    <td className="py-1 pr-3">{a.source === 'drive_import' ? 'Drive' : 'YouTube'}</td>
+                    <td className="py-1 pr-3">{a.source === 'drive_import' ? 'Drive' : a.source === 'bucket_import' ? 'Bucket' : 'YouTube'}</td>
                     <td className="py-1 pr-3">{a.storage_provider === 's3' ? 'B2' : 'Supabase'}</td>
                     <td className="py-1 pr-3">{formatBytes(a.bytes)}</td>
                     <td className="py-1 pr-3">

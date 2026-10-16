@@ -52,6 +52,12 @@ export interface MasterStore {
    * passed, so a source that lied about its size cannot fill the bucket.
    */
   putStream(path: string, body: ReadableStream | Readable, mimeType: string, maxBytes?: number): Promise<{ bytes: number }>;
+  /**
+   * The objects under a prefix, for adopting files that arrived outside the
+   * module (a local shipper, a bulk copy). Bounded, so a mistaken prefix
+   * cannot walk a whole bucket.
+   */
+  listPrefix(prefix: string, max?: number): Promise<Array<{ path: string; bytes: number }>>;
 }
 
 /**
@@ -116,6 +122,16 @@ export function providerForNew(kind: string, env: Record<string, string | undefi
 export function bucketForNew(kind: string, provider: StorageProvider, env: Record<string, string | undefined> = process.env): string {
   if (provider === 's3') return s3SettingsFromEnv(env)?.bucket ?? '';
   return kind === 'thumbnail' ? 'media' : 'video-masters';
+}
+
+/**
+ * A listing prefix that names a folder: a safe key ending in `/`, so
+ * `local-import/` cannot also match `local-import-private/...`.
+ */
+export function assertFolderPrefix(prefix: string): string {
+  const p = assertSafeKey(prefix);
+  if (!p.endsWith('/')) throw new Error('listing prefix must end in /');
+  return p;
 }
 
 /** An object key that cannot escape its prefix. */
@@ -185,6 +201,28 @@ export function supabaseStore(supabase, bucket: string): MasterStore {
       const up = await from().upload(assertSafeKey(path), stream, { contentType: mimeType, upsert: true, duplex: 'half' });
       if (up.error) throw new Error(`storage upload failed: ${up.error.message}`);
       return { bytes: count() };
+    },
+    async listPrefix(prefix, max = 2000) {
+      // Supabase lists one folder level at a time, a page at a time; walk it.
+      const out: Array<{ path: string; bytes: number }> = [];
+      const queue = [assertFolderPrefix(prefix).replace(/\/+$/, '')];
+      let folders = 0;
+      while (queue.length && out.length < max && folders < 200) {
+        const dir = queue.shift() as string;
+        folders += 1;
+        for (let offset = 0; out.length < max; offset += 1000) {
+          const { data, error } = await from().list(dir, { limit: 1000, offset });
+          if (error) throw new Error(error.message);
+          for (const e of data ?? []) {
+            const p = dir ? `${dir}/${e.name}` : e.name;
+            if (e.id == null) queue.push(p);
+            else out.push({ path: p, bytes: Number(e.metadata?.size ?? 0) });
+            if (out.length >= max) break;
+          }
+          if ((data ?? []).length < 1000) break;
+        }
+      }
+      return out;
     },
   };
 }
@@ -286,6 +324,21 @@ export function s3Store(settings: S3Settings, bucket: string = settings.bucket):
       });
       await up.done();
       return { bytes: count() };
+    },
+    async listPrefix(prefix, max = 2000) {
+      const [{ ListObjectsV2Command }, client] = await Promise.all([import('@aws-sdk/client-s3'), s3Client(settings)]);
+      const out: Array<{ path: string; bytes: number }> = [];
+      let token: string | undefined;
+      do {
+        const r = await client.send(new ListObjectsV2Command({
+          Bucket: bucket, Prefix: assertFolderPrefix(prefix), ContinuationToken: token, MaxKeys: Math.min(1000, max - out.length),
+        }));
+        for (const o of r.Contents ?? []) {
+          if (o.Key && !o.Key.endsWith('/')) out.push({ path: o.Key, bytes: Number(o.Size ?? 0) });
+        }
+        token = r.IsTruncated ? r.NextContinuationToken : undefined;
+      } while (token && out.length < max);
+      return out;
     },
   };
 }

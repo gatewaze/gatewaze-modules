@@ -53,8 +53,26 @@ to get a channel's originals is Google Takeout, delivered to a Drive folder.
 3. In the admin, open Video imports, paste the folder link, and optionally an
    event id to limit matching to that event's videos. The worker streams each
    file into the master store and attaches it to the existing YouTube video by
-   id (from the CSV) or by a unique title match. Unmatched files become
-   unassigned videos for triage.
+   id (a `[videoId]` suffix in the filename, as yt-dlp's `[%(id)s]` template
+   writes, or Takeout's CSV) or by a unique title match. Unmatched files
+   become unassigned videos for triage.
+
+The same import works for a folder of files downloaded with yt-dlp, which is
+the practical route when Takeout is not available: name them
+`%(title)s [%(id)s].%(ext)s` and the id match is exact.
+
+### Files shipped straight to the bucket
+
+When a laptop cannot hold the whole set, a local yt-dlp run can ship each
+finished file straight into the master bucket under `local-import/<id>/`,
+with `--write-info-json` so the YouTube title, description, upload date,
+duration and chapters travel beside it. Then, in Video imports, "Adopt from
+bucket" with the event id. Nothing is moved: each object gets an asset row,
+the video row is created or filled in from the metadata, and the talk is
+attached from the recap's existing match for that YouTube id or, failing
+that, a unique title match against the event's agenda sessions. Objects over
+three hours are adopted as livestreams and left for the clipping pipeline.
+There is no size cap on this path, because the bytes are already there.
 
 The import is operator-triggered, never scheduled, and stops at
 `drive_import_run_cap_bytes` (300 GB by default). Re-run to continue; files
