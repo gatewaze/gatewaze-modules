@@ -29,8 +29,32 @@ export interface MatchResult {
   /** The videos row the file belongs to. */
   videoId: string;
   youtubeId: string;
-  /** 'csv' is exact; 'title' is a normalised-title match. */
-  by: 'csv' | 'title';
+  /**
+   * 'filename' is the YouTube id in square brackets in the name (yt-dlp's
+   * `[%(id)s]` template); 'csv' is Takeout's own mapping; 'title' is a
+   * normalised-title match. The first two are exact.
+   */
+  by: 'filename' | 'csv' | 'title';
+}
+
+/** The YouTube id a filename carries in square brackets, or null. */
+export function youtubeIdInFilename(filename: string): string | null {
+  const m = String(filename ?? '').match(/\[([A-Za-z0-9_-]{11})\](?:\.[a-z0-9]+)?$/i);
+  return m ? m[1] : null;
+}
+
+/**
+ * The YouTube id for an object key: the folder it sits in when that folder
+ * is an id (`local-import/<id>/<file>`), else the brackets in the filename.
+ * The folder wins because a shipper that sanitises names for S3 may have
+ * turned the brackets into dashes, while the folder it chose is exact.
+ */
+export function youtubeIdFromKey(key: string): string | null {
+  const parts = String(key ?? '').split('/');
+  const name = parts.pop() ?? '';
+  const folder = parts.pop() ?? '';
+  if (/^[A-Za-z0-9_-]{11}$/.test(folder)) return folder;
+  return youtubeIdInFilename(name);
 }
 
 /** Video containers Takeout hands out. Anything else in the folder is metadata. */
@@ -54,6 +78,7 @@ export function normaliseTitle(title: string): string {
     .replace(/[̀-ͯ]/g, '')
     .toLowerCase()
     .replace(/\.(mp4|mov|webm|mkv|m4v)$/i, '')
+    .replace(/\s*\[[A-Za-z0-9_-]{11}\]$/, '')
     .replace(/\(\d+\)$/, '')
     .replace(/[^a-z0-9]+/g, ' ')
     .trim();
@@ -138,9 +163,19 @@ export function matchFile(
   known: KnownVideo[],
   csv: TakeoutRow[],
 ): MatchResult | null {
+  const byYoutubeId = new Map(known.map((k) => [k.provider_video_id, k]));
+
+  // An id in the name is the strongest signal there is, and the one a
+  // yt-dlp download carries. Unknown id means unmatched, not a title guess:
+  // the name said exactly which video it is, and we do not have that one.
+  const inName = youtubeIdInFilename(filename);
+  if (inName) {
+    const k = byYoutubeId.get(inName);
+    return k ? { videoId: k.id, youtubeId: k.provider_video_id, by: 'filename' } : null;
+  }
+
   const wanted = normaliseTitle(filename);
   if (!wanted) return null;
-  const byYoutubeId = new Map(known.map((k) => [k.provider_video_id, k]));
 
   const csvHit = csv.find((r) => normaliseTitle(r.title) === wanted);
   if (csvHit) {

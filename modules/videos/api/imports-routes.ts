@@ -76,12 +76,32 @@ export function mountImportsRoutes(router: Router, deps: ImportsDeps): void {
     res.status(202).json({ queued: true, job_id: job?.id ?? null, ...data });
   });
 
+  /**
+   * Adopt objects already in the S3 bucket (a local yt-dlp run shipped
+   * straight up) as masters. Nothing moves; this only writes rows.
+   */
+  router.post('/bucket', async (req: Request, res: Response) => {
+    if (!enqueueJob) return res.status(503).json({ error: 'job queue unavailable' });
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    const { safePrefix, DEFAULT_PREFIX } = await import('../workers/adopt-from-bucket.js');
+    const prefix = safePrefix(body.prefix ?? DEFAULT_PREFIX);
+    if (!prefix) return res.status(400).json({ error: 'prefix must be a folder path ending in / with no ..' });
+    const eventId = String(body.event_id ?? '');
+    if (eventId && !UUID_RE.test(eventId)) return res.status(400).json({ error: 'event_id must be a uuid' });
+    const data = { prefix, ...(eventId ? { event_id: eventId } : {}) };
+    const job = await enqueueJob('jobs', 'videos:adopt-from-bucket', data, {
+      jobId: dedupeJobId('videos-bucket', `${prefix.replace(/[^A-Za-z0-9]+/g, '-')}:${eventId || 'any'}`),
+    });
+    logger.info('bucket adopt queued', { ...data, job: job?.id });
+    res.status(202).json({ queued: true, job_id: job?.id ?? null, ...data });
+  });
+
   /** What has been imported so far, so the operator can see a run land. */
   router.get('/recent', async (_req: Request, res: Response) => {
     const { data, error } = await supabase
       .from('video_assets')
       .select('id, video_id, kind, state, bytes, filename, source, storage_provider, error, created_at, updated_at')
-      .in('source', ['youtube_import', 'drive_import'])
+      .in('source', ['youtube_import', 'drive_import', 'bucket_import'])
       .order('created_at', { ascending: false })
       .limit(100);
     if (error) return res.status(500).json({ error: error.message });
