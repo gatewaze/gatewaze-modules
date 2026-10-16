@@ -14,6 +14,7 @@
  */
 
 import { useCallback, useEffect, useState } from 'react';
+import { Link } from 'react-router';
 import { toast } from 'sonner';
 import { ArrowDownTrayIcon, ArrowPathIcon } from '@heroicons/react/24/outline';
 
@@ -200,7 +201,13 @@ export default function VideoImports() {
                 {recent.map((a) => (
                   <tr key={a.id} className="border-t border-border">
                     <td className="py-1 pr-3 max-w-[28rem] truncate" title={a.error ?? a.filename ?? ''}>{a.filename ?? a.id}</td>
-                    <td className="py-1 pr-3">{a.source === 'drive_import' ? 'Drive' : a.source === 'bucket_import' ? 'Bucket' : 'YouTube'}</td>
+                    <td className="py-1 pr-3">
+                      {a.source === 'drive_import' ? 'Drive'
+                        : a.source === 'bucket_import' ? 'Bucket'
+                          : a.source === 'batch_import' ? <Link to={`/videos/batches${a.batch_id ? `/${a.batch_id}` : ''}`} className="text-[var(--accent-11)] hover:underline">Upload batch</Link>
+                            : a.source === 'studio' ? <Link to={`/videos/studio/${a.video_id}`} className="text-[var(--accent-11)] hover:underline">Studio cut</Link>
+                              : 'YouTube'}
+                    </td>
                     <td className="py-1 pr-3">{a.storage_provider === 's3' ? 'B2' : 'Supabase'}</td>
                     <td className="py-1 pr-3">{formatBytes(a.bytes)}</td>
                     <td className="py-1 pr-3">

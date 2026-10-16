@@ -54,8 +54,9 @@ export interface ImportedAsset {
   state: 'uploading' | 'ready' | 'failed' | 'superseded';
   bytes: number | null;
   filename: string | null;
-  source: 'youtube_import' | 'drive_import' | 'bucket_import';
+  source: 'youtube_import' | 'drive_import' | 'bucket_import' | 'batch_import' | 'studio';
   storage_provider: 'supabase' | 's3';
+  batch_id?: string | null;
   error: string | null;
   created_at: string;
   updated_at: string;
