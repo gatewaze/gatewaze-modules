@@ -36,6 +36,55 @@ the thumbnail pipeline reads every master once. Backblaze B2 reads are free up
 to three times the stored amount a month, and storage is about a third of the
 price.
 
+## The studio
+
+After a master is uploaded, "Open in studio" on the video (or
+`/videos/studio/<video id>`) runs one analysis pass over it and then lets the
+editor finish the video by hand:
+
+1. The worker (`videos:studio-analyse`) copies the master to its disk, samples
+   a frame every 10 seconds (widening the interval so a long video never takes
+   more than 300), scores a dozen frames with a vision model, cuts the speaker
+   out of the best ones with birefnet and EVF-SAM, verifies up to two slide
+   panels at full resolution, builds a filmstrip, and drafts three headlines
+   from the agenda text. The rules it applies are the ones found on the
+   AGNTCon EU set: a cut-out must be a close shot (the figure at least half
+   the frame tall), with no projector glare on the face and no bright screen
+   behind the head; a panel must be a legible, interesting slide with nobody
+   in it; a headline may not contain a number the abstract does not.
+2. The editor picks a speaker frame, a headline (or types one), the speaker's
+   size and position, whether the slides show, where the video starts and
+   ends, and whether the talk card goes in front.
+3. Approve (`videos:studio-finalize`) renders the thumbnail at 1280x720 in
+   Chromium from the same markup the page showed, sets it on the video, and,
+   when a trim or the card was asked for, writes a new master: the trim is a
+   stream copy from the original, the card is encoded to the master's own
+   parameters and joined by stream copy, and the join is re-encoded only if
+   that does not verify. The previous master's row is marked superseded; its
+   object stays.
+
+It needs `FAL_API_KEY` on the API and the worker, and the worker needs
+`ffmpeg-static` and `puppeteer-core` (declared in this module's package.json,
+so the image bake and the dev container's start-up install both pick them up)
+plus the pinned system Chromium. The brand art, the fonts and the music sting
+live in `templates/`; swap the files there for another brand. Working images
+(cut-outs, slide panels, the filmstrip, the thumbnail) go to the public
+`media` bucket under `video-studio/<video>/<studio>/`, the same bucket every
+thumbnail is served from; they are replaced on a re-run. Sampled frames and
+the talk's abstract are sent to Fal, and through it to Google's Gemini, to be
+scored and drafted. The recording itself never leaves the worker.
+
+Two settings: `studio_max_master_bytes` (8 GB by default; a bigger master is
+refused rather than filling the pod) and `studio_sample_every_seconds`.
+
+## Uploading from the command line
+
+For a file too large to push through a browser tab, tick "Upload from the
+command line" on the upload step. The mint then returns, per file, a curl
+line with a presigned PUT good for 12 hours (S3 stores only). Run it from the
+folder that holds the file, then press Check: the server HEADs the object and
+applies the same size and content-type checks the browser path does.
+
 ## Getting masters for talks that only exist on YouTube
 
 YouTube serves nothing above 360p without a browser session, so the right way
