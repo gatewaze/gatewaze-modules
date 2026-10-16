@@ -77,6 +77,33 @@ scored and drafted. The recording itself never leaves the worker.
 Two settings: `studio_max_master_bytes` (8 GB by default; a bigger master is
 refused rather than filling the pod) and `studio_sample_every_seconds`.
 
+## Upload batches
+
+For a whole folder of masters, "Upload batches" issues one person a folder
+in the master bucket (`batches/<id>/`) and a Backblaze application key that
+can only write and list under that folder, for a chosen number of days (7 by
+default, 30 at most). No read, no delete, no share. The page shows the
+connection bundle once: a Cyberduck link that opens connected to the folder,
+an rclone config and command for an AV team, and the plain fields. The key
+is never stored; the row keeps its id only.
+
+Every five minutes (or on "Check the folder now") the worker lists each open
+batch's folder and adopts every finished upload: a video row titled from the
+file name, attached to the batch's event and, when a session title matches,
+to that talk; a server-side copy of the object under `batch-import/`,
+recorded as a ready master carrying the batch id, the source path and the
+source ETag; and a studio pass queued. The copy is deliberate: Backblaze
+treats an S3 delete as a hide and `writeFiles` allows it, so the uploader can
+hide their own uploads but never touch an adopted master. A later upload
+under the same name is flagged on the batch page, not adopted, and the bucket
+keeps hidden and replaced versions under `batches/` for 30 days. "Mark
+complete" deletes the key; an expired key closes the batch on the next tick.
+
+It needs `VIDEO_B2_KEY_ID` and `VIDEO_B2_KEY` on the API and worker: an
+account-level Backblaze key with `listKeys`, `writeKeys`, `deleteKeys` and
+`listBuckets`, used for nothing but minting and deleting batch keys. Name
+the files after the talks for the agenda match to work.
+
 ## Uploading from the command line
 
 For a file too large to push through a browser tab, tick "Upload from the

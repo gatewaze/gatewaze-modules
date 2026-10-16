@@ -67,6 +67,16 @@ const videosModule: GatewazeModule = {
     // found in the master, the headline drafts, the editor's choices and
     // what approval produced.
     'migrations/016_studio.sql',
+    // 017 adds upload batches: a prefix in the master bucket plus an
+    // expiring, upload-only Backblaze key issued to one person, with a cron
+    // that adopts what lands there.
+    'migrations/017_upload_batches.sql',
+    // 018 keeps the uploaded object's path on the master that was copied
+    // from it, because the adopted master lives outside the batch prefix.
+    'migrations/018_batch_import_path.sql',
+    // 019 records key revocation so a failed delete is retried, and makes
+    // each uploaded object adopt exactly once.
+    'migrations/019_batch_revoke_and_dedupe.sql',
   ],
 
   apiRoutes: async (app: unknown, ctx?: unknown) => {
@@ -81,6 +91,18 @@ const videosModule: GatewazeModule = {
       path: 'videos/studio/:videoId',
       component: () => import('./admin/components/VideoStudio'),
       requiredFeature: 'videos.edit',
+      guard: 'none',
+    },
+    {
+      path: 'videos/batches/:batchId',
+      component: () => import('./admin/components/VideoBatchDetail'),
+      requiredFeature: 'videos.manage',
+      guard: 'none',
+    },
+    {
+      path: 'videos/batches',
+      component: () => import('./admin/components/VideoBatches'),
+      requiredFeature: 'videos.manage',
       guard: 'none',
     },
     {
@@ -141,6 +163,16 @@ const videosModule: GatewazeModule = {
       defaultLocation: 'sidebar',
       order: 67,
     },
+    {
+      path: '/videos/batches',
+      label: 'Upload batches',
+      // FolderArrowDownIcon.
+      icon: 'FolderArrowDown',
+      requiredFeature: 'videos.manage',
+      defaultSection: 'Content',
+      defaultLocation: 'sidebar',
+      order: 68,
+    },
   ],
 
   workers: [
@@ -189,6 +221,12 @@ const videosModule: GatewazeModule = {
       handler: './workers/studio-finalize.ts',
       concurrency: 1,
     },
+    {
+      // Lists each open batch's prefix and adopts what landed. Rows only.
+      name: 'videos:sync-batches',
+      handler: './workers/sync-batches.ts',
+      concurrency: 1,
+    },
   ],
 
   crons: [
@@ -207,6 +245,15 @@ const videosModule: GatewazeModule = {
       queue: 'jobs',
       schedule: { pattern: '*/15 * * * *' },
       data: { kind: 'videos:reap-upload-sessions' },
+    },
+    {
+      // Every five minutes. A listing per open batch is one cheap call, and
+      // an editor watching the batch page should see a file within minutes
+      // of it landing. A no-op with no open batch.
+      name: 'videos:sync-batches',
+      queue: 'jobs',
+      schedule: { pattern: '*/5 * * * *' },
+      data: { kind: 'videos:sync-batches' },
     },
   ],
 
@@ -240,6 +287,16 @@ const videosModule: GatewazeModule = {
       description:
         'The studio copies the master to the worker\'s disk to sample and cut it. Defaults to 8 GB; '
         + 'a multi-hour livestream above this is refused with a message rather than filling the pod.',
+    },
+    batch_max_files: {
+      key: 'batch_max_files',
+      type: 'number',
+      required: false,
+      default: '200',
+      label: 'Most files one upload batch will adopt',
+      description:
+        'Every adopted file is a video row, a server-side copy and a studio pass with model calls. '
+        + 'A batch past this many is flagged and stops adopting; close it and open another.',
     },
     studio_sample_every_seconds: {
       key: 'studio_sample_every_seconds',
