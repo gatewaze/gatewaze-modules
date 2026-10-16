@@ -148,7 +148,8 @@ export function mountStudioRoutes(router: Router, deps: StudioDeps): void {
       ? await supabase.from('video_studio').update(patch).eq('id', existing.id).select('*').single()
       : await supabase.from('video_studio').insert(patch).select('*').single();
     if (up.error) return res.status(500).json({ error: up.error.message });
-    const job = await enqueueJob('jobs', 'videos:studio-analyse', { studio_id: up.data.id }, { jobId: `videos-studio:${up.data.id}:${Date.now()}` });
+    // No ':' in a custom job id: BullMQ refuses it on the worker side.
+    const job = await enqueueJob('jobs', 'videos:studio-analyse', { studio_id: up.data.id }, { jobId: `videos-studio-${up.data.id}-${Date.now()}` });
     logger.info('studio analysis queued', { video: videoId, studio: up.data.id, job: job?.id });
     res.status(202).json({ studio: present(up.data), job_id: job?.id ?? null });
   });
@@ -193,7 +194,7 @@ export function mountStudioRoutes(router: Router, deps: StudioDeps): void {
     if (wanted) patch.selection = sanitiseSelection(wanted, row.analysis ?? {});
     const upd = await supabase.from('video_studio').update(patch).eq('id', row.id).in('state', resumable ? ['finalising'] : ['ready', 'approved']).select('*').single();
     if (upd.error) return res.status(500).json({ error: upd.error.message });
-    const job = await enqueueJob('jobs', 'videos:studio-finalize', { studio_id: row.id }, { jobId: `videos-studio-final:${row.id}:${Date.now()}` });
+    const job = await enqueueJob('jobs', 'videos:studio-finalize', { studio_id: row.id }, { jobId: `videos-studio-final-${row.id}-${Date.now()}` });
     logger.info('studio finalize queued', { video: videoId, studio: row.id, job: job?.id });
     res.status(202).json({ studio: present(upd.data), job_id: job?.id ?? null });
   });
