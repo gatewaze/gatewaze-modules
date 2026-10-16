@@ -58,6 +58,7 @@ import { mergeRegistryIntoConfig } from './email-blocks/merge-into-config.js';
 import { BlockSearchComponents } from './block-search.js';
 import { exportEditionHtml } from './email-blocks/export-edition-html.js';
 import { CanvasShell } from '../../../../sites/admin/components/canvas/puck/CanvasShell.js';
+import { useCanvasAiPlugins } from '../../../../sites/admin/components/canvas/puck/load-canvas-ai-plugins.js';
 import { buildAiBlockDefs } from './email-blocks/build-ai-block-defs.js';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 import { useHasModule } from '@/hooks/useModuleFeature';
@@ -339,38 +340,14 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
   // operator pauses.
   const [emailSizeBytes, setEmailSizeBytes] = useState<number | null>(null);
 
-  // Pull the AI Puck plugin via dynamic import + pass through
-  // `extraPlugins`. The original design used a shared canvas-puck-plugin-
-  // registry (sites/admin/.../canvas-puck-plugin-registry.ts) into which
-  // editor-ai-copilot's admin/index.ts would push its plugin as a
-  // side-effect. Rollup tree-shook the side-effect call out of the
-  // production bundle no matter how we annotated it (sideEffects in
-  // package.json, namespace import + globalThis pin, moduleSideEffects:
-  // 'no-treeshake' from the resolver — verified empirically v1.2.47
-  // through v1.2.51). The aiPlugin object literal survived but the
-  // register call didn't, so the registry stayed empty in prod.
-  //
-  // Dynamic import sidesteps the whole tree-shake question: the chunk
-  // is always emitted, the await always runs, and we wire the plugin
-  // into CanvasShell's existing extraPlugins prop. Catch swallows the
-  // import error on brands that don't have editor-ai-copilot installed
-  // so the editor still mounts (without an AI tab).
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const [aiCopilotPlugins, setAiCopilotPlugins] = useState<ReadonlyArray<any>>([]);
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const mod = await import('@gatewaze-modules/editor-ai-copilot/admin' as any);
-        if (cancelled) return;
-        if (mod && mod.aiPlugin) setAiCopilotPlugins([mod.aiPlugin]);
-      } catch {
-        // editor-ai-copilot not in this brand's MODULE_SOURCES — fine.
-      }
-    })();
-    return () => { cancelled = true; };
-  }, []);
+  // The AI Puck plugin loads on demand through the shared sites hook,
+  // which dynamic-imports editor-ai-copilot's admin/plugin.ts the first
+  // time an editor mounts. Keeping it out of admin boot keeps the copilot
+  // and the Puck runtime out of every page's boot bundle
+  // (linuxfoundation/lfx-self-serve#3762). Resolves to [] on brands that
+  // don't ship editor-ai-copilot, so the editor still mounts (without an
+  // AI tab).
+  const aiCopilotPlugins = useCanvasAiPlugins();
 
   // Publish flow:
   //   1. Confirm with the operator (the act is recipient-visible).

@@ -19,6 +19,7 @@ import {
 import { Modal, Button, Input, Card, Badge, ConfirmModal, Select, ImageUpload, WorkspaceLayout } from '@/components/ui';
 import { Page } from '@/components/shared/Page';
 import RichTextEditor from '@/components/ui/RichTextEditor';
+import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import {
   BlogPost,
   BlogCategory,
@@ -536,7 +537,7 @@ const BlogManagement: React.FC = () => {
       <Page title="Blog">
         <WorkspaceLayout title="Blog">
           <div className="flex items-center justify-center h-64">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+            <LoadingSpinner size="small" />
           </div>
         </WorkspaceLayout>
       </Page>

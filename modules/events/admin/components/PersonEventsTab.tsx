@@ -7,6 +7,7 @@ import { Square3Stack3DIcon } from '@heroicons/react/24/outline';
 import { Card, Badge } from '@/components/ui';
 import { supabase } from '@/lib/supabase';
 import type { Person } from '@/utils/peopleService';
+import LoadingSpinner from '@/components/shared/LoadingSpinner';
 
 interface EventDetails {
   event_title: string;
@@ -143,7 +144,7 @@ export default function PersonEventsTab({ person, personId }: PersonEventsTabPro
   if (loading) {
     return (
       <div className="flex justify-center py-12">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--accent-9)]" />
+        <LoadingSpinner size="small" />
       </div>
     );
   }

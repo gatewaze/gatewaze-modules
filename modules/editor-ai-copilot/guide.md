@@ -4,7 +4,7 @@ Adds a sidebar AI pane to the Puck-based canvas editor used by both sites and ne
 
 ## How It Works
 
-A single Puck plugin is registered into a shared plugin registry at admin-app boot (via `import.meta.glob` of `admin/index.ts`). Both the sites editor and the newsletter editor read that registry at mount time, so one registration reaches both surfaces with no direct coupling.
+A single Puck plugin, exported from `admin/plugin.ts`, is loaded on demand. When the sites editor, the newsletter editor or the broadcast editor mounts, it loads the plugin with a dynamic import and adds it to the editor's sidebar. Nothing loads at admin-app boot, so pages that never open an editor do not download the copilot or the Puck editor.
 
 ### Generation modes
 
@@ -79,6 +79,6 @@ Many more knobs exist for prompt/output budgets, document TTL and size caps, SSR
 
 ## Dependencies
 
-- `sites` — One of the two editor consumers; also the source of the shared Puck plugin registry.
+- `sites` — One of the editor consumers; also owns the shared canvas shell and the `useCanvasAiPlugins()` loader that brings this plugin into each editor.
 - `newsletters` — The other editor consumer.
 - `templates` — The schema authority for the AI's structured output (the block library the AI is constrained to).

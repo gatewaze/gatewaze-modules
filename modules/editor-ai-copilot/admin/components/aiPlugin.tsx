@@ -1,8 +1,8 @@
 /**
- * Puck plugin definition. Registered into the shared
- * canvas-puck-plugin-registry exported by sites; both
- * PuckCanvasEditor (sites) and NewsletterPuckCanvas (newsletters)
- * pick it up automatically.
+ * Puck plugin definition. Loaded on demand through `admin/plugin.ts`
+ * by sites' `useCanvasAiPlugins()`, which both PuckCanvasEditor (sites)
+ * and NewsletterPuckCanvas (newsletters, reused by broadcasts) call and
+ * pass to CanvasShell's `extraPlugins`.
  *
  * Per spec-canvas-ai-copilot.md §3.7 / §3.8.
  *

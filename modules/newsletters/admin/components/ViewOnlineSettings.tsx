@@ -18,6 +18,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
 import { supabase } from '@/lib/supabase';
+import LoadingSpinner from '@/components/shared/LoadingSpinner';
 
 type Target = 'portal' | 'external';
 
@@ -78,7 +79,7 @@ export function ViewOnlineSettings({ collectionId }: { collectionId: string }) {
   if (loading) {
     return (
       <div className="flex justify-center py-8">
-        <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-[var(--accent-9)]" />
+        <LoadingSpinner size="small" />
       </div>
     );
   }

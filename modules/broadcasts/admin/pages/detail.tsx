@@ -20,6 +20,7 @@ import { getBroadcast, updateBroadcast, createBroadcastSend, hasPreheader, listE
 import { BroadcastTemplateTab } from '../components/BroadcastTemplateTab';
 import { BroadcastContentEditor } from '../components/BroadcastContentEditor';
 import { BroadcastRepliesTab } from '../components/BroadcastRepliesTab';
+import LoadingSpinner from '@/components/shared/LoadingSpinner';
 
 const STEPS = [
   { id: 'audience', label: 'Audience' },
@@ -219,7 +220,7 @@ export default function BroadcastDetailPage() {
     return (
       <Page title="Broadcast">
         <WorkspaceLayout title="Broadcasts">
-          <div className="flex justify-center py-16"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--accent-9)]" /></div>
+          <div className="flex justify-center py-16"><LoadingSpinner size="small" /></div>
         </WorkspaceLayout>
       </Page>
     );
