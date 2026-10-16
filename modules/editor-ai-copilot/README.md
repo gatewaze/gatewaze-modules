@@ -79,14 +79,26 @@ disabled.
 - `SITES_CANVAS_AI_PER_SITE_PER_MIN` (optional, default 30).
 - `SITES_CANVAS_AI_PER_USER_PER_DAY` (optional, default 100).
 
-## Plugin registry
+## How the editors load the plugin
 
-Sites' `PuckCanvasEditor` and newsletter's `NewsletterPuckCanvas`
-both read Puck plugins from a small shared registry exported by
-`@gatewaze-modules/sites/canvas-puck-plugin-registry`. This
-module's `admin/index.ts` registers `aiPlugin` into that
-registry at module-load time. Both editors pick it up without
-any direct dependency on this module.
+The plugin is exported from `admin/plugin.ts`. It is not registered
+at admin boot. Sites' `PuckCanvasEditor` and newsletters'
+`NewsletterPuckCanvas` (which the broadcast content editor reuses)
+call `useCanvasAiPlugins()` from
+`sites/admin/components/canvas/puck/load-canvas-ai-plugins.ts`. That
+hook loads `@gatewaze-modules/editor-ai-copilot/admin/plugin` with a
+dynamic import the first time an editor mounts and passes the plugin
+to `CanvasShell` through `extraPlugins`. The plugin chunk is built
+whenever this module exists in any of the build's module sources, even
+if it is not in the build's module list; each editor's `aiEnabled`
+still decides whether the AI tab is usable. If no source has this
+module, the import resolves to an empty stub and the editor mounts
+without an AI tab.
+
+Do not add an `admin/index.ts` to this module. The platform's Vite
+plugin imports every module's `admin/index.*` at boot, which would
+put the Puck editor into the boot bundle of every admin page
+(linuxfoundation/lfx-self-serve#3762).
 
 ## Tests
 

@@ -14,7 +14,6 @@
     "./runtime": "./lib/runtime/index.ts",
     "./publish-jobs": "./lib/publish-jobs/index.ts",
     "./git-driven-publisher": "./lib/git-driven-publisher/index.ts",
-    "./admin": "./admin/index.ts",
     "./admin/page-editor": "./admin/page-editor/index.ts",
     "./admin/schema-editor": "./admin/schema-editor/index.ts",
     "./admin/*": "./admin/*",

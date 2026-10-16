@@ -11,7 +11,7 @@
     "./lib/*": "./lib/*",
     "./admin/*": "./admin/*"
   },
-  "sideEffects": ["./admin/index.ts", "./admin/index.tsx", "./admin/index.js"],
+  "sideEffects": false,
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit",
