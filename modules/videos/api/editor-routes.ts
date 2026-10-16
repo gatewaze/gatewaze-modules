@@ -28,6 +28,20 @@ import { rejectUpload, buildStoragePath, MAX_BYTES, allowedMimes, type UploadKin
 import { mintTicket, verifyTicket, ticketsAvailable, TICKET_TTL_SECONDS } from '../lib/upload-tickets.js';
 import { storeForNew, storeFor } from '../lib/storage.js';
 import { generateCopy } from '../lib/titles.js';
+import { mountStudioRoutes } from './studio-routes.js';
+
+/**
+ * How long a command-line upload URL stays valid. A browser upload is
+ * minted and used in one sitting; a 10 GB file over a hotel connection is
+ * not, so the URL the editor pastes into curl gets most of a day.
+ */
+export const CLI_UPLOAD_TTL_SECONDS = 12 * 60 * 60;
+
+/** The one-liner shown next to a command-line upload URL. Paths are the editor's own. */
+export function cliUploadCommand(uploadUrl: string, mimeType: string, filename: string): string {
+  const safeName = String(filename ?? 'video.mp4').replace(/[^A-Za-z0-9._ -]+/g, '_');
+  return `curl -T "${safeName}" -H "Content-Type: ${mimeType}" "${uploadUrl}"`;
+}
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
@@ -864,9 +878,20 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
       });
       await supabase.from('video_assets').update({ storage_path: storagePath }).eq('id', assetId);
 
+      // An upload from the command line gets a longer-lived URL, so a large
+      // file never has to go through a browser tab. Only when asked for: the
+      // URL is a bearer for the object, and twelve hours of it should not be
+      // handed to every browser upload that never uses it. Same object, same
+      // pinned type and length; `check` closes it, and the session lives as
+      // long as the URL so the reaper does not fail the row mid-upload.
+      // Accepted residual risk: until the URL expires, whoever holds it can
+      // PUT another file of the same type and length over the object, so the
+      // curl line is shown once and never stored.
+      const viaCli = f.cli_upload === true && store.provider === 's3';
+      const ttl = viaCli ? CLI_UPLOAD_TTL_SECONDS : TICKET_TTL_SECONDS;
       let uploadUrl: string;
       try {
-        uploadUrl = await store.signUpload(storagePath, String(f.mime_type ?? ''), TICKET_TTL_SECONDS, Number(f.bytes));
+        uploadUrl = await store.signUpload(storagePath, String(f.mime_type ?? ''), ttl, Number(f.bytes));
       } catch (err) {
         // The detail names buckets and endpoints; it goes to the log and the
         // row, not to a third-party editor.
@@ -889,7 +914,7 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
           expected_bytes: Number(f.bytes),
           expected_mime: String(f.mime_type ?? ''),
           created_by: uid,
-          expires_at: new Date(Date.now() + TICKET_TTL_SECONDS * 1000).toISOString(),
+          expires_at: new Date(Date.now() + ttl * 1000).toISOString(),
         })
         .select('id')
         .single();
@@ -911,6 +936,10 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
         // The browser must send exactly this Content-Type: on S3 it is part of
         // the signature, and on both stores it is what `complete` enforces.
         upload_headers: { 'Content-Type': String(f.mime_type ?? '') },
+        ...(viaCli ? {
+          cli_upload_command: cliUploadCommand(uploadUrl, String(f.mime_type ?? ''), String(f.filename ?? '')),
+          cli_upload_expires_in: CLI_UPLOAD_TTL_SECONDS,
+        } : {}),
         ticket: mintTicket({
           asset_id: assetId,
           session_id: String(sessionIns.data.id),
@@ -977,50 +1006,116 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
       logger.warn('could not resolve the asset store', { asset: t.asset_id, error: String((err as Error)?.message ?? err) });
       return res.status(500).json({ error: 'storage is not configured for this asset' });
     }
-    const head = await store.head(t.storage_path);
+    const outcome = await finishUpload({
+      store, assetId: String(asset.id), videoId: String(asset.video_id), kind: String(asset.kind),
+      storagePath: t.storage_path, maxBytes: t.max_bytes, mimeType: t.mime_type, sessionId: t.session_id, hints: body,
+    });
+    if (!outcome.ok) return res.status(outcome.status).json({ error: outcome.error });
+    res.json({ status: 'complete', asset_id: asset.id, video_id: asset.video_id, bytes: outcome.bytes });
+  });
+
+  /**
+   * Close an upload that was made from the command line, where no ticket
+   * survives: the editor pasted the curl line, the bytes landed, and now
+   * the row has to be told. The ticket's bindings are re-derived from the
+   * rows the mint wrote instead: the asset must be an editor upload, still
+   * `uploading`, minted by this caller, with its session still open. An
+   * import or studio row in flight is not closable this way, so a mismatch
+   * here cannot delete a worker's object; and a closed row stays closed, so
+   * a replayed PUT cannot revive it.
+   */
+  router.post('/uploads/:assetId/check', async (req: Request, res: Response) => {
+    if (await denyUnlessAnyGrant(req, res)) return;
+    const assetId = String(req.params.assetId ?? '');
+    if (!UUID_RE.test(assetId)) return res.status(400).json({ error: 'invalid asset id' });
+    const { data: asset } = await supabase
+      .from('video_assets')
+      .select('id, video_id, state, kind, mime_type, source, uploaded_by, storage_provider, storage_bucket, storage_path')
+      .eq('id', assetId)
+      .maybeSingle();
+    if (!asset) return res.status(404).json({ error: 'asset not found' });
+    if (await denyUnlessVideo(req, res, String(asset.video_id))) return;
+    if (asset.state === 'ready') {
+      return res.json({ status: 'already_complete', asset_id: asset.id, video_id: asset.video_id });
+    }
+    if (asset.state !== 'uploading') return res.status(409).json({ error: `asset is ${asset.state}` });
+    if (asset.source !== 'upload') return res.status(409).json({ error: 'only an editor upload can be checked' });
+    const uid = await callerId(req);
+    if (!uid || String(asset.uploaded_by ?? '') !== uid) {
+      return res.status(403).json({ error: 'this upload was not minted by you' });
+    }
+    if (!(asset.kind in MAX_BYTES)) return res.status(409).json({ error: 'unknown asset kind' });
+    const { data: session } = await supabase
+      .from('video_upload_sessions').select('id, expires_at').eq('asset_id', assetId).eq('state', 'open').limit(1).maybeSingle();
+    if (!session) return res.status(409).json({ error: 'the upload session has expired; mint the upload again' });
+    let store;
+    try {
+      store = storeFor(supabase, asset);
+    } catch (err) {
+      logger.warn('could not resolve the asset store', { asset: assetId, error: String((err as Error)?.message ?? err) });
+      return res.status(500).json({ error: 'storage is not configured for this asset' });
+    }
+    const outcome = await finishUpload({
+      store, assetId, videoId: String(asset.video_id), kind: String(asset.kind), storagePath: String(asset.storage_path),
+      maxBytes: MAX_BYTES[asset.kind as UploadKind], mimeType: String(asset.mime_type ?? ''), sessionId: String(session.id),
+      hints: (req.body ?? {}) as Record<string, unknown>, notFoundIsSoft: true,
+    });
+    if (!outcome.ok) return res.status(outcome.status).json({ error: outcome.error });
+    res.json({ status: 'complete', asset_id: assetId, video_id: asset.video_id, bytes: outcome.bytes });
+  });
+
+  /**
+   * The checks every upload passes before its row becomes ready: the object
+   * is there, it is not over the cap, and its stored Content-Type is the one
+   * declared at mint. Shared by the ticketed `complete` and the ticketless
+   * `check`, so the two cannot drift.
+   */
+  async function finishUpload(args: {
+    store; assetId: string; videoId: string; kind: string; storagePath: string; maxBytes: number; mimeType: string;
+    sessionId: string | null; hints: Record<string, unknown>;
+    /** A missing object is "not yet", not a failure: the editor may still be uploading. */
+    notFoundIsSoft?: boolean;
+  }): Promise<{ ok: true; bytes: number } | { ok: false; status: number; error: string }> {
+    // Every write below is guarded by the state it expects to find, so two
+    // racing closes, or a close racing the reaper, cannot flip a failed row
+    // back to ready.
+    const fail = async (error: string) => {
+      await supabase.from('video_assets').update({ state: 'failed', error }).eq('id', args.assetId).eq('state', 'uploading');
+    };
+
+    const head = await args.store.head(args.storagePath);
     if (!head.ok) {
-      await supabase.from('video_assets')
-        .update({ state: 'failed', error: 'stored object not found' })
-        .eq('id', t.asset_id);
-      return res.status(409).json({ error: 'stored object not found — did the upload finish?' });
+      if (args.notFoundIsSoft) return { ok: false, status: 409, error: 'nothing has arrived in storage yet' };
+      await fail('stored object not found');
+      return { ok: false, status: 409, error: 'stored object not found — did the upload finish?' };
     }
 
     // 10% tolerance mirrors event-media's completion check: storage can
     // report a slightly different length than the client measured.
-    if (head.bytes > t.max_bytes * 1.1) {
-      await store.remove(t.storage_path);
-      await supabase.from('video_assets')
-        .update({ state: 'failed', error: 'file too large' })
-        .eq('id', t.asset_id);
-      return res.status(413).json({ error: 'file_too_large' });
+    if (head.bytes > args.maxBytes * 1.1) {
+      await args.store.remove(args.storagePath);
+      await fail('file too large');
+      return { ok: false, status: 413, error: 'file_too_large' };
     }
 
     // The client controls Content-Type on a signed PUT. This is where the
     // mint-time claim is enforced. Fail CLOSED on an empty stored type.
-    if (!head.contentType || head.contentType.toLowerCase() !== t.mime_type.toLowerCase()) {
-      await store.remove(t.storage_path);
-      await supabase.from('video_assets')
-        .update({ state: 'failed', error: `mime mismatch: stored ${head.contentType || 'none'}` })
-        .eq('id', t.asset_id);
-      return res.status(415).json({ error: 'mime_mismatch' });
+    if (!head.contentType || head.contentType.toLowerCase() !== args.mimeType.toLowerCase()) {
+      await args.store.remove(args.storagePath);
+      await fail(`mime mismatch: stored ${head.contentType || 'none'}`);
+      return { ok: false, status: 415, error: 'mime_mismatch' };
     }
 
-    // Duration and dimensions are client-reported hints. Nothing in this
-    // codebase can extract them server-side (no ffprobe anywhere), so they
-    // are stored as given and bounded, and nothing security-relevant depends
-    // on them.
-    const duration = posInt(body.duration_seconds, 86_400);
-    const width = posInt(body.width, 16_384);
-    const height = posInt(body.height, 16_384);
+    // Duration and dimensions are client-reported hints, bounded and stored
+    // as given; the studio probes the real values when it runs.
+    const duration = posInt(args.hints.duration_seconds, 86_400);
+    const width = posInt(args.hints.width, 16_384);
+    const height = posInt(args.hints.height, 16_384);
 
     // Supersede a previous ready master so the one-ready-master index holds.
-    if (asset.kind === 'master') {
-      await supabase
-        .from('video_assets')
-        .update({ state: 'superseded' })
-        .eq('video_id', asset.video_id)
-        .eq('kind', 'master')
-        .eq('state', 'ready');
+    if (args.kind === 'master') {
+      await supabase.from('video_assets').update({ state: 'superseded' })
+        .eq('video_id', args.videoId).eq('kind', 'master').eq('state', 'ready');
     }
 
     const upd = await supabase
@@ -1034,17 +1129,19 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
         ...(width !== null ? { width } : {}),
         ...(height !== null ? { height } : {}),
       })
-      .eq('id', t.asset_id);
-    if (upd.error) return res.status(500).json({ error: upd.error.message });
+      .eq('id', args.assetId)
+      .eq('state', 'uploading')
+      .select('id');
+    if (upd.error) return { ok: false, status: 500, error: upd.error.message };
+    if (!(upd.data ?? []).length) return { ok: false, status: 409, error: 'the upload was closed by something else first' };
 
-    await supabase
-      .from('video_upload_sessions')
-      .update({ state: 'completed', completed_at: new Date().toISOString() })
-      .eq('id', t.session_id);
-
-    logger.info('video asset uploaded', { asset: t.asset_id, kind: asset.kind, bytes: head.bytes });
-    res.json({ status: 'complete', asset_id: t.asset_id, video_id: asset.video_id, bytes: head.bytes });
-  });
+    if (args.sessionId) {
+      await supabase.from('video_upload_sessions')
+        .update({ state: 'completed', completed_at: new Date().toISOString() }).eq('id', args.sessionId);
+    }
+    logger.info('video asset uploaded', { asset: args.assetId, kind: args.kind, bytes: head.bytes });
+    return { ok: true, bytes: head.bytes };
+  }
 
   // ───────────────────────────────────────────────────────────────────────────
   // What is already there, and the generated copy
@@ -1273,6 +1370,9 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
       res.status(500).json({ error: 'could not sign a playback URL' });
     }
   });
+
+  // ── The studio: analysis, selection, approval ──────────────────────────────
+  mountStudioRoutes(router, { supabase, denyUnlessVideo, callerId, logger, ...(enqueueJob ? { enqueueJob } : {}) });
 
   // ── helpers ────────────────────────────────────────────────────────────────
 

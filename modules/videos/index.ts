@@ -21,7 +21,7 @@ const videosModule: GatewazeModule = {
   description:
     'Video masters, shorts and scheduled publication. Editors upload against a talk or episode; '
     + 'Gatewaze holds the file and publishes on a schedule.',
-  version: '1.11.0',
+  version: '1.12.0',
   features: ['videos', 'videos.manage', 'videos.edit'],
 
   dependencies: ['content-platform'],
@@ -63,6 +63,10 @@ const videosModule: GatewazeModule = {
     // 015 names a master adopted from an object that was put in the bucket
     // by something outside the module (a local yt-dlp run shipped up).
     'migrations/015_bucket_import_source.sql',
+    // 016 adds the studio pass: one row per video holding what the worker
+    // found in the master, the headline drafts, the editor's choices and
+    // what approval produced.
+    'migrations/016_studio.sql',
   ],
 
   apiRoutes: async (app: unknown, ctx?: unknown) => {
@@ -72,6 +76,13 @@ const videosModule: GatewazeModule = {
   },
 
   adminRoutes: [
+    {
+      // The studio for one video: cut-outs, headline, trim, pre-roll, approve.
+      path: 'videos/studio/:videoId',
+      component: () => import('./admin/components/VideoStudio'),
+      requiredFeature: 'videos.edit',
+      guard: 'none',
+    },
     {
       // Before 'videos', so a future 'videos/:id' cannot swallow it.
       path: 'videos/unassigned',
@@ -163,6 +174,21 @@ const videosModule: GatewazeModule = {
       handler: './workers/adopt-from-bucket.ts',
       concurrency: 1,
     },
+    {
+      // Downloads a master, samples it, calls the vision model, cuts the
+      // speaker out. One at a time: each holds a master on disk and a
+      // Chromium is not involved here but ffmpeg is, on every frame.
+      name: 'videos:studio-analyse',
+      handler: './workers/studio-analyse.ts',
+      concurrency: 1,
+    },
+    {
+      // Renders the thumbnail in Chromium and, when asked, cuts and joins
+      // the master. One at a time for the same reason.
+      name: 'videos:studio-finalize',
+      handler: './workers/studio-finalize.ts',
+      concurrency: 1,
+    },
   ],
 
   crons: [
@@ -204,6 +230,26 @@ const videosModule: GatewazeModule = {
       description:
         'The run stops once it has pulled this much, so an import cannot quietly consume '
         + 'tens of gigabytes. Defaults to 30 GB, about one conference.',
+    },
+    studio_max_master_bytes: {
+      key: 'studio_max_master_bytes',
+      type: 'number',
+      required: false,
+      default: '8589934592',
+      label: 'Largest master the studio will analyse (bytes)',
+      description:
+        'The studio copies the master to the worker\'s disk to sample and cut it. Defaults to 8 GB; '
+        + 'a multi-hour livestream above this is refused with a message rather than filling the pod.',
+    },
+    studio_sample_every_seconds: {
+      key: 'studio_sample_every_seconds',
+      type: 'number',
+      required: false,
+      default: '10',
+      label: 'Seconds between sampled frames',
+      description:
+        'How often the studio takes a frame to judge. Ten seconds is 100 frames for a 17-minute talk; '
+        + 'the interval widens on its own so a long video never samples more than 300.',
     },
     drive_import_run_cap_bytes: {
       key: 'drive_import_run_cap_bytes',
