@@ -100,8 +100,8 @@ export function mountImportsRoutes(router: Router, deps: ImportsDeps): void {
   router.get('/recent', async (_req: Request, res: Response) => {
     const { data, error } = await supabase
       .from('video_assets')
-      .select('id, video_id, kind, state, bytes, filename, source, storage_provider, error, created_at, updated_at')
-      .in('source', ['youtube_import', 'drive_import', 'bucket_import'])
+      .select('id, video_id, kind, state, bytes, filename, source, storage_provider, batch_id, error, created_at, updated_at')
+      .in('source', ['youtube_import', 'drive_import', 'bucket_import', 'batch_import', 'studio'])
       .order('created_at', { ascending: false })
       .limit(100);
     if (error) return res.status(500).json({ error: error.message });
