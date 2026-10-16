@@ -108,7 +108,12 @@ export async function createBatchKey(args: { bucket: string; prefix: string; day
   return { keyId: j.applicationKeyId, key: j.applicationKey, expiresAt };
 }
 
-/** Delete a minted key. Best effort: a key that is already gone is fine. */
+/**
+ * Delete a minted key. True when the key is gone, whether this call deleted
+ * it or it was already gone (Backblaze answers 400 for an unknown key id);
+ * false only when the call could not be made or Backblaze refused, which
+ * the sync cron retries.
+ */
 export async function deleteKey(keyId: string, settings = b2SettingsFromEnv()): Promise<boolean> {
   if (!settings) return false;
   if (!/^[A-Za-z0-9]{10,64}$/.test(keyId)) return false;
@@ -116,7 +121,7 @@ export async function deleteKey(keyId: string, settings = b2SettingsFromEnv()): 
     const s = await authorize(settings);
     await call(s, 'b2_delete_key', { applicationKeyId: keyId });
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    return /failed: 400\b/.test(String((err as Error)?.message ?? ''));
   }
 }
