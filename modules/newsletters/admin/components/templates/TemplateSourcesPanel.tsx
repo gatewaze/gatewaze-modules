@@ -19,6 +19,7 @@ import { Badge, Button } from '@/components/ui';
 import { supabase } from '@/lib/supabase';
 import { dedupeConnectedRepos, type ConnectedRepo, type ConnectedRepoSource } from '../../lib/connectedRepos';
 import { asEditionSkeleton } from '../../lib/editionSkeleton';
+import LoadingSpinner from '@/components/shared/LoadingSpinner';
 
 /** Columns we read off `templates_sources` — keep aligned with the SELECT in `reload()`. */
 export interface TemplatesSourceRow {
@@ -111,7 +112,7 @@ export function TemplateSourcesPanel({ libraryId, hostKind, uploadHref, blockHre
     return () => { supabase.removeChannel(channel); };
   }, [libraryId, reload]);
 
-  if (loading) return <div className="flex justify-center py-8"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-[var(--accent-9)]" /></div>;
+  if (loading) return <div className="flex justify-center py-8"><LoadingSpinner size="sm" /></div>;
 
   const noun = hostKind === 'broadcasts' ? 'broadcasts' : 'this newsletter';
 

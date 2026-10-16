@@ -7,7 +7,7 @@ const blogModule: GatewazeModule = {
   visibility: 'public',
   name: 'Blog',
   description: 'Publish and manage blog posts, categories, and integrated content',
-  version: '1.2.0',
+  version: '1.2.1',
   features: [
     'blog',
     'blog.posts',
