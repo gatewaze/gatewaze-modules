@@ -10,6 +10,7 @@ import { supabase } from '@/lib/supabase';
 import { BlocksOverTime } from './geo/BlocksOverTime';
 import { PollResults } from './geo/PollResults';
 import { EditionGeographyTab } from './geo/EditionGeographyTab';
+import LoadingSpinner from '@/components/shared/LoadingSpinner';
 
 interface SendRecord {
   id: string;
@@ -84,7 +85,7 @@ export function NewsletterStatsTab({ newsletterId }: Props) {
   const editionIds = useMemo(() => editions.map((e) => e.id), [editions]);
 
   if (loading) {
-    return <div className="flex justify-center py-12"><div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--accent-9)]" /></div>;
+    return <div className="flex justify-center py-12"><LoadingSpinner size="small" /></div>;
   }
 
   if (editions.length === 0) {

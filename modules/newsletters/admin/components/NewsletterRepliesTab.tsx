@@ -3,6 +3,7 @@ import { RepliesWorkspace, type WorkspaceReply } from '@/components/replies/Repl
 import type { SentReplyMessage } from '@/components/emails/ReplyComposer';
 import { resolvePeopleByEmail } from '@/lib/resolvePeopleByEmail';
 import { supabase } from '@/lib/supabase';
+import LoadingSpinner from '@/components/shared/LoadingSpinner';
 
 interface NewsletterRepliesTabProps {
   newsletterId: string;
@@ -92,7 +93,7 @@ export function NewsletterRepliesTab({ newsletterId }: NewsletterRepliesTabProps
   if (loading) {
     return (
       <div className="flex justify-center py-12">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--accent-9)]" />
+        <LoadingSpinner size="small" />
       </div>
     );
   }

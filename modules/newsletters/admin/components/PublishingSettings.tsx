@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
 import { supabase } from '@/lib/supabase';
+import LoadingSpinner from '@/components/shared/LoadingSpinner';
 
 interface CollectionPublishing {
   git_provenance: string | null;
@@ -80,7 +81,7 @@ export function PublishingSettings({ collectionId }: { collectionId: string }) {
     }
   };
 
-  if (loading) return <div className="flex justify-center py-8"><div className="animate-spin rounded-full h-6 w-6 border-b-2 border-[var(--accent-9)]" /></div>;
+  if (loading) return <div className="flex justify-center py-8"><LoadingSpinner size="small" /></div>;
 
   return (
     <div className="border border-[var(--gray-a5)] rounded-lg overflow-hidden">

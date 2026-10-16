@@ -11,6 +11,7 @@ import {
 } from '../lib/broadcastService';
 import { BroadcastsTable } from '../components/BroadcastsTable';
 import { FolderSidebar, UNFILED, type FolderSelection } from '../components/FolderSidebar';
+import LoadingSpinner from '@/components/shared/LoadingSpinner';
 
 export default function BroadcastListPage() {
   const navigate = useNavigate();
@@ -114,7 +115,7 @@ export default function BroadcastListPage() {
       <WorkspaceLayout title="Broadcasts" actions={actions}>
         {loading ? (
           <div className="flex justify-center py-16">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--accent-9)]" />
+            <LoadingSpinner size="small" />
           </div>
         ) : broadcasts.length === 0 && folders.length === 0 ? (
           <div className="text-center py-16">

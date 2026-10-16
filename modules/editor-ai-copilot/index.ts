@@ -18,37 +18,12 @@
 
 import type { GatewazeModule, ModuleRuntimeContext } from '@gatewaze/shared';
 
-// Browser-only side-effect: import the admin entrypoint so its
-// `registerCanvasPuckPlugin(aiPlugin)` call runs at admin-app boot.
-// The Vite plugin includes this manifest in the admin bundle, so this
-// branch fires once the app loads; in Node (API / loader processes)
-// `typeof window === 'undefined'` skips it, avoiding JSX parse errors.
-//
-// Per spec-canvas-ai-copilot.md §3.8 — both sites' PuckCanvasEditor
-// and newsletters' NewsletterPuckCanvas read the shared plugin
-// registry at mount time, so this single registration reaches both.
-//
-// `import.meta.glob` is the Vite-native eager-import API. Two
-// properties make it the right primitive here:
-//
-//   1. Vite statically scans glob calls and bundles the matched
-//      files — same as a literal `import()`.
-//   2. tsc does NOT trace into glob targets, so admin/** stays out
-//      of this module's type-check program (it is type-checked
-//      separately by the consuming admin package, which has the
-//      right React / @/ alias surface).
-//
-// `eager: true` runs the registration at module evaluation time
-// rather than returning a thunk that needs to be invoked later.
-if (typeof window !== 'undefined') {
-  // `import.meta.glob` is a Vite extension, not a standard ImportMeta
-  // member, so it's not in lib.dom or @types/node. Cast through unknown
-  // to access it without polluting the module's tsconfig with vite/client.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  (import.meta as unknown as { glob: (pattern: string, opts: { eager: boolean }) => unknown })
-    .glob('./admin/index.ts', { eager: true });
-}
-
+// The Puck plugin is NOT registered at admin boot. Canvas hosts load
+// `admin/plugin.ts` with a dynamic import when an editor mounts (see
+// sites/admin/components/canvas/puck/load-canvas-ai-plugins.ts). An
+// eager import here, or an `admin/index.ts` (which the platform's Vite
+// plugin imports at boot), would put the Puck editor into the boot
+// bundle of every admin page (linuxfoundation/lfx-self-serve#3762).
 
 const editorAiCopilotModule: GatewazeModule = {
   id: 'editor-ai-copilot',
@@ -58,7 +33,7 @@ const editorAiCopilotModule: GatewazeModule = {
   name: 'Editor AI Copilot',
   description:
     'Generates and revises Puck-editor pages (sites + newsletter editions) from a natural-language prompt, optionally grounded in uploaded documents or public URLs. Strictly constrained to the brand\'s template library — designers control look & feel, marketing controls content.',
-  version: '1.0.0',
+  version: '1.0.1',
 
   features: ['editor-ai-copilot'],
 

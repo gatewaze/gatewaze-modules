@@ -1,15 +1,20 @@
 /**
  * Shared registry for Puck plugins contributed by other modules.
  *
- * Sites' `PuckCanvasEditor` and newsletters' `NewsletterPuckCanvas`
- * both read from this registry at mount time, so a contributing
- * module (e.g. `@gatewaze-modules/editor-ai-copilot`) registers
- * its plugin ONCE and it reaches both editors.
+ * CanvasShell (which both sites' `PuckCanvasEditor` and newsletters'
+ * `NewsletterPuckCanvas` render) reads from this registry at mount
+ * time, so a contributing module registers its plugin once and it
+ * reaches both editors.
  *
- * Module-level state — registrations are side-effects of importing
- * the contributing module's `admin/index.ts` at app boot. Stays
- * in this file (sites' admin surface) because it must be shared
- * across sibling modules that don't depend on each other directly.
+ * Module-level state. Stays in this file (sites' admin surface)
+ * because it must be shared across sibling modules that don't depend
+ * on each other directly.
+ *
+ * editor-ai-copilot no longer registers here: it loads on demand via
+ * `useCanvasAiPlugins()` (load-canvas-ai-plugins.ts) and reaches the
+ * editors through CanvasShell's `extraPlugins`. Registering from a
+ * module's `admin/index.ts` runs at admin boot, so anything registered
+ * that way (and everything it imports) lands in the boot bundle.
  *
  * Per spec-canvas-ai-copilot.md §3.8.
  */

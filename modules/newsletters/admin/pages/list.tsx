@@ -15,6 +15,7 @@ import {
   type DashboardEdition,
 } from '../components/NewsletterDashboardCard';
 import { duplicateEdition } from '../lib/duplicateEdition';
+import LoadingSpinner from '@/components/shared/LoadingSpinner';
 
 // How many recent editions to pull per newsletter for the list; only the
 // latest 3 are shown.
@@ -268,7 +269,7 @@ export default function NewsletterListPage() {
       >
         {loading ? (
           <div className="flex justify-center py-16">
-            <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-[var(--accent-9)]" />
+            <LoadingSpinner size="small" />
           </div>
         ) : cards.length === 0 ? (
           <div className="text-center py-16">

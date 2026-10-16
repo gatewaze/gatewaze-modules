@@ -15,6 +15,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { type Data as PuckCoreData } from '@puckeditor/core';
 import { CanvasShell } from './CanvasShell.js';
+import { useCanvasAiPlugins } from './load-canvas-ai-plugins.js';
 import { toast } from 'sonner';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { useCanvasLock } from '../useCanvasLock.js';
@@ -71,6 +72,8 @@ interface LoadedState {
 export function PuckCanvasEditor({ pageId, siteSlug, themeKind = 'website' }: PuckCanvasEditorProps) {
   const lock = useCanvasLock(pageId);
   const hasEditorAi = useHasModule('editor-ai-copilot');
+  // Loaded on demand so the copilot and Puck stay out of admin boot.
+  const aiCopilotPlugins = useCanvasAiPlugins();
 
   const [libraryId, setLibraryId] = useState<string | null>(null);
   const [siteId, setSiteId] = useState<string | null>(null);
@@ -330,6 +333,7 @@ export function PuckCanvasEditor({ pageId, siteSlug, themeKind = 'website' }: Pu
           // populated, so the fallback is effectively unreachable.
           hostId={siteId ?? ''}
           targetId={pageId}
+          extraPlugins={aiCopilotPlugins}
           aiEnabled={hasEditorAi}
           config={loaded.config.config as never}
           data={loaded.initialData as never}
