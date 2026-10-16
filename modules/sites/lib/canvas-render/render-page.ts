@@ -199,9 +199,28 @@ function wrapBody(
   const view = {
     page: { title: input.page.title, full_path: input.page.full_path },
   };
-  return renderTemplate(wrapper.html, view, {
+  // Wrappers ingested through the templates parser declare their body slot
+  // as `{{content}}` (the marker grammar's lint requires exactly one). The
+  // canvas contract is the `{{>page_body}}` partial; accept both.
+  const template = wrapper.html.replace(/\{\{\s*content\s*\}\}/g, '{{>page_body}}');
+  return renderTemplate(template, view, {
     partials: new Map([['page_body', bodyHtml]]),
   });
+}
+
+// Leading whitespace and HTML comments are skipped: the templates parser
+// keeps the wrapper's `<!-- SCHEMA:… -->` marker at the top of its html.
+const FULL_DOCUMENT_RE = /^(?:\s|<!--[\s\S]*?-->)*(?:<!doctype\b|<html\b)/i;
+
+/**
+ * True when the wrapper already produced a complete HTML document (theme
+ * wrappers carry their own <head> with styles, fonts and chrome). Such
+ * output is decorated in place rather than nested inside a second
+ * document — nesting would hide the theme's <head> from the editor's
+ * CSS extraction and ship invalid HTML on publish.
+ */
+function isFullDocument(html: string): boolean {
+  return FULL_DOCUMENT_RE.test(html);
 }
 
 function wrapWithEditorAttrs(innerHtml: string, blockId: string): string {
@@ -210,17 +229,34 @@ function wrapWithEditorAttrs(innerHtml: string, blockId: string): string {
   // data-block-id alongside it.
   // Heuristic: insert after the first '<' + tagName run.
   const m = innerHtml.match(/^\s*<([a-zA-Z][a-zA-Z0-9-]*)([\s>])/);
-  if (!m) return innerHtml;
+  if (!m || m[1] === undefined) return innerHtml;
   const tag = m[1];
   const attrInsert = ` data-block-id="${escapeAttrValue(blockId)}"`;
   const insertAt = (m.index ?? 0) + 1 + tag.length;
   return innerHtml.slice(0, insertAt) + attrInsert + innerHtml.slice(insertAt);
 }
 
+// Same policy for both document shapes. Full-document wrappers also get
+// Google Fonts (the LFX chrome links the brand typeface) and http images
+// (self-hosted dev storage).
+const CSP =
+  "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https: http:; connect-src 'self'; frame-ancestors 'self'";
+
 function composeDocument(bodyHtml: string, input: RenderInput): string {
-  const csp =
-    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:; connect-src 'self'; frame-ancestors 'self'";
   const decorator = input.context.preview ? CANVAS_DECORATOR_SCRIPT : '';
+  if (isFullDocument(bodyHtml)) {
+    const pageIdAttr = ` data-canvas-page-id="${escapeAttrValue(input.page.id)}"`;
+    let doc = bodyHtml.replace(/<body\b/i, (m) => `${m}${pageIdAttr}`);
+    const hasCsp = /<meta\s[^>]*http-equiv\s*=\s*["']?content-security-policy/i.test(doc);
+    const headInsert = `${hasCsp ? '' : `<meta http-equiv="Content-Security-Policy" content="${escapeAttrValue(CSP)}">\n`}${decorator}`;
+    if (headInsert) {
+      doc = /<head\b[^>]*>/i.test(doc)
+        ? doc.replace(/<head\b[^>]*>/i, (m) => `${m}\n${headInsert}`)
+        : doc.replace(/<body\b/i, (m) => `${headInsert}\n${m}`);
+    }
+    return doc;
+  }
+  const csp = CSP;
   return `<!DOCTYPE html>
 <html lang="en">
 <head>

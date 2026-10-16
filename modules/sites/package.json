@@ -34,7 +34,8 @@
     "ts-morph": "^25.0.1",
     "ts-json-schema-generator": "^2.4.0",
     "@puckeditor/core": "~0.21.3",
-    "isomorphic-dompurify": "^3.1.0"
+    "isomorphic-dompurify": "^3.1.0",
+    "@supabase/supabase-js": "^2.108.1"
   },
   "devDependencies": {
     "vitest": "^4.0.0",

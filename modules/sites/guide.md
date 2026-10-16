@@ -255,6 +255,68 @@ When a site is created, gatewaze clones `gatewaze-template-site` at the configur
 
 Email theme repos are referenced as `templates_sources` (kind=`git`) on a newsletter / event / calendar collection. The templates parser walks the source.html marker grammar and ingests block / brick / wrapper definitions.
 
+## Importing an LFX website-builder bundle
+
+The LFX Marketing OS agents (`lfx-mos-website`) generate a static foundation
+site from a brand kit: eleven pages, `assets/site.css` with WCAG-adjusted
+brand tokens, logos, and a `site.json` holding every field of copy. The
+importer in `lib/lfx-import/` turns that zip into a site you can edit in the
+Puck canvas and publish as static HTML.
+
+What it creates:
+
+1. A `sites` row (`theme_kind='website'`, `config.publish.output='static-html'`,
+   the brand tokens and generator metadata under `config.lfx`).
+2. A templates library holding one wrapper (`lfx_default` — LF bar, header and
+   nav, cookie bar, newsletter sign-up, footer, with the bundle's CSS, JS and
+   logo SVGs inlined) and fifteen `lfx_*` block definitions that mirror the
+   generator's sections (hero, key numbers, pillars, member logos, events and
+   news, FAQ, CTA band, page head, prose, card grid, people, members by tier,
+   event list, membership tiers, rich text). `theme.ts` is the source of truth
+   for those templates; the ingest goes through the templates module's parser
+   and every block passes the canvas template validator.
+3. Eleven blocks-mode pages (`pages.ts` maps `site.json` section by section)
+   with `page_blocks` rows, `wysiwyg_locked=true`.
+
+Data-backed blocks — member logos, members by tier, upcoming events, latest
+news — carry a `data_source` of `{ adapter: 'gatewaze', operation: 'lfx.fill' }`
+(or a per-instance `page_blocks.kind_config.fill`). `fill.ts` resolves the
+fill and `data-supabase.ts` reads `member_organizations`, `events` and
+`blog_posts`. The fill runs at import, so the canvas shows real rows, and
+again on every publish, where the refreshed rows are written back to the
+block so the editor matches what shipped. Editors own the copy around the
+list; the list is owned by the data source.
+
+Run it from the modules checkout against a dev stack:
+
+```bash
+cd modules/sites
+SUPABASE_SERVICE_ROLE_KEY=… JWT_SECRET=… ADMIN_USER_ID=<super_admin uuid> \
+  pnpm exec tsx scripts/import-lfx-site.ts \
+  --zip ~/path/to/jupyter-foundation-website.zip --slug jupyter-foundation --publish
+```
+
+`--replace` reuses an existing site with that slug (pages and library are
+rebuilt; id, repo and secrets stay). `--ensure-repo` provisions the internal
+git repo; `--publish` also queues a publish and waits for it. Both mint a
+ten-minute HS256 admin JWT from `JWT_SECRET`, which only works on self-hosted
+Supabase.
+
+### Static-HTML publish output
+
+With `config.publish.output = 'static-html'`, `buildSiteContentFiles` renders
+each published blocks-mode page through the canonical canvas renderer
+(wrapper + blocks) into `<full_path>/index.html`, adds `sitemap.xml` and
+`robots.txt` (canonical origin from `config.publish.canonical_origin` or
+`config.lfx.domain`), skips the Next.js route emission, and replaces the
+publish branch tree. The branch is then a plain static site for the portal,
+Netlify, Cloudflare Pages or a local `python3 -m http.server`.
+
+The renderer treats a wrapper that is already a full document (starts with
+`<!doctype>` or `<html>`) as the document: it is decorated in place rather
+than nested inside a second `<html>`, and the marker grammar's `{{content}}`
+slot is accepted as an alias for `{{>page_body}}`.
+
 ## Features
 
 - `sites` — Core site management
