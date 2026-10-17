@@ -1062,6 +1062,29 @@ export default function AlbumGallery({
                 />
               </button>
             )}
+            {/* The name and the buttons sit OUT of the flow, pinned below
+                the photograph rather than stacked under it.
+                In the flow they were part of what the overlay centres,
+                so the block's height changed as they rendered -- and as
+                a swiped-in photograph loaded and gained its own height --
+                and the photograph visibly jumped upwards after it had
+                settled (reported 2026-10-17). Out of the flow the
+                photograph alone decides where it sits, and nothing below
+                it can move it.
+
+                They also fade rather than appear: hidden while a finger
+                is dragging and while a photograph is on its way out, so
+                a turn is the picture moving and nothing else, then back
+                once it has landed. */}
+            <div
+              className="absolute left-0 right-0 top-full"
+              style={{
+                opacity: drag !== 0 || leaving ? 0 : 1,
+                transition: 'opacity 200ms ease-out',
+                // Nothing invisible should be tappable.
+                pointerEvents: drag !== 0 || leaving ? 'none' : 'auto',
+              }}
+            >
             {creditFor(open) && <p className="mt-2 text-center text-sm text-white/80">by {creditFor(open)}</p>}
             <div className="mt-2 flex items-center justify-end gap-2">
               {open.original && (
@@ -1130,6 +1153,7 @@ export default function AlbumGallery({
                   : saveState === 'saved' ? <TickIcon className="h-4 w-4" />
                     : <DownloadIcon className="h-4 w-4" />}
               </button>
+            </div>
             </div>
           </div>
           {/* On a desktop there is no finger to drag with, so the arrows
