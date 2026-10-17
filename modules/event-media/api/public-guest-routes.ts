@@ -37,6 +37,7 @@ import { BOOTH_POSES, boothPose, poseChangesAt, poseOfTheHour } from '../lib/boo
 import { READY_PROMPTS, readyPrompt, readyWindow } from '../lib/ready-prompts.js';
 import { BOOTH_PLACES, DEFAULT_PLACE, boothPlace, placeRail } from '../lib/booth-places.js';
 import { plateHasPeople, runCardCopy, runCutout, runDepth, runPlate, runStyle, runSwap, styleConfigured, swapConfigured } from '../lib/booth-provider.js';
+import { bounded } from '../lib/bounded.js';
 import { browserObjectUrl, browserSizedUrl, type CdnConfig } from '../lib/cdn.js';
 import { mayGenerate, readLimits, boothClosesAt } from '../lib/booth-limits.js';
 import { albumForUpload, boothAlbum, isView, resolveViews, tagView, type View } from '../lib/view-albums.js';
@@ -719,6 +720,21 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     await setVariantPath(mediaId, 'plate', storagePath);
   }
 
+  /**
+   * How many photographs may be having their layers generated at once.
+   *
+   * Two, because each one holds a depth map, a cutout and up to two
+   * candidate plates in a pod that has 512MB in total. Before this bound
+   * existed every upload started its own, and a batch of eighty was
+   * enough to be OOMKilled twice over (2026-10-17). Layers are detached
+   * work that nothing is waiting on, so queueing them costs only time.
+   */
+  const layerQueue = bounded(2, (err) => {
+    logger.warn('layer job crashed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
+
   async function generateLayers(mediaId: string, storagePath: string): Promise<void> {
     try {
       const src = toPublicUrl(storagePath);
@@ -728,19 +744,32 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       // never awaited alongside them: it is the only one of these the
       // guest actually reads, and it used to be skipped entirely
       // whenever a layer threw.
+      // Not put through the layer queue: that bound is there to keep
+      // decoded images out of the pod's memory, and this holds none --
+      // the model is handed a URL and answers with a few short strings.
+      // It is caught, though. Nothing awaits this, so a throw from the
+      // model or either query would surface as an unhandledRejection and
+      // take the process down.
       void (async () => {
-        const copy = await runCardCopy(src);
-        if (!copy.ok) {
-          logger.warn('card copy failed', { mediaId, error: copy.error });
-          return;
+        try {
+          const copy = await runCardCopy(src);
+          if (!copy.ok) {
+            logger.warn('card copy failed', { mediaId, error: copy.error });
+            return;
+          }
+          const { data: row } = await supabase
+            .from('host_media')
+            .select('metadata')
+            .eq('id', mediaId)
+            .maybeSingle();
+          const metadata = { ...((row?.metadata ?? {}) as Record<string, unknown>), card: copy.copy };
+          await supabase.from('host_media').update({ metadata }).eq('id', mediaId);
+        } catch (err) {
+          logger.warn('card copy crashed', {
+            mediaId,
+            error: err instanceof Error ? err.message : String(err),
+          });
         }
-        const { data: row } = await supabase
-          .from('host_media')
-          .select('metadata')
-          .eq('id', mediaId)
-          .maybeSingle();
-        const metadata = { ...((row?.metadata ?? {}) as Record<string, unknown>), card: copy.copy };
-        await supabase.from('host_media').update({ metadata }).eq('id', mediaId);
       })();
 
       const [depth, cutout] = await Promise.all([
@@ -774,7 +803,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
    * rotated, since each one had to be turned alongside it.
    */
   function processNewImage(mediaId: string, storagePath: string): void {
-    void generateLayers(mediaId, storagePath);
+    layerQueue(() => generateLayers(mediaId, storagePath));
   }
 
   /**
@@ -1745,7 +1774,16 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       createdCount += 1;
       items.push({ media_id: p.media_id, status: 'created', item: mapFeedItem(inserted as FeedRow) });
 
-      if (p.mime_type.startsWith('image/')) processNewImage(p.media_id, p.storage_path);
+      // Projector layers, but not for a photographer's delivery. Those
+      // are the far layer of a parallax effect the professional
+      // photographs are never shown with -- their album is off the
+      // portal until the organiser has been through it -- and asking an
+      // image model to redraw a wedding photographer's frame with the
+      // couple removed is several seconds, several megabytes and a few
+      // cents per photograph, times the thousands they deliver.
+      if (p.mime_type.startsWith('image/') && !p.photographer) {
+        processNewImage(p.media_id, p.storage_path);
+      }
     }
 
     if (createdCount > 0) {
