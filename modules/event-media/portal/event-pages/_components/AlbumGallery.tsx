@@ -16,7 +16,8 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { faceOf as pickFace } from './_lib/gallery-face'
+import { faceOf as pickFace, fullFaceOf } from './_lib/gallery-face'
+import { saveNameOf } from './_lib/save-name'
 import { dragOffset, swipeVerdict, TAP_SLOP_PX } from './_lib/swipe'
 import { albumAddress, pageBaseFrom } from './_lib/album-address'
 
@@ -54,6 +55,24 @@ function XrayIcon({ className }: { className?: string }) {
 }
 
 /** A tick, for a moment after a link is copied. */
+function DownloadIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className={className} aria-hidden="true">
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v11" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 10.5 12 15l4.5-4.5" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M5 19h14" />
+    </svg>
+  )
+}
+
+function SpinnerIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className={className} aria-hidden="true">
+      <path strokeLinecap="round" d="M12 3a9 9 0 1 0 9 9" />
+    </svg>
+  )
+}
+
 function TickIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className={className} aria-hidden="true">
@@ -155,6 +174,22 @@ export default function AlbumGallery({
   // loaded -- page forty of The day is still one link.
   const [focus, setFocus] = useState<GalleryItem | null>(null)
   const [copied, setCopied] = useState(false)
+  /** 'off' | 'saving' | 'saved' — what the save button is showing. */
+  const [saveState, setSaveState] = useState<'off' | 'saving' | 'saved'>('off')
+  // Whether this device can hand a file to the OS share sheet, which on a
+  // phone is how a photograph reaches the camera roll; a download there
+  // lands in Files where nobody looks for it. Probed once on mount and
+  // never during render: building the probe File throws in some old
+  // WebViews, and a throw during render takes the page down.
+  const [canShareFiles, setCanShareFiles] = useState(false)
+  useEffect(() => {
+    try {
+      const probe = new File([new Uint8Array([0])], 'probe.jpg', { type: 'image/jpeg' })
+      setCanShareFiles(Boolean(navigator.canShare?.({ files: [probe] })))
+    } catch {
+      setCanShareFiles(false)
+    }
+  }, [])
   const wantedPhoto = useRef<string | null>(initialPhoto ?? null)
 
   const subText = darkMode ? 'text-white/70' : 'text-gray-600'
@@ -318,6 +353,71 @@ export default function AlbumGallery({
       window.prompt('Copy this link', link)
     }
   }, [linkFor])
+
+  /**
+   * Keep the photograph being looked at.
+   *
+   * The file is fetched and handed over as a file rather than linked to,
+   * because `<a download>` is ignored across origins -- these objects come
+   * off the CDN, not off the portal -- and the browser would navigate to
+   * the picture instead of saving it. The CDN allows the read
+   * (`access-control-allow-origin: *`), so fetching it is the only thing
+   * that actually downloads.
+   *
+   * On a phone it goes to the share sheet, which is how a picture reaches
+   * the camera roll; a download there lands in Files where nobody looks
+   * for it. That is the same order `photos.tsx` uses for a booth picture.
+   *
+   * Whatever face is on screen is what gets saved -- the improved copy or
+   * the photograph as it was taken, the booth's picture or the selfie
+   * behind it -- but at the size it was stored rather than the size the
+   * page happened to be showing.
+   */
+  const savePhoto = useCallback(async (photo: GalleryItem | null) => {
+    if (!photo) return
+    const url = fullFaceOf(
+      { ...photo, selfieOriginal: photo.selfie_original ?? null },
+      { xray: openXray ?? xray, enhanced: openEnhanced ?? showEnhanced },
+    )
+    setSaveState('saving')
+    try {
+      const resp = await fetch(url)
+      if (!resp.ok) throw new Error(`fetch ${resp.status}`)
+      const blob = await resp.blob()
+      const file = new File([blob], saveNameOf(url, photo), { type: blob.type || 'image/jpeg' })
+
+      if (canShareFiles && navigator.canShare?.({ files: [file] })) {
+        try {
+          await navigator.share({ files: [file] })
+        } catch {
+          // A cancelled sheet is somebody changing their mind, not a
+          // failure, and falling through to a download would leave them
+          // with the file they just declined.
+        }
+        setSaveState('off')
+        return
+      }
+
+      const href = URL.createObjectURL(file)
+      const a = document.createElement('a')
+      a.href = href
+      a.download = file.name
+      a.style.display = 'none'
+      document.body.appendChild(a)
+      a.click()
+      a.remove()
+      // Revoked on a delay: revoking straight away races the browser's own
+      // read of the blob in some WebViews and saves a zero-byte file.
+      window.setTimeout(() => URL.revokeObjectURL(href), 30_000)
+      setSaveState('saved')
+      window.setTimeout(() => setSaveState('off'), 2000)
+    } catch {
+      // Opening it is still better than nothing: the viewer can save it
+      // from there with the browser's own menu.
+      setSaveState('off')
+      window.open(url, '_blank', 'noopener,noreferrer')
+    }
+  }, [canShareFiles, openXray, xray, openEnhanced, showEnhanced])
 
   const closeLightbox = useCallback(() => {
     setFocus(null)
@@ -625,6 +725,26 @@ export default function AlbumGallery({
                 className="rounded-full p-2"
               >
                 {copied ? <TickIcon className="h-4 w-4" /> : <LinkIcon className="h-4 w-4" />}
+              </button>
+              <button
+                onClick={() => void savePhoto(open)}
+                disabled={saveState === 'saving'}
+                title={
+                  saveState === 'saving' ? 'Saving…'
+                    : saveState === 'saved' ? 'Saved'
+                      : canShareFiles ? 'Save this photo' : 'Download this photo'
+                }
+                aria-label={
+                  saveState === 'saving' ? 'Saving the photo'
+                    : saveState === 'saved' ? 'Photo saved'
+                      : canShareFiles ? 'Save this photo' : 'Download this photo'
+                }
+                style={{ background: 'rgba(255,255,255,0.16)', color: '#ffffff' }}
+                className="rounded-full p-2 disabled:opacity-60"
+              >
+                {saveState === 'saving' ? <SpinnerIcon className="h-4 w-4 animate-spin" />
+                  : saveState === 'saved' ? <TickIcon className="h-4 w-4" />
+                    : <DownloadIcon className="h-4 w-4" />}
               </button>
             </div>
           </div>
