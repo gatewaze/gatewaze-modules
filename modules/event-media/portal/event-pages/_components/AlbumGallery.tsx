@@ -17,7 +17,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { faceOf as pickFace, fullFaceOf } from './_lib/gallery-face'
-import { MAX_SAVE_BYTES, fullSizeUrl, isHttpUrl, saveNameOf, saveTypeOf } from './_lib/save-name'
+import { MAX_SAVE_BYTES, fullSizeUrl, isHttpUrl, prefersShareSheet, saveNameOf, saveTypeOf } from './_lib/save-name'
 import { dragOffset, GUTTER_PX, settleOffset, swipeVerdict, TAP_SLOP_PX } from './_lib/swipe'
 import {
   NO_ZOOM, TAP_SCALE, clampPan, isDoubleTap, isZoomed, midpoint, scaleAbout, settle, spread,
@@ -276,7 +276,10 @@ export default function AlbumGallery({
   useEffect(() => {
     try {
       const probe = new File([new Uint8Array([0])], 'probe.jpg', { type: 'image/jpeg' })
-      setCanShareFiles(Boolean(navigator.canShare?.({ files: [probe] })))
+      // Both have to agree: macOS Safari can share files and is still a
+      // desktop, where a download button must produce a download.
+      const coarse = window.matchMedia?.('(pointer: coarse)').matches ?? false
+      setCanShareFiles(prefersShareSheet(Boolean(navigator.canShare?.({ files: [probe] })), coarse))
     } catch {
       setCanShareFiles(false)
     }

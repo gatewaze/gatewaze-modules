@@ -71,6 +71,24 @@ export function isHttpUrl(url: string): boolean {
 }
 
 /**
+ * Should saving go to the OS share sheet, or straight to a download?
+ *
+ * The share sheet is how a picture reaches the camera roll on a phone,
+ * where a download lands in Files and nobody finds it again. On a
+ * desktop it is the wrong answer entirely: somebody clicking a download
+ * button wants a file in Downloads, not a menu of apps to send it to.
+ *
+ * `navigator.canShare({ files })` does NOT tell the two apart -- macOS
+ * Safari answers true and then opens the Mac share sheet, which is
+ * exactly what Dan saw on 2026-10-17. What separates them is the
+ * pointer: a phone and a tablet are coarse, a mouse and a trackpad are
+ * fine. So both have to agree before the sheet is used.
+ */
+export function prefersShareSheet(canShare: boolean, coarsePointer: boolean): boolean {
+  return Boolean(canShare) && Boolean(coarsePointer)
+}
+
+/**
  * The same object, fetched from the bucket instead of the CDN.
  *
  * Bunny Optimizer recompresses what it serves. Measured on one of Paul's
