@@ -1966,6 +1966,14 @@ describe('the booth closes, and a guest has a share', () => {
 // The professional photographs: thousands of them, weeks later, from one
 // person. Not guest uploads, and not filed by the hour they were taken.
 describe('a photographer\'s link', () => {
+  // A real guest list, so the photographer is tested against the case
+  // that actually broke rather than the one that happened to pass.
+  const GUEST_LIST = {
+    data: [
+      { invite_party_members: { id: '11111111-1111-4111-8111-111111111111', first_name: 'Dan', last_name: 'Baker' } },
+    ],
+    error: null,
+  };
   const PRO_LINK = {
     ...ACTIVE_LINK, role: 'photographer', credit_name: 'Hartley & Rose Photography',
     require_name: false, max_photo_bytes: 100 * 1024 * 1024,
@@ -1977,6 +1985,47 @@ describe('a photographer\'s link', () => {
     return { res, supabase };
   };
   const file = (over = {}) => ({ filename: 'DSC_4821.jpg', mime_type: 'image/jpeg', bytes: 12 * 1024 * 1024, ...over });
+
+  // The bug this missed, live on 2026-10-17: every test here stubbed an
+  // event with NO guest list, which is the one case where identify()
+  // lets an unnamed caller through. Every wedding worth photographing
+  // has a guest list, and on one the photographer's own link answered
+  // every file with "please choose your name from the guest list".
+  it('uploads on an event that HAS a guest list, without being on it', async () => {
+    const { deps } = makeDeps({
+      link: PRO_LINK,
+      event: EVENT_ROW,
+      tables: {
+        invite_party_member_events: GUEST_LIST,
+        events_media_guest_blocks: { data: [], error: null },
+      },
+    });
+    const res = mockRes();
+    await createGuestRoutes(deps).mintUploads(
+      req({ body: { client_id: CLIENT_ID, files: [file()] } }), res,
+    );
+    expect(res.statusCode).toBe(200);
+    const read = verifyTicket(res.body.items[0].ticket, Math.floor(Date.now() / 1000), SECRET);
+    expect(read.ok && read.payload.guest_name).toBe('Hartley & Rose Photography');
+  });
+
+  // And a guest on the same event still has to say who they are.
+  it('still asks a guest for their name on that same event', async () => {
+    const { deps } = makeDeps({
+      link: ACTIVE_LINK,
+      event: EVENT_ROW,
+      tables: {
+        invite_party_member_events: GUEST_LIST,
+        events_media_guest_blocks: { data: [], error: null },
+      },
+    });
+    const res = mockRes();
+    await createGuestRoutes(deps).mintUploads(
+      req({ body: { client_id: CLIENT_ID, files: [file()] } }), res,
+    );
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error).toBe('guest_required');
+  });
 
   it('credits the photographer without anybody typing a name', async () => {
     const { res } = await mintThrough(PRO_LINK, [file()]);
