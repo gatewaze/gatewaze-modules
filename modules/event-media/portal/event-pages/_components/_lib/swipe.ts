@@ -58,3 +58,29 @@ export function dragOffset(dx: number, opts: { atStart: boolean; atEnd: boolean 
 
 /** A drag this small was somebody tapping. */
 export const TAP_SLOP_PX = 8
+
+/**
+ * The gap between one photograph and the next on the roll, in pixels.
+ *
+ * It has to match the `marginLeft`/`marginRight` the neighbours are
+ * placed with, or the photograph being brought in does not land centred.
+ */
+export const GUTTER_PX = 24
+
+/**
+ * How far the roll has to travel to put the neighbour exactly where the
+ * current photograph is.
+ *
+ * The neighbours sit one full width plus the gutter to either side, so
+ * that -- not the width of the window -- is the distance. Getting this
+ * wrong is what made a swipe look like a bounce: the roll moved by the
+ * window's width, which is not where the next photograph was, and then
+ * animated back to the middle to correct itself.
+ *
+ * `way` is -1 to bring in the next, +1 for the previous.
+ */
+export function settleOffset(way: -1 | 1, width: number, gutter = GUTTER_PX): number {
+  if (!Number.isFinite(width) || width <= 0) return 0
+  const gap = Number.isFinite(gutter) ? Math.max(0, gutter) : GUTTER_PX
+  return way * (width + gap)
+}

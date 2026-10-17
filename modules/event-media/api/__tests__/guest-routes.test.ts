@@ -1620,6 +1620,75 @@ describe('eventGallery', () => {
     expect(res.body.total).toBe(3);
   });
 
+  // Which end an album starts at (migration 029). Newest first is right
+  // while an event is on -- a guest opens the gallery to see what has
+  // just landed -- and wrong for a professional's delivery, which is a
+  // finished set that reads forwards. Reported 2026-10-17: a wedding
+  // read backwards, last dance first.
+  describe('which end the album starts at', () => {
+    const sortedBy = (res) => (res.supabase.state.ordered ?? [])
+      .filter((o) => o.table === 'event_media_gallery' && o.column === 'captured_at')[0];
+
+    it('is newest first by default', async () => {
+      const res = await gallery({ album: 'the-day' });
+      expect(sortedBy(res).ascending).toBe(false);
+    });
+
+    it('reads forwards where the album says so', async () => {
+      const oldest = {
+        ...TABLES,
+        event_media_album_settings: { data: [{ album_id: ALBUM.day, show_on_portal: true, sort: 'oldest' }], error: null },
+      };
+      const res = await gallery({ album: 'the-day' }, { tables: oldest });
+      expect(sortedBy(res).ascending).toBe(true);
+    });
+
+    it('lets the viewer turn it round either way', async () => {
+      const oldest = {
+        ...TABLES,
+        event_media_album_settings: { data: [{ album_id: ALBUM.day, show_on_portal: true, sort: 'oldest' }], error: null },
+      };
+      // The viewer's choice beats the album's default, in both directions.
+      expect(sortedBy(await gallery({ album: 'the-day', sort: 'newest' }, { tables: oldest })).ascending).toBe(false);
+      expect(sortedBy(await gallery({ album: 'the-day', sort: 'oldest' })).ascending).toBe(true);
+    });
+
+    it('takes only the two words it knows', async () => {
+      // Anything else falls back to the album's default rather than
+      // reaching the query.
+      for (const sort of ['', 'sideways', 'captured_at.asc', '1', 'OLDEST']) {
+        expect(sortedBy(await gallery({ album: 'the-day', sort })).ascending).toBe(false);
+      }
+    });
+
+    it('ties break the same way it sorts', async () => {
+      // Three cameras shot this wedding, so photographs sharing a second
+      // are routine; a tiebreak pointing the other way could repeat one
+      // across a page boundary.
+      const res = await gallery({ album: 'the-day', sort: 'oldest' });
+      const keys = (res.supabase.state.ordered ?? [])
+        .filter((o) => o.table === 'event_media_gallery');
+      expect(keys.map((k) => k.column)).toEqual(['captured_at', 'id']);
+      expect(keys.every((k) => k.ascending === true)).toBe(true);
+    });
+
+    it('stays newest first when every album is shown at once', async () => {
+      // No one album to ask, and a mixed feed is a feed of what has just
+      // arrived.
+      const oldest = {
+        ...TABLES,
+        event_media_album_settings: { data: [{ album_id: ALBUM.day, show_on_portal: true, sort: 'oldest' }], error: null },
+      };
+      const res = await gallery({}, { tables: oldest });
+      expect(sortedBy(res).ascending).toBe(false);
+    });
+
+    it('says which way round it answered', async () => {
+      expect((await gallery({ album: 'the-day' })).body.sort).toBe('newest');
+      expect((await gallery({ album: 'the-day', sort: 'oldest' })).body.sort).toBe('oldest');
+    });
+  });
+
   // Enhancement is per album: an album with it on shows the enhanced
   // copy of a photograph that has one, and nothing else changes.
   it('shows the enhanced copy only where the album asks for it', async () => {

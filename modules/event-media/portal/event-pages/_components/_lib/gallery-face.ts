@@ -39,6 +39,26 @@ export function sized(url: string, width: number): string {
 /** Anything under this asks for the thumbnail rather than the preview. */
 const SMALL = 400
 
+/**
+ * The same face as `faceOf`, at the size it was stored.
+ *
+ * `faceOf` answers "what goes in this tile", so it hands back a thumbnail
+ * or a CDN resize. Saving a photograph is the other question: a guest
+ * keeping a picture of themselves wants the picture, not the 800px copy
+ * the page happened to be showing. So this picks the same face by the
+ * same rules and skips the sizing.
+ *
+ * It mirrors `faceOf` deliberately, switch for switch. If one grows a
+ * case the other needs it too, which is what the tests pin.
+ */
+export function fullFaceOf(item: FaceItem, choice: FaceChoice = {}): string {
+  if (choice.xray && item.selfie) {
+    return choice.enhanced === false && item.selfieOriginal ? item.selfieOriginal : item.selfie
+  }
+  if (choice.enhanced === false && item.original) return item.original.url
+  return item.url
+}
+
 export function faceOf(item: FaceItem, width: number, choice: FaceChoice = {}): string {
   // A selfie has an enhanced copy of its own -- the booth's room was
   // very dark -- so the same switch applies to it.
