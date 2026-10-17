@@ -1096,6 +1096,13 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       // only posted ones are anyone else's to see. A constant filter: no
       // request input reaches it.
       .or('metadata->>posted.is.null,metadata->>posted.neq.false')
+      // ARRIVAL ORDER, DELIBERATELY -- unlike the gallery, which sorts by
+      // when a photograph was taken (migration 028). This is the
+      // projector's feed: it shows what has just come in, so a picture is
+      // dated when it arrives, and the cursor below pages on exactly
+      // these two columns. Sorting it by capture time would both bury a
+      // photograph somebody has this second uploaded and break the
+      // cursor, which is a created_at/id pair.
       .order('created_at', { ascending: false })
       .order('id', { ascending: false })
       // Over-fetch: hidden rows are filtered below and would otherwise
@@ -1303,7 +1310,11 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     // until it does (a page of this shipped 500ing on 2026-09-27).
     const base = (columns: string, opts?: { count: 'exact'; head: true }) => {
       let q = supabase
-        .from('host_media')
+        // The gallery's own view of host_media (migration 028). The only
+        // thing it adds is captured_at -- when the photograph was taken,
+        // or when it arrived if it does not say -- which is what this
+        // page sorts by and which no `order=` can express over JSONB.
+        .from('event_media_gallery')
         .select(columns, opts as never)
         .eq('host_kind', 'event')
         .eq('host_id', event.id)
@@ -1328,7 +1339,10 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     const counts = new Map<string, number>();
     const [pageResult] = await Promise.all([
       inAlbum(base('id, storage_path, mime_type, bytes, width, height, variants, metadata, created_at') as never)
-        .order('created_at', { ascending: false })
+        // Newest first, by when it was taken. A photographer delivers
+        // weeks later in one sitting, so ordering by arrival put 851
+        // photographs in whatever order the browser finished them in.
+        .order('captured_at', { ascending: false })
         .order('id', { ascending: false })
         .range(offset, offset + limit - 1),
       // One count per album, each a head request that returns no rows.
@@ -1833,7 +1847,9 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     // Videos are included here even though the projector never shows
     // them — a guest who uploaded the wrong video needs to remove it.
     const { data, error } = await supabase
-      .from('host_media')
+      // The same view the gallery reads, so "Yours" is in the same order
+      // as the album it sits beside (migration 028).
+      .from('event_media_gallery')
       .select('id, storage_path, mime_type, bytes, width, height, variants, metadata, created_at, is_approved')
       .eq('host_kind', 'event')
       .eq('host_id', link.event_id)
@@ -1841,7 +1857,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       // Unposted booth pictures live in the booth's own carousel, not in
       // the gallery's "Yours".
       .or('metadata->>posted.is.null,metadata->>posted.neq.false')
-      .order('created_at', { ascending: false })
+      .order('captured_at', { ascending: false })
       .limit(200);
 
     if (error) {

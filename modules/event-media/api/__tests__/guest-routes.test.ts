@@ -59,6 +59,16 @@ function mockRes() {
   return res;
 }
 
+/**
+ * The photographs, whichever name they are asked for by.
+ *
+ * `event_media_gallery` (migration 028) is a view over `host_media` that
+ * adds captured_at and nothing else, so for the purposes of these stubs
+ * the two are one source of rows.
+ */
+const MEDIA_TABLES = ['host_media', 'event_media_gallery'];
+const isMedia = (table) => MEDIA_TABLES.includes(table);
+
 /** Chainable, thenable per-table query builder. Terminal behaviour:
  *  await builder → { data: listData }, .maybeSingle() → singleData. */
 function makeSupabase(config) {
@@ -122,7 +132,7 @@ function makeSupabase(config) {
       },
       or: () => b,
       contains: () => b,
-      order: () => b,
+      order: (column, opts) => { (state.ordered ??= []).push({ table, column, ...opts }); return b; },
       limit: () => b,
       update: (fields) => {
         (state.updated ??= []).push({ table, fields });
@@ -137,7 +147,7 @@ function makeSupabase(config) {
       maybeSingle: () => {
         if (table === 'events_media_upload_links') return Promise.resolve({ data: config.link ?? null, error: null });
         if (table === 'events') return Promise.resolve({ data: config.event ?? null, error: null });
-        if (table === 'host_media') {
+        if (isMedia(table)) {
           // A lookup by id answers from the listed rows where it can --
           // the gallery's "open on this photograph" reads one that way.
           const listed = b._idEq ? (config.mediaRows ?? []).find((r) => r.id === b._idEq) : null;
@@ -148,14 +158,14 @@ function makeSupabase(config) {
         return Promise.resolve({ data: null, error: null });
       },
       then: (resolve) => {
-        if (table === 'host_media' && b._head) {
+        if (isMedia(table) && b._head) {
           // The booth quota counts what it has made for one guest.
           if (b._boothCount) return resolve({ count: config.boothCount ?? 0, error: null });
           return resolve({ count: b._rows().length, error: null });
         }
         if (table === 'events_media_guest_claims') return resolve({ data: [...state.claims].map(([member_id, client_id]) => ({ member_id, client_id })), error: null });
         if (config.tables && table in config.tables) return resolve(config.tables[table]);
-        if (table !== 'host_media') return resolve({ data: [], error: null });
+        if (!isMedia(table)) return resolve({ data: [], error: null });
         return resolve({ data: config.mediaRows ?? [], error: config.mediaListError ?? null });
       },
       insert: (row) => {
@@ -1221,7 +1231,7 @@ describe('one phone per name', () => {
     let filter = null;
     const { deps, supabase } = makeDeps(cfg({ claims: { [DAN]: CLIENT_ID }, mediaRows: [] }));
     const realFrom = supabase.from;
-    supabase.from = (t) => { const b = realFrom(t); if (t === 'host_media') { const c = b.contains; b.contains = (col, v) => { filter = v; return c(col, v); }; } return b; };
+    supabase.from = (t) => { const b = realFrom(t); if (isMedia(t)) { const c = b.contains; b.contains = (col, v) => { filter = v; return c(col, v); }; } return b; };
     const res = mockRes();
     await createGuestRoutes(deps).listMine(req({ body: { client_id: CLIENT_ID, member_id: DAN } }), res);
     expect(res.statusCode).toBe(200);
@@ -1479,11 +1489,25 @@ describe('eventGallery', () => {
     host_media_album_items: { data: [], error: null },
   };
   const gallery = async (query = {}, over = {}) => {
-    const { deps } = makeDeps({ event: EVENT_ROW, mediaRows: ROWS, tables: TABLES, ...over });
+    const { deps, supabase } = makeDeps({ event: EVENT_ROW, mediaRows: ROWS, tables: TABLES, ...over });
     const res = mockRes();
     await createGuestRoutes(deps).eventGallery({ params: { identifier: 'dan-sarah' }, query, ip: '203.0.113.9', headers: {} }, res);
+    res.supabase = supabase;
     return res;
   };
+
+  // A photographer delivers weeks after the event in one sitting, so
+  // arrival order says nothing about the day. The gallery reads the view
+  // that carries captured_at -- taken time, else arrival (migration 028).
+  it('asks for the photographs in the order they were taken', async () => {
+    const res = await gallery();
+    const ordered = (res.supabase.state.ordered ?? []).filter((o) => o.table === 'event_media_gallery');
+    expect(ordered.length).toBeGreaterThan(0);
+    expect(ordered[0].column).toBe('captured_at');
+    expect(ordered[0].ascending).toBe(false);
+    // Never by arrival, which is what it used to do.
+    expect(ordered.map((o) => o.column)).not.toContain('created_at');
+  });
 
   it('shows the albums with something in them, and the photos', async () => {
     const res = await gallery();
