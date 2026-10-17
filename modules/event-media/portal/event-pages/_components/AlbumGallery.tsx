@@ -19,6 +19,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { faceOf as pickFace, fullFaceOf } from './_lib/gallery-face'
 import { MAX_SAVE_BYTES, fullSizeUrl, isHttpUrl, saveNameOf, saveTypeOf } from './_lib/save-name'
 import { dragOffset, GUTTER_PX, settleOffset, swipeVerdict, TAP_SLOP_PX } from './_lib/swipe'
+import {
+  NO_ZOOM, TAP_SCALE, clampPan, isDoubleTap, isZoomed, midpoint, scaleAbout, settle, spread,
+  type Zoom,
+} from './_lib/zoom'
 import { albumAddress, pageBaseFrom } from './_lib/album-address'
 
 const API_BASE = ''
@@ -211,6 +215,41 @@ export default function AlbumGallery({
   const track = useRef<HTMLDivElement | null>(null)
   /** True for the one frame the photographs are swapped on. */
   const [snap, setSnap] = useState(false)
+  /**
+   * The photograph's own zoom, which the portal has to do itself: both
+   * of the host app's layouts set `userScalable: false`, so the browser's
+   * pinch is off for every page of every tenant's portal.
+   */
+  const [zoom, setZoom] = useState<Zoom>(NO_ZOOM)
+  /** The pinch in progress: the finger spread and zoom it started from. */
+  const pinch = useRef<{ spread: number; from: Zoom } | null>(null)
+  /** Where a one-finger pan started, while zoomed in. */
+  const panFrom = useRef<{ x: number; y: number; from: Zoom } | null>(null)
+  /** The last tap, for spotting a double one. */
+  const lastTap = useRef<{ at: number; x: number; y: number } | null>(null)
+  /** The photograph itself, measured so a pan knows how far it may go. */
+  const shot = useRef<HTMLImageElement | null>(null)
+
+  /** The frame and the photograph in it, for clamping a pan. */
+  const extents = useCallback(() => {
+    const frameRect = track.current?.getBoundingClientRect()
+    const shotRect = shot.current?.getBoundingClientRect()
+    const frame = { w: frameRect?.width ?? 0, h: frameRect?.height ?? 0 }
+    // The rendered box divided by the scale it is already drawn at, so
+    // the content size is the unzoomed one however deep we are.
+    const s = zoom.scale > 0 ? zoom.scale : 1
+    const content = shotRect
+      ? { w: shotRect.width / s, h: shotRect.height / s }
+      : frame
+    return { frame, content }
+  }, [zoom.scale])
+
+  /** Back to fit. Called whenever the photograph changes or closes. */
+  const unzoom = useCallback(() => {
+    pinch.current = null
+    panFrom.current = null
+    setZoom(NO_ZOOM)
+  }, [])
   const dragging = useRef(false)
   // A photograph a link named, shown before the page it sits on has
   // loaded -- page forty of The day is still one link.
@@ -598,7 +637,8 @@ export default function AlbumGallery({
     setDrag(0)
     dragFrom.current = null
     dragging.current = false
-  }, [])
+    unzoom()
+  }, [unzoom])
 
   // A photograph opens showing what the grid shows; the switches under
   // it are for this photograph only and go when it closes.
@@ -607,8 +647,12 @@ export default function AlbumGallery({
     setOpenXray(null)
     setDrag(0)
     setLeaving(0)
+    // A zoom belongs to the photograph it was made on. Carrying it to
+    // the next one lands the viewer deep inside a picture they have not
+    // seen yet, at a corner chosen by the last one.
+    unzoom()
     setLightbox(i)
-  }, [])
+  }, [unzoom])
   // Only the booth's own albums have selfies behind their pictures.
   // The server sends a selfie only for an album whose organiser has
   // turned x-ray on, so having one is the permission.
@@ -767,12 +811,66 @@ export default function AlbumGallery({
             className="relative max-h-full max-w-4xl"
             onClick={(e) => e.stopPropagation()}
             onTouchStart={(e) => {
-              if (lightbox === null || e.touches.length !== 1) return
+              if (lightbox === null) return
+              // Two fingers is a pinch, and it cancels whatever one
+              // finger had started: a page half-turned while the second
+              // finger lands should settle back, not keep going.
+              if (e.touches.length === 2) {
+                const a = e.touches[0]!
+                const b = e.touches[1]!
+                pinch.current = {
+                  spread: spread({ x: a.clientX, y: a.clientY }, { x: b.clientX, y: b.clientY }),
+                  from: zoom,
+                }
+                dragFrom.current = null
+                dragging.current = false
+                panFrom.current = null
+                setDrag(0)
+                return
+              }
+              if (e.touches.length !== 1) return
               const t = e.touches[0]!
+              // Zoomed in, one finger moves the photograph rather than
+              // turning the page. Turning it while magnified would throw
+              // away the bit somebody was looking at.
+              if (isZoomed(zoom)) {
+                panFrom.current = { x: t.clientX, y: t.clientY, from: zoom }
+                return
+              }
               dragFrom.current = { x: t.clientX, y: t.clientY, at: Date.now() }
               dragging.current = false
             }}
             onTouchMove={(e) => {
+              // A pinch: the scale follows the ratio of the finger
+              // spread, anchored at the point between them so whatever
+              // is under the fingers stays under them.
+              if (pinch.current && e.touches.length === 2) {
+                const a = e.touches[0]!
+                const b = e.touches[1]!
+                const now = spread({ x: a.clientX, y: a.clientY }, { x: b.clientX, y: b.clientY })
+                const started = pinch.current.spread
+                if (started <= 0 || now <= 0) return
+                const centre = track.current?.getBoundingClientRect()
+                const mid = midpoint({ x: a.clientX, y: a.clientY }, { x: b.clientX, y: b.clientY })
+                const at = centre
+                  ? { x: mid.x - (centre.left + centre.width / 2), y: mid.y - (centre.top + centre.height / 2) }
+                  : { x: 0, y: 0 }
+                const next = scaleAbout(at, pinch.current.from, pinch.current.from.scale * (now / started))
+                const { frame, content } = extents()
+                setZoom(clampPan(next, frame, content))
+                return
+              }
+              // A pan, while zoomed in.
+              if (panFrom.current && e.touches.length === 1) {
+                const t = e.touches[0]!
+                const { frame, content } = extents()
+                setZoom(clampPan({
+                  scale: panFrom.current.from.scale,
+                  x: panFrom.current.from.x + (t.clientX - panFrom.current.x),
+                  y: panFrom.current.from.y + (t.clientY - panFrom.current.y),
+                }, frame, content))
+                return
+              }
               const from = dragFrom.current
               if (!from || e.touches.length !== 1) return
               const t = e.touches[0]!
@@ -787,10 +885,46 @@ export default function AlbumGallery({
               }
               setDrag(dragOffset(dx, { atStart: lightbox === 0, atEnd: lightbox === items.length - 1 }))
             }}
-            onTouchEnd={() => {
+            onTouchEnd={(e) => {
+              // The last finger of a pinch has come off: keep the zoom if
+              // there is one, and fall back to fit if it was pinched
+              // shut. Done on the way out rather than during, so the
+              // photograph does not snap while fingers are still moving.
+              if (pinch.current) {
+                if (e.touches.length === 0) {
+                  const { frame, content } = extents()
+                  setZoom(settle(zoom, frame, content))
+                  pinch.current = null
+                }
+                return
+              }
+              if (panFrom.current) {
+                if (e.touches.length === 0) panFrom.current = null
+                return
+              }
               const from = dragFrom.current
               dragFrom.current = null
-              if (!from || !dragging.current) { setDrag(0); return }
+              if (!from || !dragging.current) {
+                setDrag(0)
+                // A tap that did not drag. Two of them in the same place
+                // zoom in, which is the gesture everyone tries first and
+                // the only one that works without two hands.
+                const tap = { at: Date.now(), x: from?.x ?? 0, y: from?.y ?? 0 }
+                if (from && isDoubleTap(lastTap.current, tap)) {
+                  lastTap.current = null
+                  const centre = track.current?.getBoundingClientRect()
+                  const at = centre
+                    ? { x: tap.x - (centre.left + centre.width / 2), y: tap.y - (centre.top + centre.height / 2) }
+                    : { x: 0, y: 0 }
+                  const { frame, content } = extents()
+                  setZoom(isZoomed(zoom)
+                    ? NO_ZOOM
+                    : clampPan(scaleAbout(at, NO_ZOOM, TAP_SCALE), frame, content))
+                } else if (from) {
+                  lastTap.current = tap
+                }
+                return
+              }
               dragging.current = false
               const verdict = swipeVerdict({ dx: drag, ms: Date.now() - from.at, width: window.innerWidth })
               const goes = (verdict === 'next' && lightbox !== null && lightbox < items.length - 1)
@@ -837,7 +971,18 @@ export default function AlbumGallery({
               // on the same roll, so dimming the one leaving dims the one
               // arriving with it, which is what made a turn read as a
               // flicker rather than a movement.
-              touchAction: 'pan-y',
+              //
+              // Every touch in here is ours.
+              //
+              // It cannot be conditional on a pinch being in progress:
+              // that lives in a ref, so starting one does not re-render
+              // and the style would still say 'pan-y' for the frames
+              // that matter most. And it cannot be left to
+              // preventDefault, because React registers touchmove as a
+              // PASSIVE listener, where preventDefault does nothing but
+              // log. The overlay is fixed and covers the page, so there
+              // was never anything behind it to scroll anyway.
+              touchAction: 'none',
             }}
           >
             {open.kind === 'video' ? (
@@ -845,8 +990,16 @@ export default function AlbumGallery({
             ) : (
               // eslint-disable-next-line @next/next/no-img-element -- lightbox shows the CDN copy directly
               <img
+                ref={shot}
                 src={faceOf(open, 1200, { xray: openXray ?? xray, enhanced: openEnhanced ?? showEnhanced })}
                 alt={open.guest_name ? `Photo by ${open.guest_name}` : 'Event photo'}
+                style={{
+                  transform: `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.scale})`,
+                  // Follows the fingers exactly while they are down; eases
+                  // only when a gesture has finished and it is settling.
+                  transition: pinch.current || panFrom.current ? 'none' : 'transform 180ms ease-out',
+                  willChange: 'transform',
+                }}
                 className="max-h-[85vh] max-w-full object-contain"
                 draggable={false}
               />
