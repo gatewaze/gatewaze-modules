@@ -52,7 +52,7 @@ const PAGE = 50;
 
 export interface FaceProgress {
   done: number;
-  /** Photographs still unscanned, as the server last reported it. */
+  /** Photographs in hand and not yet looked at. */
   remaining: number;
   faces: number;
   failed: number;
@@ -174,19 +174,36 @@ export async function detectFaces(
   // anything has been half-done.
   await load();
 
+  // Where the server got to last time. Held here, not there: each
+  // request is independent, and without carrying it the walk restarts
+  // from the newest photograph every time.
+  let after: string | null = null;
+
   for (;;) {
     if (!keepGoing()) break;
     const resp = await authedFetch(`/api/admin/events/${eventId}/faces/pending`, {
       method: 'POST',
-      body: JSON.stringify({ limit: PAGE, model_id: MODEL_ID, force }),
+      body: JSON.stringify({ limit: PAGE, model_id: MODEL_ID, force, after }),
     });
     if (!resp.ok) {
       const body = await resp.json().catch(() => null);
       throw new Error(body?.message ?? `the scan stopped after ${progress.done} photographs`);
     }
-    const { items, remaining } = (await resp.json()) as { items: Pending[]; remaining: number };
-    if (!items || items.length === 0) { progress.remaining = 0; break; }
-    progress.remaining = remaining + items.length;
+    // A page with no items is NOT the end: a whole window of
+    // already-scanned photographs looks exactly like that. The server
+    // says when it has run out of album.
+    const { items, exhausted, cursor } = (await resp.json()) as {
+      items: Pending[]; exhausted: boolean; cursor: string | null;
+    };
+    // No cursor movement and nothing found means there is nothing more
+    // to be had, whatever `exhausted` says: stop rather than ask again.
+    if (cursor === after && (!items || items.length === 0)) break;
+    after = cursor ?? after;
+    if (!items || items.length === 0) {
+      if (exhausted) break;
+      continue;
+    }
+    progress.remaining = items.length;
 
     for (const item of items) {
       if (!keepGoing()) break;

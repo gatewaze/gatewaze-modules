@@ -52,6 +52,10 @@ export const DETECT_WIDTH = 768;
 
 /** Photographs handed out per request. */
 const PAGE_MAX = 200;
+/** Rows looked at per trip to the database while hunting for unscanned ones. */
+const WINDOW = 500;
+/** How many such trips one request will make before answering. */
+const WINDOW_MAX = 40;
 /** Faces recorded for one photograph. A wedding group shot is ~30. */
 const FACES_MAX = 100;
 
@@ -64,6 +68,18 @@ function num(v: unknown, lo: number, hi: number): number | null {
   const n = typeof v === 'number' ? v : Number.NaN;
   if (!Number.isFinite(n) || n < lo || n > hi) return null;
   return n;
+}
+
+/**
+ * The same, rounded, for a column Postgres declares as an integer.
+ *
+ * Without this a fractional value passes every check here and then
+ * fails on insert -- after the delete below has already removed the old
+ * boxes, leaving the photograph marked scanned with nothing on it.
+ */
+function int(v: unknown, lo: number, hi: number): number | null {
+  const n = num(v, lo, hi);
+  return n === null ? null : Math.round(n);
 }
 
 export function createFaceDetect(deps: FaceDetectDeps) {
@@ -103,44 +119,81 @@ export function createFaceDetect(deps: FaceDetectDeps) {
       return;
     }
     const force = body['force'] === true;
+    // Where the last request got to. Without this each request restarts
+    // the walk, and an album whose first windows are entirely scanned
+    // would hand back an empty page for ever while the browser asked
+    // again -- a quieter bug than the one above and a worse one.
+    const after = typeof body['after'] === 'string' && body['after'].length <= 40
+      ? body['after'] : null;
 
     try {
-      // Only photographs. A video has no frame to look at here.
-      const { data: media, error } = await db
-        .from('host_media')
-        .select('id, storage_path, mime_type, width, height')
-        .eq('host_kind', 'event')
-        .eq('host_id', eventId)
-        .like('mime_type', 'image/%')
-        .order('created_at', { ascending: false })
-        .limit(PAGE_MAX * 4);
-      if (error) throw new Error(error.message);
+      // WINDOWED, and the window keeps moving until it has found enough
+      // or run out of album.
+      //
+      // The first version fetched the newest 800 photographs and
+      // filtered the scanned ones out in memory. Once those 800 were
+      // done it returned nothing, the browser's loop stopped, and
+      // everything older was never scanned -- on an album of 851, the
+      // last 51 silently. Filtering after a limit only works while the
+      // limit is bigger than the album.
+      //
+      // The scans lookup is bounded to the window for the same reason:
+      // asked for a whole event's scans it would hit PostgREST's own
+      // row cap and quietly re-offer photographs already done.
+      const items: Array<{ id: string; url: string; width: number | null; height: number | null }> = [];
+      let cursor: string | null = after;
+      let exhausted = false;
 
-      const rows = (media ?? []) as Array<{
-        id: string; storage_path: string; width: number | null; height: number | null;
-      }>;
-      if (rows.length === 0) { res.status(200).json({ items: [], remaining: 0 }); return; }
+      for (let window = 0; window < WINDOW_MAX && items.length < limit; window += 1) {
+        let q = db
+          .from('host_media')
+          .select('id, storage_path, width, height, created_at')
+          .eq('host_kind', 'event')
+          .eq('host_id', eventId)
+          .like('mime_type', 'image/%')
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: false })
+          .limit(WINDOW);
+        if (cursor) q = q.lt('created_at', cursor);
 
-      // Which of them this detector has already finished with.
-      const done = new Set<string>();
-      if (!force) {
-        const { data: scans } = await db
-          .from('events_media_face_scans')
-          .select('media_id')
-          .eq('event_id', eventId)
-          .eq('model_id', modelId);
-        for (const s of (scans ?? []) as Array<{ media_id: string }>) done.add(s.media_id);
+        const { data: rows, error } = await q;
+        if (error) throw new Error(error.message);
+        const page = (rows ?? []) as Array<{
+          id: string; storage_path: string; width: number | null; height: number | null; created_at: string;
+        }>;
+        if (page.length === 0) { exhausted = true; break; }
+        cursor = page[page.length - 1]!.created_at;
+        if (page.length < WINDOW) exhausted = true;
+
+        let done = new Set<string>();
+        if (!force) {
+          const { data: scans, error: scanErr } = await db
+            .from('events_media_face_scans')
+            .select('media_id')
+            .eq('model_id', modelId)
+            .in('media_id', page.map((r) => r.id));
+          if (scanErr) throw new Error(scanErr.message);
+          done = new Set(((scans ?? []) as Array<{ media_id: string }>).map((s) => s.media_id));
+        }
+
+        for (const r of page) {
+          if (items.length >= limit) break;
+          if (done.has(r.id)) continue;
+          items.push({
+            id: r.id,
+            // A small copy, not the original. See the header.
+            url: sizedUrl(r.storage_path, DETECT_WIDTH),
+            width: r.width ?? null,
+            height: r.height ?? null,
+          });
+        }
+        if (exhausted) break;
       }
 
-      const left = rows.filter((r) => !done.has(r.id));
-      const items = left.slice(0, limit).map((r) => ({
-        id: r.id,
-        // A small copy, not the original. See the header.
-        url: sizedUrl(r.storage_path, DETECT_WIDTH),
-        width: r.width ?? null,
-        height: r.height ?? null,
-      }));
-      res.status(200).json({ items, remaining: Math.max(0, left.length - items.length) });
+      // `exhausted` is what the browser stops on. A page with no items
+      // is NOT the end -- a whole window of already-scanned photographs
+      // looks exactly like that, and stopping there is the bug above.
+      res.status(200).json({ items, exhausted, cursor });
     } catch (err) {
       logger.error('face pending failed', {
         eventId, error: err instanceof Error ? err.message : String(err),
@@ -167,7 +220,7 @@ export function createFaceDetect(deps: FaceDetectDeps) {
       sendError(res, 400, 'invalid_params', 'media_id (UUID) and model_id are required');
       return;
     }
-    const tookMs = num(body['took_ms'], 0, 600_000);
+    const tookMs = int(body['took_ms'], 0, 600_000);
 
     // An allowlist, field by field. Nothing from the request object is
     // ever spread into a row.
@@ -188,7 +241,7 @@ export function createFaceDetect(deps: FaceDetectDeps) {
         face_index: i,
         box_x: x, box_y: y, box_w: w, box_h: h,
         score,
-        face_px: num(o['px'], 0, 100_000),
+        face_px: int(o['px'], 0, 100_000),
         model_id: modelId,
       });
     }
@@ -210,7 +263,7 @@ export function createFaceDetect(deps: FaceDetectDeps) {
 
       // Replace rather than add to: a re-scan is the new truth, and
       // face_index would collide on its unique constraint otherwise.
-      await db.from('events_media_faces').delete().eq('media_id', mediaId);
+      await db.from('events_media_faces').delete().eq('media_id', mediaId).eq('event_id', eventId);
       if (faces.length > 0) {
         const { error: insErr } = await db.from('events_media_faces').insert(faces);
         if (insErr) throw new Error(insErr.message);

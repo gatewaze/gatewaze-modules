@@ -108,29 +108,26 @@ REVOKE ALL ON public.events_media_face_scans FROM anon;
 REVOKE ALL ON public.events_media_face_scans FROM authenticated;
 GRANT ALL ON public.events_media_face_scans TO service_role;
 
--- Registered with the erasure engine so a face box leaves with the
--- person whose photograph it is on.
+-- ERASURE HAPPENS BY CASCADE, NOT BY REGISTRATION.
 --
--- Both tables hang off host_media rather than off any identity of their
--- own, which is the `parent` form the engine provides for exactly this
--- (see speaker_promo_kits in compliance/003). It is also the honest
--- shape: a box knows which picture it is in and nothing else about who
--- is in it.
-DO $$
-BEGIN
-  IF EXISTS (
-    SELECT 1 FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
-     WHERE n.nspname = 'public' AND p.proname = 'compliance_register_personal_data'
-  ) THEN
-    PERFORM public.compliance_register_personal_data(
-      '{"table":"events_media_faces","owner":"event-media","action":"delete",
-        "parent":{"table":"host_media","column":"media_id"},"order":5,
-        "note":"Face rectangles. Not biometric templates; no identity."}'::jsonb);
-    PERFORM public.compliance_register_personal_data(
-      '{"table":"events_media_face_scans","owner":"event-media","action":"delete",
-        "parent":{"table":"host_media","column":"media_id"},"order":5,
-        "note":"Which photographs the face detector has looked at."}'::jsonb);
-  ELSE
-    RAISE NOTICE 'event-media: compliance module not installed; face tables not registered for erasure';
-  END IF;
-END $$;
+-- The first version of this registered both tables with the compliance
+-- engine using the `parent` form against host_media. That does nothing,
+-- and it is worth writing down why so nobody adds it back believing it
+-- works: the engine resolves a parent by looking the parent table up in
+-- compliance_personal_data_registry (002_erasure_engine.sql:413-423),
+-- and if it finds no row it adds NO predicate at all. `host_media` is
+-- registered nowhere in this repo. The predicate came back NULL and the
+-- face rows would never have been touched, while the migration claimed
+-- they were covered -- which is worse than not registering them.
+--
+-- The honest position: a box carries no identity. There is no column
+-- here that resolves to a person, so "erase this person's boxes" cannot
+-- be expressed as a match. What CAN be expressed is that a box does not
+-- outlive the photograph it describes, and that is enforced above by
+-- ON DELETE CASCADE on media_id -- verified by deleting a host_media row
+-- and watching both the boxes and the scan row go with it.
+--
+-- So: erasing somebody's photographs erases their boxes. If face data
+-- ever grows an identity of its own -- a template, a cluster, a name --
+-- that table WILL need a real registration, and this comment should not
+-- be taken as a precedent for skipping one.
