@@ -1858,6 +1858,10 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       // the gallery's "Yours".
       .or('metadata->>posted.is.null,metadata->>posted.neq.false')
       .order('captured_at', { ascending: false })
+      // Two photographs taken in the same second are common -- three
+      // cameras were shooting this wedding -- and without a tiebreak
+      // their order is whatever the plan happens to produce.
+      .order('id', { ascending: false })
       .limit(200);
 
     if (error) {

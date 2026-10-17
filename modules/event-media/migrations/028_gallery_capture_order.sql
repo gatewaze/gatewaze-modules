@@ -50,6 +50,17 @@ BEGIN
     RETURN NULL;
   END IF;
   v_text := btrim(v_text);
+  -- A year outside living memory is not a capture time, it is a flat
+  -- camera battery or a value somebody chose. `cleanTakenAt` keeps the
+  -- same window in the application and `exifTakenAt` refuses the same
+  -- years when it reads the file; without it here, a row claiming 9999
+  -- would sit at the top of every gallery for ever. Bounded by a
+  -- constant rather than by now(), so the same row always sorts the
+  -- same way.
+  IF substring(v_text, 1, 4) !~ '^\d{4}$'
+     OR substring(v_text, 1, 4)::int NOT BETWEEN 2000 AND 2100 THEN
+    RETURN NULL;
+  END IF;
   -- No zone stated? Then it is a wall clock, read as UTC.
   IF v_text !~ '(Z|[+-]\d{2}:?\d{2})$' THEN
     v_text := v_text || 'Z';
@@ -57,9 +68,21 @@ BEGIN
   BEGIN
     RETURN v_text::timestamptz;
   EXCEPTION WHEN OTHERS THEN
+    -- A date that parses as text but not as a calendar -- 31 February,
+    -- month 13 -- lands here. The exception block costs a subtransaction
+    -- per row, which is why nothing indexes this and why the alternative
+    -- (a pattern strict enough to need no handler) does not exist: no
+    -- regex rules out 30 February.
     RETURN NULL;
   END;
 END $$;
+
+-- A pure function of its argument that exposes no data, but nothing
+-- outside the gallery has any use for it either.
+REVOKE ALL ON FUNCTION public.event_media_taken_at(jsonb) FROM PUBLIC;
+REVOKE ALL ON FUNCTION public.event_media_taken_at(jsonb) FROM anon;
+REVOKE ALL ON FUNCTION public.event_media_taken_at(jsonb) FROM authenticated;
+GRANT EXECUTE ON FUNCTION public.event_media_taken_at(jsonb) TO service_role;
 
 COMMENT ON FUNCTION public.event_media_taken_at(jsonb) IS
   'When a photograph was taken, from event-media metadata. A bare clock is read as UTC. NULL if absent or unparseable.';
@@ -67,7 +90,13 @@ COMMENT ON FUNCTION public.event_media_taken_at(jsonb) IS
 -- Only the columns the gallery reads. Spelling them out rather than
 -- SELECT * means a column added to host_media later cannot silently
 -- change what this exposes.
-CREATE OR REPLACE VIEW public.event_media_gallery AS
+-- security_invoker: the view reads host_media as whoever queries it, not
+-- as its owner. Today only service_role may select it and service_role
+-- bypasses RLS anyway, so this changes nothing -- but it means that if
+-- anybody ever grants this view to `authenticated`, host_media's RLS
+-- still applies to them instead of being quietly stepped over.
+CREATE OR REPLACE VIEW public.event_media_gallery
+WITH (security_invoker = true) AS
 SELECT
   h.id,
   h.host_kind,
@@ -95,4 +124,11 @@ COMMENT ON VIEW public.event_media_gallery IS
 REVOKE ALL ON public.event_media_gallery FROM PUBLIC;
 REVOKE ALL ON public.event_media_gallery FROM anon;
 REVOKE ALL ON public.event_media_gallery FROM authenticated;
+-- READ ONLY, and said twice on purpose. A view over a single table with
+-- no aggregate in it is UPDATABLE in Postgres, and Supabase's default
+-- privileges hand service_role every verb on anything new in `public` --
+-- so without this revoke an insert or a delete aimed at this view would
+-- quietly land in host_media. Nothing should ever write through a
+-- reading convenience.
+REVOKE ALL ON public.event_media_gallery FROM service_role;
 GRANT SELECT ON public.event_media_gallery TO service_role;
