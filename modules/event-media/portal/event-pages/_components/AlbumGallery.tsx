@@ -957,6 +957,20 @@ export default function AlbumGallery({
                 requestAnimationFrame(() => requestAnimationFrame(() => setSnap(false)))
               }, LEAVE_MS)
             }}
+            onTouchCancel={() => {
+              // The OS took the gesture -- a notification, a system swipe
+              // from the edge, a call. Without this the pinch state stays
+              // set until the next time every finger lifts, and in the
+              // meantime one-finger drags start and are then ignored, so
+              // the photograph simply stops responding.
+              pinch.current = null
+              panFrom.current = null
+              dragFrom.current = null
+              dragging.current = false
+              setDrag(0)
+              const { frame, content } = extents()
+              setZoom((z) => settle(z, frame, content))
+            }}
             ref={track}
             style={{
               transform: `translateX(${drag}px)`,
