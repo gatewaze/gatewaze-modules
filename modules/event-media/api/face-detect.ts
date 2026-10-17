@@ -145,9 +145,17 @@ export function createFaceDetect(deps: FaceDetectDeps) {
       let exhausted = false;
 
       for (let window = 0; window < WINDOW_MAX && items.length < limit; window += 1) {
+        // The scan row comes back WITH the photograph, through the
+        // foreign key, rather than being looked up separately.
+        //
+        // The separate lookup was an `in.(...)` of up to 500 uuids,
+        // which PostgREST puts in the URL -- about 18KB of it. The
+        // gateway refused the request and the whole scan died with
+        // "fetch failed" after eight seconds. A join the database
+        // already knows how to do costs one round trip and no url.
         let q = db
           .from('host_media')
-          .select('id, storage_path, width, height, created_at')
+          .select('id, storage_path, width, height, created_at, events_media_face_scans(model_id)')
           .eq('host_kind', 'event')
           .eq('host_id', eventId)
           .like('mime_type', 'image/%')
@@ -159,26 +167,25 @@ export function createFaceDetect(deps: FaceDetectDeps) {
         const { data: rows, error } = await q;
         if (error) throw new Error(error.message);
         const page = (rows ?? []) as Array<{
-          id: string; storage_path: string; width: number | null; height: number | null; created_at: string;
+          id: string; storage_path: string; width: number | null; height: number | null;
+          created_at: string;
+          events_media_face_scans: { model_id: string } | Array<{ model_id: string }> | null;
         }>;
         if (page.length === 0) { exhausted = true; break; }
         cursor = page[page.length - 1]!.created_at;
         if (page.length < WINDOW) exhausted = true;
 
-        let done = new Set<string>();
-        if (!force) {
-          const { data: scans, error: scanErr } = await db
-            .from('events_media_face_scans')
-            .select('media_id')
-            .eq('model_id', modelId)
-            .in('media_id', page.map((r) => r.id));
-          if (scanErr) throw new Error(scanErr.message);
-          done = new Set(((scans ?? []) as Array<{ media_id: string }>).map((s) => s.media_id));
-        }
-
         for (const r of page) {
           if (items.length >= limit) break;
-          if (done.has(r.id)) continue;
+          if (!force) {
+            // media_id is the scans table's primary key, so this is
+            // one row at most -- but take either shape, because which
+            // one PostgREST returns depends on how it reads the
+            // relationship and that is not worth depending on.
+            const e = r.events_media_face_scans;
+            const scan = Array.isArray(e) ? e[0] : e;
+            if (scan && scan.model_id === modelId) continue;
+          }
           items.push({
             id: r.id,
             // A small copy, not the original. See the header.

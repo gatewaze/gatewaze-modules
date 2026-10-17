@@ -20,7 +20,10 @@ function mockRes() {
  * already done. Only the chain face-detect actually uses.
  */
 function fakeDb(photos: Array<{ id: string; created_at: string }>, scanned: Set<string>) {
-  const calls = { windows: 0, scanLookups: 0, deleted: [] as any[], inserted: [] as any[], upserted: [] as any[] };
+  const calls = {
+    windows: 0, scanLookups: 0, longestInList: 0,
+    deleted: [] as any[], inserted: [] as any[], upserted: [] as any[],
+  };
   function builder(table: string) {
     const f: any[] = [];
     let lt: string | null = null;
@@ -33,7 +36,13 @@ function fakeDb(photos: Array<{ id: string; created_at: string }>, scanned: Set<
       order: () => b,
       limit: (n: number) => { lim = n; return b; },
       lt: (_c: string, v: string) => { lt = v; return b; },
-      in: (_c: string, vs: string[]) => { inSet = vs; return b; },
+      in: (_c: string, vs: string[]) => {
+        inSet = vs;
+        // What PostgREST would put in the URL. A 500-uuid list is ~18KB
+        // and the gateway refuses it -- that is the bug this pins.
+        calls.longestInList = Math.max(calls.longestInList, vs.length);
+        return b;
+      },
       not: () => b,
       maybeSingle: async () => {
         // Ownership check: the photo must be on this event.
@@ -50,7 +59,14 @@ function fakeDb(photos: Array<{ id: string; created_at: string }>, scanned: Set<
           calls.windows += 1;
           let rows = [...photos].sort((a, b2) => (a.created_at < b2.created_at ? 1 : -1));
           if (lt) rows = rows.filter((r) => r.created_at < lt!);
-          return resolve({ data: rows.slice(0, lim).map((r) => ({ ...r, storage_path: `${r.id}.jpg`, width: 4000, height: 2667 })), error: null });
+          return resolve({
+            data: rows.slice(0, lim).map((r) => ({
+              ...r, storage_path: `${r.id}.jpg`, width: 4000, height: 2667,
+              // Embedded through the foreign key, as PostgREST returns it.
+              events_media_face_scans: scanned.has(r.id) ? { model_id: 'm' } : null,
+            })),
+            error: null,
+          });
         }
         if (table === 'events_media_face_scans') {
           calls.scanLookups += 1;
@@ -137,14 +153,31 @@ describe('pending', () => {
     expect(db.calls.windows).toBeGreaterThan(1);
   });
 
-  it('bounds the scans lookup to the window, never the whole event', async () => {
+  // The scan died in production with "fetch failed" after eight
+  // seconds: the scanned-already lookup was an `in.(...)` of up to 500
+  // uuids, which PostgREST puts in the URL -- about 18KB of it -- and
+  // the gateway refused the request. The join the database already
+  // knows how to do costs one round trip and no url at all.
+  it('never builds a filter long enough for a gateway to refuse', async () => {
+    const photos = album(1200);
+    const db = fakeDb(photos, new Set(photos.slice(0, 900).map((p) => p.id)));
+    const res = mockRes();
+    await createFaceDetect(deps(db) as any).pending(req({ body: { limit: 50, model_id: 'm' } }), res);
+    expect(res.statusCode).toBe(200);
+    expect(res.body.items.length).toBe(50);
+    // No `in` list at all now: the scan arrives with the photograph.
+    expect(db.calls.longestInList).toBe(0);
+  });
+
+  it('asks the database for the scan alongside the photograph', async () => {
     const photos = album(1200);
     const db = fakeDb(photos, new Set());
     const res = mockRes();
     await createFaceDetect(deps(db) as any).pending(req({ body: { limit: 10, model_id: 'm' } }), res);
-    // Asked for a whole event's scans it would hit PostgREST's row cap
-    // and quietly re-offer photographs already done.
-    expect(db.calls.scanLookups).toBeGreaterThan(0);
+    // One trip per window, carrying both. A separate lookup would be
+    // either a huge url or a truncated answer.
+    expect(db.calls.scanLookups).toBe(0);
+    expect(db.calls.windows).toBeGreaterThan(0);
   });
 
   it('says when it has run out of album', async () => {
