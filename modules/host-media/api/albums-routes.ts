@@ -222,13 +222,38 @@ export function createAlbumsRoutes(deps: AlbumsRoutesDeps) {
     if (albumsErr) { sendError(res, 500, 'list_failed', albumsErr.message); return; }
     const albumIds = ((albums ?? []) as Array<{ id: string }>).map((a) => a.id);
     if (albumIds.length === 0) { res.status(200).json({ items: [] }); return; }
-    const { data, error } = await supabase
-      .from('host_media_album_items')
-      .select('id, album_id, media_id, sort_order')
-      .in('album_id', albumIds)
-      .order('sort_order', { ascending: true });
-    if (error) { sendError(res, 500, 'list_failed', error.message); return; }
-    res.status(200).json({ items: data ?? [] });
+
+    // PAGED, because PostgREST caps a response at db-max-rows (1000 here)
+    // and says so only in a Content-Range nobody was reading. This call
+    // returns every album membership of a host at once -- the admin paints
+    // each photo's album chips from it -- so a truncated answer does not
+    // look like an error, it looks like hundreds of photographs belonging
+    // to no album at all.
+    //
+    // A wedding photographer's delivery is what found this: 851
+    // photographs took one event to 1,570 memberships, the reply stopped
+    // at 1,000, and 437 of them showed as untagged in the Media tab
+    // (reported 2026-10-17).
+    //
+    // Ordered by id, not sort_order: paging needs a key that is unique
+    // and total, and sort_order is neither -- every one of those 851
+    // arrived as 0, so an offset page over them could repeat a row and
+    // drop another. The caller sorts by sort_order itself.
+    const PAGE = 1000;
+    const items: unknown[] = [];
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await supabase
+        .from('host_media_album_items')
+        .select('id, album_id, media_id, sort_order')
+        .in('album_id', albumIds)
+        .order('id', { ascending: true })
+        .range(from, from + PAGE - 1);
+      if (error) { sendError(res, 500, 'list_failed', error.message); return; }
+      const page = data ?? [];
+      items.push(...page);
+      if (page.length < PAGE) break;
+    }
+    res.status(200).json({ items });
   }
 
   // POST /:hostKind/:hostId/albums/:id/items — body { media_id } or

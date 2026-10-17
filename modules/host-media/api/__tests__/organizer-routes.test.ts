@@ -32,6 +32,11 @@ function fakeSupabase(tables: Record<string, Row[]>, rpcs: Record<string, (args:
     let patch: Row = {};
     const rows = () => (tables[table] ??= []);
     const matching = () => rows().filter((r) => filters.every((f) => f(r)));
+    // `range` is honoured, because the thing it models is a real server
+    // limit: PostgREST truncates at db-max-rows and reports it only in a
+    // Content-Range header. A fake that ignored the window could not tell
+    // a paged reader from one that silently loses everything past the cap.
+    let window: [number, number] | null = null;
     const run = () => {
       if (op === 'update') {
         const hit = matching();
@@ -43,7 +48,9 @@ function fakeSupabase(tables: Record<string, Row[]>, rpcs: Record<string, (args:
         tables[table] = rows().filter((r) => !hit.has(r));
         return { data: [...hit], error: null };
       }
-      return { data: matching(), error: null };
+      const all = matching();
+      const sliced = window ? all.slice(window[0], window[1] + 1) : all;
+      return { data: sliced, error: null };
     };
     const b = {
       select: () => b,
@@ -52,7 +59,7 @@ function fakeSupabase(tables: Record<string, Row[]>, rpcs: Record<string, (args:
       like: () => b,
       or: () => b,
       order: () => b,
-      range: () => b,
+      range: (from: number, to: number) => { window = [from, to]; return b; },
       limit: () => b,
       update: (p: Row) => { op = 'update'; patch = p; return b; },
       delete: () => { op = 'delete'; return b; },
@@ -284,6 +291,30 @@ describe('album routes host scoping', () => {
       res,
     );
     expect(res.body.items.map((i) => i.id)).toEqual(['i1']);
+  });
+
+  // A wedding photographer's 851 photographs took one event to 1,570
+  // album memberships. PostgREST stopped the reply at its db-max-rows of
+  // 1,000 and said so only in a Content-Range nobody read, so 437 of
+  // them showed in the Media tab belonging to no album at all
+  // (reported 2026-10-17). Every membership must come back, however many
+  // there are.
+  it('returns every membership, past the server row cap', async () => {
+    const t = tables();
+    // Every one with sort_order 0, as an upload leaves them: the paging
+    // key has to be unique and total, and sort_order is neither.
+    for (let n = 0; n < 2500; n += 1) {
+      t.host_media_album_items.push({
+        id: `bulk-${String(n).padStart(5, '0')}`, album_id: ALBUM_A, media_id: `m-${n}`, sort_order: 0,
+      });
+    }
+    const res = mockRes();
+    await createAlbumsRoutes({ supabase: fakeSupabase(t), logger }).listAlbumItems(
+      { params: { hostKind: 'event', hostId: EVENT_A } },
+      res,
+    );
+    expect(res.body.items).toHaveLength(2501);           // the 2500 plus i1
+    expect(new Set(res.body.items.map((i) => i.id)).size).toBe(2501);  // no repeats
   });
 
   it('rejects a cover image from another host', async () => {
