@@ -77,6 +77,13 @@ export function createEnhanceMedia(deps: EnhanceMediaDeps) {
     ops?: ReturnType<typeof opsFor>;
     /** Which of the two this is of: the photograph, or a booth selfie. */
     of?: 'photo' | 'selfie';
+    /**
+     * Where the faces are, as fractions of the frame, when this
+     * photograph has been scanned (migration 030). The browser uses
+     * them so a reframe keeps the heads; an unscanned photograph sends
+     * none and is cropped by the old rule.
+     */
+    faces?: Array<{ x: number; y: number; w: number; h: number; score: number }>;
   }> {
     const { data: row, error } = await db
       .from('host_media')
@@ -144,9 +151,30 @@ export function createEnhanceMedia(deps: EnhanceMediaDeps) {
         },
       },
     }).eq('id', mediaId);
+    // Boxes only, and only if somebody has run the scan. Cheap enough
+    // to fetch per photograph: the batch is three.
+    let faces: Array<{ x: number; y: number; w: number; h: number; score: number }> | undefined;
+    try {
+      const { data: rows } = await db
+        .from('events_media_faces')
+        .select('box_x, box_y, box_w, box_h, score')
+        .eq('media_id', mediaId)
+        .order('face_index', { ascending: true });
+      const found = (rows ?? []) as Array<{
+        box_x: number; box_y: number; box_w: number; box_h: number; score: number;
+      }>;
+      if (found.length > 0) {
+        faces = found.map((f) => ({
+          x: f.box_x, y: f.box_y, w: f.box_w, h: f.box_h, score: f.score,
+        }));
+      }
+    } catch {
+      // A reframe without faces is the behaviour this has always had.
+      // Losing a crop improvement is not worth losing the enhancement.
+    }
     return {
       id: mediaId, status: 'needs', note: verdict.note,
-      source: publicUrl(path), ops, of: selfie ? 'selfie' : 'photo',
+      source: publicUrl(path), ops, of: selfie ? 'selfie' : 'photo', faces,
     };
   }
 

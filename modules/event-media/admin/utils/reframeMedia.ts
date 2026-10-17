@@ -17,6 +17,7 @@
  * only kind worth having on somebody's wedding photographs.
  */
 import { CLASSIC, classicFor, cropTo, expandTo, worthReframing, type Box } from '../../lib/framing';
+import { cropToFaces, type FaceBox } from '../../lib/faces';
 
 /** What an album asked for. */
 export type FrameMode = 'as-shot' | 'classic' | 'expand';
@@ -54,9 +55,19 @@ export function shapeFor(w: number, h: number): number | null {
   return worthReframing(w, h, want) ? want : null;
 }
 
-/** The photograph cropped to that shape. Nothing invented. */
-export function cropped(frame: Frame, ratio: number): Frame {
-  const box: Box = cropTo(frame.w, frame.h, ratio);
+/**
+ * The photograph cropped to that shape. Nothing invented.
+ *
+ * Where the faces are known, the crop is slid to keep them rather than
+ * placed by the old rule, which took a fixed 38% of the loss off the top
+ * because it had no idea what was in the picture. With no faces -- an
+ * empty room, a cake, or simply a photograph nobody has scanned -- the
+ * answer is identical to what it has always been.
+ */
+export function cropped(frame: Frame, ratio: number, faces: readonly FaceBox[] = []): Frame {
+  const box: Box = faces.length > 0
+    ? cropToFaces(frame.w, frame.h, ratio, faces)
+    : cropTo(frame.w, frame.h, ratio);
   if (box.w === frame.w && box.h === frame.h) return frame;
   const src = put(frame);
   const out = canvasOf(box.w, box.h);
