@@ -4,6 +4,7 @@ import { describe, it, expect } from 'vitest';
 import {
   classifyMime,
   cleanGuestName,
+  cleanTakenAt,
   generateShortCode,
   paramAsShortCode,
   sanitiseGuestFilename,
@@ -102,5 +103,43 @@ describe('validateMintFile', () => {
     expect(validateMintFile(null, LINK).ok).toBe(false);
     expect(validateMintFile('a.jpg', LINK).ok).toBe(false);
     expect(validateMintFile({}, LINK).ok).toBe(false);
+  });
+});
+
+describe('cleanTakenAt', () => {
+  /** A wall clock a few hours ago, as EXIF would write it. */
+  const recent = (): string => {
+    const d = new Date(Date.now() - 3 * 3600_000);
+    return d.toISOString().slice(0, 19);
+  };
+
+  it('keeps a plausible capture time', () => {
+    const t = recent();
+    expect(cleanTakenAt(t)).toBe(t);
+  });
+
+  it('keeps only the part it checked, never trailing characters', () => {
+    const t = recent();
+    // The pattern is anchored at the start and matches nineteen
+    // characters; everything after it was never examined and must not
+    // be stored alongside a date that passed.
+    expect(cleanTakenAt(`${t}<img src=x>`)).toBe(t);
+    expect(cleanTakenAt(`${t}' OR 1=1 --`)).toBe(t);
+    expect(cleanTakenAt(`${t}\u0000junk`)).toBe(t);
+  });
+
+  it('refuses anything that is not a capture time', () => {
+    expect(cleanTakenAt(null)).toBeNull();
+    expect(cleanTakenAt(123)).toBeNull();
+    expect(cleanTakenAt('')).toBeNull();
+    expect(cleanTakenAt('not a date')).toBeNull();
+    // Leading junk: the anchor must hold.
+    expect(cleanTakenAt(`x${recent()}`)).toBeNull();
+  });
+
+  it('refuses a time outside the window it trusts', () => {
+    expect(cleanTakenAt('1980-01-01T12:00:00')).toBeNull();
+    const far = new Date(Date.now() + 90 * 24 * 3600_000).toISOString().slice(0, 19);
+    expect(cleanTakenAt(far)).toBeNull();
   });
 });
