@@ -1247,13 +1247,13 @@ describe('one phone per name', () => {
 describe('background plates are checked for people', () => {
   const IMG = { ok: true, image: new Uint8Array([9]), contentType: 'image/jpeg' };
   const settle = () => new Promise((r) => setTimeout(r, 30));
-  const complete = async () => {
+  const complete = async (ticket = {}) => {
     const { deps, supabase } = makeDeps({ link: ACTIVE_LINK, event: EVENT_ROW, existingMedia: null });
     const updates = [];
     const realFrom = supabase.from;
     supabase.from = (t) => { const b = realFrom(t); const u = b.update; b.update = (f) => { if (f.variants) updates.push(f.variants); return u(f); }; return b; };
     stubHead({ ok: true, headers: { get: (k) => ({ 'content-length': '1000', 'content-type': 'image/jpeg' })[k] ?? null } });
-    await createGuestRoutes(deps).completeUploads(req({ body: { tickets: [ticketFor()] } }), mockRes());
+    await createGuestRoutes(deps).completeUploads(req({ body: { tickets: [ticketFor(ticket)] } }), mockRes());
     await settle();
     return { updates, supabase };
   };
@@ -1262,7 +1262,10 @@ describe('background plates are checked for people', () => {
   beforeEach(() => {
     process.env.BOOTH_PROVIDER = 'fal';
     process.env.FAL_API_KEY = 'test-placeholder';
-    provider.runPlate.mockReset();
+    const off = () => Promise.resolve({ ok: false, error: 'not_configured' });
+    provider.runPlate.mockReset().mockImplementation(off);
+    provider.runDepth.mockReset().mockImplementation(off);
+    provider.runCutout.mockReset().mockImplementation(off);
     provider.plateHasPeople.mockReset();
   });
   afterEach(() => {
@@ -1301,6 +1304,31 @@ describe('background plates are checked for people', () => {
     const { updates } = await complete();
     expect(provider.runPlate).toHaveBeenCalledTimes(1);
     expect(updates.at(-1).plate).toMatch(/variants\/plate\.jpg$/);
+  });
+
+  // Layer generation holds whole decoded images in a pod with 512MB, and
+  // a photographer delivers thousands in one sitting -- which OOMKilled
+  // the api twice and took the site down (2026-10-17). Their photographs
+  // are never shown with the parallax effect these layers are for, so
+  // they must not be generated at all.
+  it('generates no layers at all for a photographer\'s delivery', async () => {
+    provider.runPlate.mockResolvedValue(IMG);
+    provider.plateHasPeople.mockResolvedValue(false);
+    provider.runDepth.mockResolvedValue(IMG);
+    provider.runCutout.mockResolvedValue(IMG);
+    const { updates } = await complete({ photographer: true });
+    expect(provider.runPlate).not.toHaveBeenCalled();
+    expect(provider.runDepth).not.toHaveBeenCalled();
+    expect(provider.runCutout).not.toHaveBeenCalled();
+    expect(updates).toHaveLength(0);
+  });
+
+  it('still generates them for a guest\'s upload', async () => {
+    provider.runPlate.mockResolvedValue(IMG);
+    provider.plateHasPeople.mockResolvedValue(false);
+    const { updates } = await complete();
+    expect(provider.runPlate).toHaveBeenCalledTimes(1);
+    expect(updates.length).toBeGreaterThan(0);
   });
 });
 
