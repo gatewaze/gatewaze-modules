@@ -17,8 +17,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { faceOf as pickFace, fullFaceOf } from './_lib/gallery-face'
-import { saveNameOf } from './_lib/save-name'
-import { dragOffset, swipeVerdict, TAP_SLOP_PX } from './_lib/swipe'
+import { MAX_SAVE_BYTES, fullSizeUrl, isHttpUrl, saveNameOf, saveTypeOf } from './_lib/save-name'
+import { dragOffset, GUTTER_PX, settleOffset, swipeVerdict, TAP_SLOP_PX } from './_lib/swipe'
 import { albumAddress, pageBaseFrom } from './_lib/album-address'
 
 const API_BASE = ''
@@ -65,6 +65,15 @@ function DownloadIcon({ className }: { className?: string }) {
   )
 }
 
+function CopyIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} className={className} aria-hidden="true">
+      <rect x="9" y="9" width="11" height="11" rx="2" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="M15 5.5A1.5 1.5 0 0 0 13.5 4h-8A1.5 1.5 0 0 0 4 5.5v8A1.5 1.5 0 0 0 5.5 15" />
+    </svg>
+  )
+}
+
 function SpinnerIcon({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} className={className} aria-hidden="true">
@@ -82,6 +91,35 @@ function TickIcon({ className }: { className?: string }) {
 }
 
 const PAGE = 24
+
+/**
+ * The longest edge of a photograph put on the clipboard.
+ *
+ * It has to be redrawn as a PNG to go there at all, and a full-size PNG
+ * of a twelve-megapixel photograph is tens of megabytes for a paste into
+ * a message. Saving the photograph is the full-size path; this is not.
+ */
+const COPY_MAX_EDGE = 2560
+
+/** How far ahead of the photograph being looked at to keep loading. */
+const LIGHTBOX_LOOKAHEAD = 8
+
+/**
+ * Whose name goes under a photograph, if anyone's.
+ *
+ * A guest's name is worth showing: it says who took it, and there are
+ * many of them. A photographer's is not. Their whole album is theirs, so
+ * the same credit under all 851 photographs is noise over the pictures
+ * rather than information -- and it is on the album itself (asked
+ * 2026-10-17).
+ *
+ * Written as one expression on purpose: an early `return` up here reads
+ * to the portal's rules-of-hooks gate as a component bailing out before
+ * its hooks, and every hook in the file below it then looks misplaced.
+ */
+const creditFor = (item: { guest_name: string | null; album?: string | null }): string | null => (
+  item.album === 'photographer' ? null : (item.guest_name || null)
+)
 /** How long a photograph takes to leave once it has been let go. */
 const LEAVE_MS = 200
 
@@ -169,6 +207,10 @@ export default function AlbumGallery({
    */
   const [leaving, setLeaving] = useState<0 | -1 | 1>(0)
   const dragFrom = useRef<{ x: number; y: number; at: number } | null>(null)
+  /** The roll itself, measured to know how far the neighbour sits. */
+  const track = useRef<HTMLDivElement | null>(null)
+  /** True for the one frame the photographs are swapped on. */
+  const [snap, setSnap] = useState(false)
   const dragging = useRef(false)
   // A photograph a link named, shown before the page it sits on has
   // loaded -- page forty of The day is still one link.
@@ -176,6 +218,16 @@ export default function AlbumGallery({
   const [copied, setCopied] = useState(false)
   /** 'off' | 'saving' | 'saved' — what the save button is showing. */
   const [saveState, setSaveState] = useState<'off' | 'saving' | 'saved'>('off')
+  /** The same, for the copy-to-clipboard button. */
+  const [copyState, setCopyState] = useState<'off' | 'copying' | 'copied'>('off')
+  /**
+   * The two hosts an object can be fetched from, as the api reports
+   * them: the CDN that browsing goes through, and the bucket behind it
+   * that a save goes to instead.
+   */
+  const [origins, setOrigins] = useState<{ cdn: string | null; object: string | null }>(
+    { cdn: null, object: null },
+  )
   // Whether this device can hand a file to the OS share sheet, which on a
   // phone is how a photograph reaches the camera roll; a download there
   // lands in Files where nobody looks for it. Probed once on mount and
@@ -208,6 +260,11 @@ export default function AlbumGallery({
       total: number
       next_offset: number | null
       focus?: GalleryItem | null
+      /** Which end the page came back in, as the api decided it. */
+      sort?: 'newest' | 'oldest'
+      /** The CDN in front of the bucket, and the bucket itself. */
+      cdn_origin?: string | null
+      object_origin?: string | null
     }>
   }, [eventIdentifier])
 
@@ -223,6 +280,7 @@ export default function AlbumGallery({
         setItems(data.items ?? [])
         setTotal(data.total ?? 0)
         setNextOffset(data.next_offset ?? null)
+        setOrigins({ cdn: data.cdn_origin ?? null, object: data.object_origin ?? null })
         if (data.focus) {
           // If the link's photograph is on this page, it becomes the one
           // being looked at rather than a thing shown over the top: then
@@ -259,6 +317,22 @@ export default function AlbumGallery({
       setNextOffset(at)
     }
   }, [load, chosen, nextOffset])
+
+  /**
+   * More photographs while the lightbox is open.
+   *
+   * Paging is driven by a sentinel at the foot of the grid, and the
+   * lightbox is a fixed overlay on top of it -- so nothing scrolls, the
+   * sentinel never intersects, and the album stopped dead at whatever
+   * had been loaded when it was opened. The next arrow disappeared and
+   * the only way on was to close it, scroll, and open it again
+   * (reported 2026-10-17). In here the photograph being looked at is the
+   * thing that moves, so it is what asks for the next page.
+   */
+  useEffect(() => {
+    if (lightbox === null || nextOffset === null) return
+    if (lightbox >= items.length - LIGHTBOX_LOOKAHEAD) void more()
+  }, [lightbox, items.length, nextOffset, more])
 
   // More photographs as the visitor reaches the end of the ones they
   // have, rather than a button to press.
@@ -375,16 +449,41 @@ export default function AlbumGallery({
    */
   const savePhoto = useCallback(async (photo: GalleryItem | null) => {
     if (!photo) return
-    const url = fullFaceOf(
+    const shown = fullFaceOf(
       { ...photo, selfieOriginal: photo.selfie_original ?? null },
       { xray: openXray ?? xray, enhanced: openEnhanced ?? showEnhanced },
     )
+    // Off the origin rather than the CDN: Bunny Optimizer recompresses
+    // what it serves -- 3.0MB in the bucket came back as 1.4MB at the
+    // same pixel dimensions -- and a photograph somebody is keeping or
+    // printing should be the one that was delivered.
+    const url = fullSizeUrl(shown, origins.cdn, origins.object)
+    // Only ever http(s). The url is built by our own api out of operator
+    // config and a server-chosen storage path, so this cannot be reached
+    // today -- but `window.open` below is one tampered response away
+    // from being handed a `javascript:` url, and that is too cheap a
+    // guard to leave out.
+    if (!isHttpUrl(url)) return
     setSaveState('saving')
     try {
       const resp = await fetch(url)
       if (!resp.ok) throw new Error(`fetch ${resp.status}`)
+      // Checked BEFORE the body is read, because reading it is the thing
+      // that costs the memory: `blob()` holds the whole object at once
+      // and an upload link allows a two-gigabyte video by default. Over
+      // the cap the browser can have it -- it streams, we do not.
+      const size = Number(resp.headers.get('content-length') ?? '0')
+      if (Number.isFinite(size) && size > MAX_SAVE_BYTES) {
+        await resp.body?.cancel()
+        throw new Error('too big to hold')
+      }
       const blob = await resp.blob()
-      const file = new File([blob], saveNameOf(url, photo), { type: blob.type || 'image/jpeg' })
+      // The type comes off a CDN header, so it is allowlisted rather than
+      // trusted. Null leaves the File untyped, which is inert; labelling
+      // it `image/jpeg` regardless would invite whatever opens it to act
+      // on a label we had not checked.
+      const type = saveTypeOf(blob.type)
+      const file = new File([blob], saveNameOf(url, { ...photo, type }), type ? { type } : undefined)
 
       if (canShareFiles && navigator.canShare?.({ files: [file] })) {
         try {
@@ -413,11 +512,83 @@ export default function AlbumGallery({
       window.setTimeout(() => setSaveState('off'), 2000)
     } catch {
       // Opening it is still better than nothing: the viewer can save it
-      // from there with the browser's own menu.
+      // from there with the browser's own menu, and for the one case
+      // that lands here on purpose -- an object too big to buffer -- the
+      // browser streams what we would have choked on.
       setSaveState('off')
-      window.open(url, '_blank', 'noopener,noreferrer')
+      if (isHttpUrl(url)) window.open(url, '_blank', 'noopener,noreferrer')
     }
-  }, [canShareFiles, openXray, xray, openEnhanced, showEnhanced])
+  }, [canShareFiles, origins, openXray, xray, openEnhanced, showEnhanced])
+
+  /**
+   * Put the photograph on the clipboard, to paste into a message.
+   *
+   * PNG, whatever the photograph is stored as. The async clipboard only
+   * agrees on one image type across browsers -- Chrome and Safari both
+   * refuse an `image/jpeg` ClipboardItem -- so a JPEG has to be redrawn
+   * through a canvas on the way. That costs a decode, which is why the
+   * longest edge is capped: a paste into a messaging app does not need
+   * twelve megapixels, and a full-size PNG of one is enormous.
+   *
+   * The blob is handed over as a PROMISE. Safari ends the user gesture
+   * when the handler awaits, and a clipboard write outside a gesture is
+   * refused; passing the promise lets it keep the gesture while the
+   * fetch runs. Videos cannot go on a clipboard at all, so they do not
+   * offer the button.
+   */
+  const copyImage = useCallback(async (photo: GalleryItem | null) => {
+    if (!photo || photo.kind === 'video') return
+    const url = fullFaceOf(
+      { ...photo, selfieOriginal: photo.selfie_original ?? null },
+      { xray: openXray ?? xray, enhanced: openEnhanced ?? showEnhanced },
+    )
+    if (!isHttpUrl(url)) return
+
+    const asPng = async (): Promise<Blob> => {
+      const resp = await fetch(url)
+      if (!resp.ok) throw new Error(`fetch ${resp.status}`)
+      const size = Number(resp.headers.get('content-length') ?? '0')
+      if (Number.isFinite(size) && size > MAX_SAVE_BYTES) {
+        await resp.body?.cancel()
+        throw new Error('too big to hold')
+      }
+      const blob = await resp.blob()
+      if (saveTypeOf(blob.type) === 'image/png') return blob
+      const bitmap = await createImageBitmap(blob)
+      try {
+        const scale = Math.min(1, COPY_MAX_EDGE / Math.max(bitmap.width, bitmap.height))
+        const w = Math.max(1, Math.round(bitmap.width * scale))
+        const h = Math.max(1, Math.round(bitmap.height * scale))
+        const canvas = document.createElement('canvas')
+        canvas.width = w
+        canvas.height = h
+        const ctx = canvas.getContext('2d')
+        if (!ctx) throw new Error('no canvas')
+        ctx.drawImage(bitmap, 0, 0, w, h)
+        const png = await new Promise<Blob | null>((r) => canvas.toBlob(r, 'image/png'))
+        if (!png) throw new Error('could not encode')
+        return png
+      } finally {
+        bitmap.close()
+      }
+    }
+
+    setCopyState('copying')
+    try {
+      if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
+        throw new Error('no image clipboard here')
+      }
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': asPng() })])
+      setCopyState('copied')
+      window.setTimeout(() => setCopyState('off'), 2000)
+    } catch {
+      // A browser with no image clipboard, or a refused write. Copying
+      // the link instead is something every browser can do, and it is
+      // what somebody pasting into a message can use.
+      setCopyState('off')
+      void copyLink(chosen, photo)
+    }
+  }, [chosen, copyLink, openXray, xray, openEnhanced, showEnhanced])
 
   const closeLightbox = useCallback(() => {
     setFocus(null)
@@ -569,9 +740,9 @@ export default function AlbumGallery({
                 className="w-full h-full object-cover"
               />
             )}
-            {item.guest_name && (
+            {creditFor(item) && (
               <span className="absolute bottom-0 left-0 right-0 truncate bg-gradient-to-t from-black/70 to-transparent px-1.5 py-1 text-left text-[11px] text-white">
-                {item.guest_name}
+                {creditFor(item)}
               </span>
             )}
           </button>
@@ -625,26 +796,47 @@ export default function AlbumGallery({
               const goes = (verdict === 'next' && lightbox !== null && lightbox < items.length - 1)
                 || (verdict === 'previous' && lightbox !== null && lightbox > 0)
               if (!goes || lightbox === null) { setDrag(0); return }
-              // Off the way the finger went, then the next one arrives in
-              // its place. Changing the picture while it springs back is
-              // what made this feel like a bounce rather than a turn.
-              const way = verdict === 'next' ? -1 : 1
+              // The roll carries on the way the finger went, far enough to
+              // put the neighbour exactly where this photograph is -- one
+              // width plus the gutter, measured off the track rather than
+              // guessed from the window.
+              //
+              // Then the swap happens with the transition OFF. By that
+              // point the neighbour is already sitting in the middle of
+              // the screen, so making it the current photograph and
+              // putting the roll back to zero is the same picture in the
+              // same place: nothing moves. Doing that swap with the
+              // transition on is what made this look like a bounce -- the
+              // roll animated back to the middle, and the photograph
+              // appeared to come in from the side it had just left.
+              const way: -1 | 1 = verdict === 'next' ? -1 : 1
+              const width = track.current?.getBoundingClientRect().width ?? window.innerWidth
               setLeaving(way)
-              setDrag(way * window.innerWidth)
+              setDrag(settleOffset(way, width))
               window.setTimeout(() => {
+                setSnap(true)
                 openAt(verdict === 'next' ? lightbox + 1 : lightbox - 1)
                 setLeaving(0)
+                // Two frames: one for the browser to paint the swap with
+                // no transition, then the transition comes back for the
+                // next drag. One frame is not always enough.
+                requestAnimationFrame(() => requestAnimationFrame(() => setSnap(false)))
               }, LEAVE_MS)
             }}
+            ref={track}
             style={{
               transform: `translateX(${drag}px)`,
               // While a finger is down the picture follows it exactly. On
               // release it either settles back or carries on out, and
-              // both of those are animated; only the drag itself is not.
-              transition: dragFrom.current && drag !== 0
+              // both of those are animated; the drag itself is not, and
+              // neither is the frame the photographs are swapped on.
+              transition: snap || (dragFrom.current && drag !== 0)
                 ? 'none'
                 : `transform ${leaving ? LEAVE_MS : 220}ms ease-out`,
-              opacity: leaving ? 0.15 : 1,
+              // Not faded on the way out. The photograph coming in rides
+              // on the same roll, so dimming the one leaving dims the one
+              // arriving with it, which is what made a turn read as a
+              // flicker rather than a movement.
               touchAction: 'pan-y',
             }}
           >
@@ -668,7 +860,7 @@ export default function AlbumGallery({
                 alt=""
                 aria-hidden="true"
                 className="pointer-events-none absolute inset-y-0 my-auto max-h-[85vh] max-w-full object-contain"
-                style={{ right: '100%', marginRight: 24 }}
+                style={{ right: '100%', marginRight: GUTTER_PX }}
               />
             )}
             {drag !== 0 && lightbox !== null && items[lightbox + 1] && (
@@ -678,7 +870,7 @@ export default function AlbumGallery({
                 alt=""
                 aria-hidden="true"
                 className="pointer-events-none absolute inset-y-0 my-auto max-h-[85vh] max-w-full object-contain"
-                style={{ left: '100%', marginLeft: 24 }}
+                style={{ left: '100%', marginLeft: GUTTER_PX }}
               />
             )}
             {open.selfie && (
@@ -700,7 +892,7 @@ export default function AlbumGallery({
                 />
               </button>
             )}
-            {open.guest_name && <p className="mt-2 text-center text-sm text-white/80">by {open.guest_name}</p>}
+            {creditFor(open) && <p className="mt-2 text-center text-sm text-white/80">by {creditFor(open)}</p>}
             <div className="mt-2 flex items-center justify-end gap-2">
               {open.original && (
                 <button
@@ -726,6 +918,28 @@ export default function AlbumGallery({
               >
                 {copied ? <TickIcon className="h-4 w-4" /> : <LinkIcon className="h-4 w-4" />}
               </button>
+              {open.kind !== 'video' && (
+                <button
+                  onClick={() => void copyImage(open)}
+                  disabled={copyState === 'copying'}
+                  title={
+                    copyState === 'copying' ? 'Copying…'
+                      : copyState === 'copied' ? 'Copied — paste it anywhere'
+                        : 'Copy this photo'
+                  }
+                  aria-label={
+                    copyState === 'copying' ? 'Copying the photo'
+                      : copyState === 'copied' ? 'Photo copied'
+                        : 'Copy this photo'
+                  }
+                  style={{ background: 'rgba(255,255,255,0.16)', color: '#ffffff' }}
+                  className="rounded-full p-2 disabled:opacity-60"
+                >
+                  {copyState === 'copying' ? <SpinnerIcon className="h-4 w-4 animate-spin" />
+                    : copyState === 'copied' ? <TickIcon className="h-4 w-4" />
+                      : <CopyIcon className="h-4 w-4" />}
+                </button>
+              )}
               <button
                 onClick={() => void savePhoto(open)}
                 disabled={saveState === 'saving'}
@@ -762,11 +976,22 @@ export default function AlbumGallery({
               ‹
             </button>
           )}
-          {lightbox !== null && lightbox < items.length - 1 && (
+          {/* Still offered while there are pages left to fetch. Hiding it
+              at the end of the LOADED photographs is what made the album
+              look finished when it was not: there was no way on without
+              closing the lightbox and scrolling the grid. */}
+          {lightbox !== null && (lightbox < items.length - 1 || nextOffset !== null) && (
             <button
               className="absolute right-3 top-1/2 flex h-12 w-12 -translate-y-1/2 items-center justify-center rounded-full text-2xl text-white sm:right-6 sm:h-14 sm:w-14"
               style={{ background: 'rgba(0,0,0,0.55)' }}
-              onClick={(e) => { e.stopPropagation(); openAt(lightbox + 1) }}
+              onClick={(e) => {
+                e.stopPropagation()
+                // At the end of what is loaded, fetch rather than refuse.
+                // The lookahead above normally gets there first, so this
+                // is the case where somebody out-ran it.
+                if (lightbox + 1 < items.length) openAt(lightbox + 1)
+                else void more()
+              }}
               aria-label="Next photo"
             >
               ›

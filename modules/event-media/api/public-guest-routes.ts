@@ -912,22 +912,25 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
    */
   async function albumSettings(eventId: string, slugOf: ReadonlyMap<string, string>): Promise<{
     hidden: Set<string>; enhanced: Set<string>; xray: Set<string>; relit: Set<string>;
+    /** Albums that read forwards by default (migration 029). */
+    oldestFirst: Set<string>;
   }> {
     const hidden = new Set<string>();
     const enhanced = new Set<string>();
     const xray = new Set<string>();
     // Albums asking for the model's copy rather than the arithmetic one.
     const relit = new Set<string>();
+    const oldestFirst = new Set<string>();
     try {
       const { data: rows, error } = await supabase
         .from('event_media_album_settings')
-        .select('album_id, show_on_portal, enhance, xray, enhance_source')
+        .select('album_id, show_on_portal, enhance, xray, enhance_source, sort')
         .eq('event_id', eventId);
       if (error) throw new Error(error.message);
-      if (!rows || rows.length === 0) return { hidden, enhanced, xray, relit };
+      if (!rows || rows.length === 0) return { hidden, enhanced, xray, relit, oldestFirst };
       for (const r of rows as Array<{
         album_id: string; show_on_portal: boolean; enhance?: boolean; xray?: boolean;
-        enhance_source?: string | null;
+        enhance_source?: string | null; sort?: string | null;
       }>) {
         const slug = slugOf.get(r.album_id);
         if (!slug) continue;
@@ -935,13 +938,14 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         if (r.enhance === true) enhanced.add(slug);
         if (r.xray === true) xray.add(slug);
         if (r.enhance_source === 'ai') relit.add(slug);
+        if (r.sort === 'oldest') oldestFirst.add(slug);
       }
     } catch (err) {
       logger.warn('album settings unavailable; showing every album as it is', {
         eventId, error: err instanceof Error ? err.message : String(err),
       });
     }
-    return { hidden, enhanced, xray, relit };
+    return { hidden, enhanced, xray, relit, oldestFirst };
   }
 
   /**
@@ -1222,7 +1226,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     // Albums an organiser has taken off the portal (migration 016). Their
     // photographs go with them, or hiding an album would hide only its
     // heading.
-    const { hidden, enhanced, xray, relit } = await albumSettings(event.id, slugOf);
+    const { hidden, enhanced, xray, relit, oldestFirst } = await albumSettings(event.id, slugOf);
     // Registered albums that are not projector views: the ingested ones,
     // in their own order, after the views (which keep the order the day
     // ran). The wedding's view albums never open the gate on their own,
@@ -1263,6 +1267,12 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     const askedFor = typeof req.query['album'] === 'string' ? req.query['album'] : '';
     const focusId = typeof req.query['photo'] === 'string' && UUID_RE.test(req.query['photo'])
       ? req.query['photo'] : null;
+    // Which end to start at. The viewer's choice if they made one, and
+    // one of two words only -- it decides a sort direction, so it is
+    // matched against a pair rather than passed anywhere near the query.
+    const askedSort = req.query['sort'] === 'oldest' ? 'oldest'
+      : req.query['sort'] === 'newest' ? 'newest'
+        : null;
 
     // The views first, in the order the day ran, then the registered
     // albums in theirs -- each less whatever the organiser has hidden.
@@ -1297,6 +1307,17 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     // album's slug or null.
     const wanted = offered.find((v) => slugFor(v) === askedFor || v === askedFor) ?? null;
     if (askedFor && !wanted) { sendError(res, 404, 'album_not_found', 'unknown album'); return; }
+
+    // Newest first unless this album says otherwise, and the viewer
+    // overrides either way. Looking at one album takes that album's
+    // default; looking at everything at once has no one album to ask, so
+    // it stays newest first -- which is what a feed of what has just
+    // arrived should be.
+    const albumDefault = wanted && oldestFirst.has(slugFor(wanted)) ? 'oldest'
+      : wanted && oldestFirst.has(wanted) ? 'oldest'
+        : 'newest';
+    const sort = askedSort ?? albumDefault;
+    const ascending = sort === 'oldest';
 
     // Which album a photograph is in is read from its own tag rather
     // than from album membership. Membership is what the projector
@@ -1339,11 +1360,17 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     const counts = new Map<string, number>();
     const [pageResult] = await Promise.all([
       inAlbum(base('id, storage_path, mime_type, bytes, width, height, variants, metadata, created_at') as never)
-        // Newest first, by when it was taken. A photographer delivers
-        // weeks later in one sitting, so ordering by arrival put 851
-        // photographs in whatever order the browser finished them in.
-        .order('captured_at', { ascending: false })
-        .order('id', { ascending: false })
+        // By when it was taken. A photographer delivers weeks later in
+        // one sitting, so ordering by arrival put 851 photographs in
+        // whatever order the browser happened to finish them in.
+        //
+        // Which end it starts at is the album's to say and the viewer's
+        // to override (migration 029): a delivered set reads forwards,
+        // where a feed of what has just arrived reads backwards. The id
+        // tiebreak follows the same direction, or a page boundary could
+        // repeat a photograph that shares a second with another.
+        .order('captured_at', { ascending })
+        .order('id', { ascending })
         .range(offset, offset + limit - 1),
       // One count per album, each a head request that returns no rows.
       ...offered.map(async (v) => {
@@ -1453,6 +1480,18 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       total,
       items: page.map(forFeed),
       focus,
+      // Which end this page started at, so the portal can show the
+      // switch the right way round without knowing the album's default.
+      sort,
+      // Where an object lives, with and without the CDN in front of it.
+      // Browsing goes through the zone, because that is what it is for;
+      // SAVING goes to the origin, because Bunny Optimizer recompresses
+      // what it serves and a photograph somebody keeps should not be the
+      // lossy one (asked 2026-10-17). The portal swaps one prefix for
+      // the other -- both are public hosts serving public objects, so
+      // neither is a secret.
+      cdn_origin: cdn.zone,
+      object_origin: publicSupabaseUrl,
       next_offset: offset + page.length < total ? offset + page.length : null,
     });
   }
