@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { MAX_SAVE_BYTES, fullSizeUrl, isHttpUrl, saveNameOf, saveTypeOf } from '../event-pages/_components/_lib/save-name';
+import { MAX_SAVE_BYTES, fullSizeUrl, isHttpUrl, prefersShareSheet, saveNameOf, saveTypeOf } from '../event-pages/_components/_lib/save-name';
 
 const CDN = 'https://gatewaze.b-cdn.net/storage/v1/object/public/media/event/abc/def';
 
@@ -173,5 +173,23 @@ describe('fullSizeUrl', () => {
     // And will not be talked into a non-http destination either.
     expect(fullSizeUrl(ZONE + REL, ZONE, 'javascript:alert(1)')).toBe(ZONE + REL);
     expect(fullSizeUrl(ZONE + REL, ZONE, '//evil.example')).toBe(ZONE + REL);
+  });
+});
+
+describe('prefersShareSheet', () => {
+  // macOS Safari answers true to canShare({files}) and then opens the
+  // Mac share sheet, so a download button produced a menu of apps
+  // instead of a file in Downloads (reported 2026-10-17). The pointer is
+  // what separates a phone from a desktop.
+  it('is for a phone, not a desktop that happens to support sharing', () => {
+    expect(prefersShareSheet(true, true)).toBe(true);    // phone
+    expect(prefersShareSheet(true, false)).toBe(false);  // macOS Safari
+    expect(prefersShareSheet(false, true)).toBe(false);  // touch, no file sharing
+    expect(prefersShareSheet(false, false)).toBe(false); // desktop Chrome
+  });
+
+  it('treats a missing answer as no', () => {
+    expect(prefersShareSheet(undefined as unknown as boolean, true)).toBe(false);
+    expect(prefersShareSheet(true, undefined as unknown as boolean)).toBe(false);
   });
 });
