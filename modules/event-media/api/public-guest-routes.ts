@@ -1453,7 +1453,16 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     const asPhotographer = link.role === 'photographer';
 
 
-    const who = await identify(link.event_id, body['member_id'], clientId);
+    // A photographer is not on the guest list and is not asked to be.
+    // Their link already says who they are, and `identify` refuses any
+    // upload on an event that HAS a guest list unless the caller names
+    // somebody on it -- which is every wedding worth photographing. Paul
+    // Liddement hit exactly that on 2026-10-17: the page loaded, credited
+    // him correctly, and then answered every file with "please choose
+    // your name from the guest list".
+    const who = asPhotographer
+      ? ({ ok: true, guest: null } as const)
+      : await identify(link.event_id, body['member_id'], clientId);
     if (!who.ok) {
       sendError(res, who.status, who.code, who.message);
       return;
