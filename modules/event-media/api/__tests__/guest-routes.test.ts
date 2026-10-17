@@ -59,6 +59,16 @@ function mockRes() {
   return res;
 }
 
+/**
+ * The photographs, whichever name they are asked for by.
+ *
+ * `event_media_gallery` (migration 028) is a view over `host_media` that
+ * adds captured_at and nothing else, so for the purposes of these stubs
+ * the two are one source of rows.
+ */
+const MEDIA_TABLES = ['host_media', 'event_media_gallery'];
+const isMedia = (table) => MEDIA_TABLES.includes(table);
+
 /** Chainable, thenable per-table query builder. Terminal behaviour:
  *  await builder → { data: listData }, .maybeSingle() → singleData. */
 function makeSupabase(config) {
@@ -122,7 +132,7 @@ function makeSupabase(config) {
       },
       or: () => b,
       contains: () => b,
-      order: () => b,
+      order: (column, opts) => { (state.ordered ??= []).push({ table, column, ...opts }); return b; },
       limit: () => b,
       update: (fields) => {
         (state.updated ??= []).push({ table, fields });
@@ -137,7 +147,7 @@ function makeSupabase(config) {
       maybeSingle: () => {
         if (table === 'events_media_upload_links') return Promise.resolve({ data: config.link ?? null, error: null });
         if (table === 'events') return Promise.resolve({ data: config.event ?? null, error: null });
-        if (table === 'host_media') {
+        if (isMedia(table)) {
           // A lookup by id answers from the listed rows where it can --
           // the gallery's "open on this photograph" reads one that way.
           const listed = b._idEq ? (config.mediaRows ?? []).find((r) => r.id === b._idEq) : null;
@@ -148,14 +158,14 @@ function makeSupabase(config) {
         return Promise.resolve({ data: null, error: null });
       },
       then: (resolve) => {
-        if (table === 'host_media' && b._head) {
+        if (isMedia(table) && b._head) {
           // The booth quota counts what it has made for one guest.
           if (b._boothCount) return resolve({ count: config.boothCount ?? 0, error: null });
           return resolve({ count: b._rows().length, error: null });
         }
         if (table === 'events_media_guest_claims') return resolve({ data: [...state.claims].map(([member_id, client_id]) => ({ member_id, client_id })), error: null });
         if (config.tables && table in config.tables) return resolve(config.tables[table]);
-        if (table !== 'host_media') return resolve({ data: [], error: null });
+        if (!isMedia(table)) return resolve({ data: [], error: null });
         return resolve({ data: config.mediaRows ?? [], error: config.mediaListError ?? null });
       },
       insert: (row) => {
@@ -1221,7 +1231,7 @@ describe('one phone per name', () => {
     let filter = null;
     const { deps, supabase } = makeDeps(cfg({ claims: { [DAN]: CLIENT_ID }, mediaRows: [] }));
     const realFrom = supabase.from;
-    supabase.from = (t) => { const b = realFrom(t); if (t === 'host_media') { const c = b.contains; b.contains = (col, v) => { filter = v; return c(col, v); }; } return b; };
+    supabase.from = (t) => { const b = realFrom(t); if (isMedia(t)) { const c = b.contains; b.contains = (col, v) => { filter = v; return c(col, v); }; } return b; };
     const res = mockRes();
     await createGuestRoutes(deps).listMine(req({ body: { client_id: CLIENT_ID, member_id: DAN } }), res);
     expect(res.statusCode).toBe(200);
@@ -1247,13 +1257,13 @@ describe('one phone per name', () => {
 describe('background plates are checked for people', () => {
   const IMG = { ok: true, image: new Uint8Array([9]), contentType: 'image/jpeg' };
   const settle = () => new Promise((r) => setTimeout(r, 30));
-  const complete = async () => {
+  const complete = async (ticket = {}) => {
     const { deps, supabase } = makeDeps({ link: ACTIVE_LINK, event: EVENT_ROW, existingMedia: null });
     const updates = [];
     const realFrom = supabase.from;
     supabase.from = (t) => { const b = realFrom(t); const u = b.update; b.update = (f) => { if (f.variants) updates.push(f.variants); return u(f); }; return b; };
     stubHead({ ok: true, headers: { get: (k) => ({ 'content-length': '1000', 'content-type': 'image/jpeg' })[k] ?? null } });
-    await createGuestRoutes(deps).completeUploads(req({ body: { tickets: [ticketFor()] } }), mockRes());
+    await createGuestRoutes(deps).completeUploads(req({ body: { tickets: [ticketFor(ticket)] } }), mockRes());
     await settle();
     return { updates, supabase };
   };
@@ -1262,7 +1272,10 @@ describe('background plates are checked for people', () => {
   beforeEach(() => {
     process.env.BOOTH_PROVIDER = 'fal';
     process.env.FAL_API_KEY = 'test-placeholder';
-    provider.runPlate.mockReset();
+    const off = () => Promise.resolve({ ok: false, error: 'not_configured' });
+    provider.runPlate.mockReset().mockImplementation(off);
+    provider.runDepth.mockReset().mockImplementation(off);
+    provider.runCutout.mockReset().mockImplementation(off);
     provider.plateHasPeople.mockReset();
   });
   afterEach(() => {
@@ -1301,6 +1314,31 @@ describe('background plates are checked for people', () => {
     const { updates } = await complete();
     expect(provider.runPlate).toHaveBeenCalledTimes(1);
     expect(updates.at(-1).plate).toMatch(/variants\/plate\.jpg$/);
+  });
+
+  // Layer generation holds whole decoded images in a pod with 512MB, and
+  // a photographer delivers thousands in one sitting -- which OOMKilled
+  // the api twice and took the site down (2026-10-17). Their photographs
+  // are never shown with the parallax effect these layers are for, so
+  // they must not be generated at all.
+  it('generates no layers at all for a photographer\'s delivery', async () => {
+    provider.runPlate.mockResolvedValue(IMG);
+    provider.plateHasPeople.mockResolvedValue(false);
+    provider.runDepth.mockResolvedValue(IMG);
+    provider.runCutout.mockResolvedValue(IMG);
+    const { updates } = await complete({ photographer: true });
+    expect(provider.runPlate).not.toHaveBeenCalled();
+    expect(provider.runDepth).not.toHaveBeenCalled();
+    expect(provider.runCutout).not.toHaveBeenCalled();
+    expect(updates).toHaveLength(0);
+  });
+
+  it('still generates them for a guest\'s upload', async () => {
+    provider.runPlate.mockResolvedValue(IMG);
+    provider.plateHasPeople.mockResolvedValue(false);
+    const { updates } = await complete();
+    expect(provider.runPlate).toHaveBeenCalledTimes(1);
+    expect(updates.length).toBeGreaterThan(0);
   });
 });
 
@@ -1451,11 +1489,25 @@ describe('eventGallery', () => {
     host_media_album_items: { data: [], error: null },
   };
   const gallery = async (query = {}, over = {}) => {
-    const { deps } = makeDeps({ event: EVENT_ROW, mediaRows: ROWS, tables: TABLES, ...over });
+    const { deps, supabase } = makeDeps({ event: EVENT_ROW, mediaRows: ROWS, tables: TABLES, ...over });
     const res = mockRes();
     await createGuestRoutes(deps).eventGallery({ params: { identifier: 'dan-sarah' }, query, ip: '203.0.113.9', headers: {} }, res);
+    res.supabase = supabase;
     return res;
   };
+
+  // A photographer delivers weeks after the event in one sitting, so
+  // arrival order says nothing about the day. The gallery reads the view
+  // that carries captured_at -- taken time, else arrival (migration 028).
+  it('asks for the photographs in the order they were taken', async () => {
+    const res = await gallery();
+    const ordered = (res.supabase.state.ordered ?? []).filter((o) => o.table === 'event_media_gallery');
+    expect(ordered.length).toBeGreaterThan(0);
+    expect(ordered[0].column).toBe('captured_at');
+    expect(ordered[0].ascending).toBe(false);
+    // Never by arrival, which is what it used to do.
+    expect(ordered.map((o) => o.column)).not.toContain('created_at');
+  });
 
   it('shows the albums with something in them, and the photos', async () => {
     const res = await gallery();

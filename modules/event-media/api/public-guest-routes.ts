@@ -37,6 +37,7 @@ import { BOOTH_POSES, boothPose, poseChangesAt, poseOfTheHour } from '../lib/boo
 import { READY_PROMPTS, readyPrompt, readyWindow } from '../lib/ready-prompts.js';
 import { BOOTH_PLACES, DEFAULT_PLACE, boothPlace, placeRail } from '../lib/booth-places.js';
 import { plateHasPeople, runCardCopy, runCutout, runDepth, runPlate, runStyle, runSwap, styleConfigured, swapConfigured } from '../lib/booth-provider.js';
+import { bounded } from '../lib/bounded.js';
 import { browserObjectUrl, browserSizedUrl, type CdnConfig } from '../lib/cdn.js';
 import { mayGenerate, readLimits, boothClosesAt } from '../lib/booth-limits.js';
 import { albumForUpload, boothAlbum, isView, resolveViews, tagView, type View } from '../lib/view-albums.js';
@@ -719,6 +720,21 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     await setVariantPath(mediaId, 'plate', storagePath);
   }
 
+  /**
+   * How many photographs may be having their layers generated at once.
+   *
+   * Two, because each one holds a depth map, a cutout and up to two
+   * candidate plates in a pod that has 512MB in total. Before this bound
+   * existed every upload started its own, and a batch of eighty was
+   * enough to be OOMKilled twice over (2026-10-17). Layers are detached
+   * work that nothing is waiting on, so queueing them costs only time.
+   */
+  const layerQueue = bounded(2, (err) => {
+    logger.warn('layer job crashed', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
+
   async function generateLayers(mediaId: string, storagePath: string): Promise<void> {
     try {
       const src = toPublicUrl(storagePath);
@@ -728,19 +744,32 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       // never awaited alongside them: it is the only one of these the
       // guest actually reads, and it used to be skipped entirely
       // whenever a layer threw.
+      // Not put through the layer queue: that bound is there to keep
+      // decoded images out of the pod's memory, and this holds none --
+      // the model is handed a URL and answers with a few short strings.
+      // It is caught, though. Nothing awaits this, so a throw from the
+      // model or either query would surface as an unhandledRejection and
+      // take the process down.
       void (async () => {
-        const copy = await runCardCopy(src);
-        if (!copy.ok) {
-          logger.warn('card copy failed', { mediaId, error: copy.error });
-          return;
+        try {
+          const copy = await runCardCopy(src);
+          if (!copy.ok) {
+            logger.warn('card copy failed', { mediaId, error: copy.error });
+            return;
+          }
+          const { data: row } = await supabase
+            .from('host_media')
+            .select('metadata')
+            .eq('id', mediaId)
+            .maybeSingle();
+          const metadata = { ...((row?.metadata ?? {}) as Record<string, unknown>), card: copy.copy };
+          await supabase.from('host_media').update({ metadata }).eq('id', mediaId);
+        } catch (err) {
+          logger.warn('card copy crashed', {
+            mediaId,
+            error: err instanceof Error ? err.message : String(err),
+          });
         }
-        const { data: row } = await supabase
-          .from('host_media')
-          .select('metadata')
-          .eq('id', mediaId)
-          .maybeSingle();
-        const metadata = { ...((row?.metadata ?? {}) as Record<string, unknown>), card: copy.copy };
-        await supabase.from('host_media').update({ metadata }).eq('id', mediaId);
       })();
 
       const [depth, cutout] = await Promise.all([
@@ -774,7 +803,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
    * rotated, since each one had to be turned alongside it.
    */
   function processNewImage(mediaId: string, storagePath: string): void {
-    void generateLayers(mediaId, storagePath);
+    layerQueue(() => generateLayers(mediaId, storagePath));
   }
 
   /**
@@ -1067,6 +1096,13 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       // only posted ones are anyone else's to see. A constant filter: no
       // request input reaches it.
       .or('metadata->>posted.is.null,metadata->>posted.neq.false')
+      // ARRIVAL ORDER, DELIBERATELY -- unlike the gallery, which sorts by
+      // when a photograph was taken (migration 028). This is the
+      // projector's feed: it shows what has just come in, so a picture is
+      // dated when it arrives, and the cursor below pages on exactly
+      // these two columns. Sorting it by capture time would both bury a
+      // photograph somebody has this second uploaded and break the
+      // cursor, which is a created_at/id pair.
       .order('created_at', { ascending: false })
       .order('id', { ascending: false })
       // Over-fetch: hidden rows are filtered below and would otherwise
@@ -1274,7 +1310,11 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     // until it does (a page of this shipped 500ing on 2026-09-27).
     const base = (columns: string, opts?: { count: 'exact'; head: true }) => {
       let q = supabase
-        .from('host_media')
+        // The gallery's own view of host_media (migration 028). The only
+        // thing it adds is captured_at -- when the photograph was taken,
+        // or when it arrived if it does not say -- which is what this
+        // page sorts by and which no `order=` can express over JSONB.
+        .from('event_media_gallery')
         .select(columns, opts as never)
         .eq('host_kind', 'event')
         .eq('host_id', event.id)
@@ -1299,7 +1339,10 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     const counts = new Map<string, number>();
     const [pageResult] = await Promise.all([
       inAlbum(base('id, storage_path, mime_type, bytes, width, height, variants, metadata, created_at') as never)
-        .order('created_at', { ascending: false })
+        // Newest first, by when it was taken. A photographer delivers
+        // weeks later in one sitting, so ordering by arrival put 851
+        // photographs in whatever order the browser finished them in.
+        .order('captured_at', { ascending: false })
         .order('id', { ascending: false })
         .range(offset, offset + limit - 1),
       // One count per album, each a head request that returns no rows.
@@ -1745,7 +1788,16 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       createdCount += 1;
       items.push({ media_id: p.media_id, status: 'created', item: mapFeedItem(inserted as FeedRow) });
 
-      if (p.mime_type.startsWith('image/')) processNewImage(p.media_id, p.storage_path);
+      // Projector layers, but not for a photographer's delivery. Those
+      // are the far layer of a parallax effect the professional
+      // photographs are never shown with -- their album is off the
+      // portal until the organiser has been through it -- and asking an
+      // image model to redraw a wedding photographer's frame with the
+      // couple removed is several seconds, several megabytes and a few
+      // cents per photograph, times the thousands they deliver.
+      if (p.mime_type.startsWith('image/') && !p.photographer) {
+        processNewImage(p.media_id, p.storage_path);
+      }
     }
 
     if (createdCount > 0) {
@@ -1795,7 +1847,9 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     // Videos are included here even though the projector never shows
     // them — a guest who uploaded the wrong video needs to remove it.
     const { data, error } = await supabase
-      .from('host_media')
+      // The same view the gallery reads, so "Yours" is in the same order
+      // as the album it sits beside (migration 028).
+      .from('event_media_gallery')
       .select('id, storage_path, mime_type, bytes, width, height, variants, metadata, created_at, is_approved')
       .eq('host_kind', 'event')
       .eq('host_id', link.event_id)
@@ -1803,7 +1857,11 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       // Unposted booth pictures live in the booth's own carousel, not in
       // the gallery's "Yours".
       .or('metadata->>posted.is.null,metadata->>posted.neq.false')
-      .order('created_at', { ascending: false })
+      .order('captured_at', { ascending: false })
+      // Two photographs taken in the same second are common -- three
+      // cameras were shooting this wedding -- and without a tiebreak
+      // their order is whatever the plan happens to produce.
+      .order('id', { ascending: false })
       .limit(200);
 
     if (error) {

@@ -28,6 +28,7 @@ import {
   progressLine,
   toDeliver,
 } from './_lib/delivery'
+import { takenAtOf } from './_lib/taken-at'
 
 const API_BASE = ''
 /** Files per mint call; the server takes twenty. */
@@ -105,13 +106,22 @@ export default function PhotographerUpload({ code, credit, allowVideo, eventName
     try {
       for (const batch of inBatches(queue, MINT_BATCH)) {
         if (stop.current) break
+        // When each photograph was taken, out of its own EXIF, before
+        // asking for anywhere to put it. A professional delivers in one
+        // go weeks afterwards, so the clock at the moment of upload says
+        // nothing at all: without this every one of the thousands was
+        // filed as having been taken the evening it was handed over,
+        // which is what Dan saw on 2026-10-17. Only the header is read,
+        // a few kilobytes per file, so a batch of twenty costs nothing.
+        const takenAt = await Promise.all(batch.map((f) => takenAtOf(f).catch(() => null)))
         const mint = await fetch(`${API_BASE}/api/public/event-media/links/${code}/uploads`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             client_id: clientId(code),
-            files: batch.map((f) => ({
+            files: batch.map((f, n) => ({
               filename: f.name, mime_type: f.type || 'image/jpeg', bytes: f.size, captured: false,
+              taken_at: takenAt[n] ?? null,
             })),
           }),
         })

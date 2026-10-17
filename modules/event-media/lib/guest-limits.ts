@@ -192,15 +192,25 @@ export type MintFileValidation =
  * clock on a booth picture, which has no EXIF to read. Either way it is
  * a date from a device: anything unparseable, older than ten years or in
  * the future is dropped rather than trusted.
+ *
+ * ONLY THE PART THAT WAS CHECKED IS KEPT. The pattern is anchored at the
+ * start and matches nineteen characters, so returning the whole slice
+ * stored up to thirteen unexamined ones alongside a date that passed --
+ * and `Date.parse` of a string with trailing junk is left to the engine
+ * to interpret, so the range check above it was not reading the same
+ * value anybody else would. The matched prefix is the only part this
+ * function has an opinion about, so it is the only part that is kept.
  */
 export function cleanTakenAt(raw: unknown): string | null {
   const text = typeof raw === 'string' ? raw.slice(0, 32) : '';
-  if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(text)) return null;
-  const t = Date.parse(text);
+  const m = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.exec(text);
+  if (!m) return null;
+  const stamp = m[0];
+  const t = Date.parse(stamp);
   if (!Number.isFinite(t)) return null;
   const now = Date.now();
   if (t > now + 24 * 3600_000 || t < now - 10 * 365 * 24 * 3600_000) return null;
-  return text;
+  return stamp;
 }
 
 export function validateMintFile(
