@@ -7,7 +7,16 @@
 -- newsletter_sends is the enforcement (the Sending tab inserts rows
 -- directly, so there is no route to gate), and the Sending tab calls the
 -- same function first to show the reason in words. spec §5.3. Idempotent.
+--
+-- A SCHEDULED send is checked again at dispatch, before fan-out. A refusal
+-- there leaves the send `scheduled` (it is retried every tick, and goes out
+-- once research completes) and records the reason in last_error, which the
+-- Sending tab shows.
 -- ============================================================================
+ALTER TABLE public.newsletter_sends ADD COLUMN IF NOT EXISTS last_error text;
+COMMENT ON COLUMN public.newsletter_sends.last_error IS
+  'Why the dispatcher last held or failed this send (e.g. SEND_GATE:RESEARCH_IN_PROGRESS:<block>). Cleared when it dispatches.';
+
 -- SECURITY DEFINER: evaluated as the caller, a caller who cannot read
 -- templates_block_defs under RLS would see no research blocks and the gate
 -- would fail OPEN. Read-only.

@@ -70,6 +70,26 @@ export function EditionSendingTab({ editionId, editionDate, subject, preheader, 
     setGate(await checkSendGate(editionId));
   }, [editionId]);
   useEffect(() => { void refreshGate(); }, [refreshGate]);
+  // A scheduled send the dispatcher is holding on the research gate (it stays
+  // 'scheduled' and goes out once research completes; dispatch-scheduled.ts
+  // records why in last_error).
+  const [held, setHeld] = useState<Array<{ id: string; last_error: string }>>([]);
+  useEffect(() => {
+    if (!editionId || editionId === 'new') { setHeld([]); return; }
+    let cancelled = false;
+    void supabase
+      .from('newsletter_sends')
+      .select('id, last_error')
+      .eq('edition_id', editionId)
+      .eq('status', 'scheduled')
+      .not('last_error', 'is', null)
+      .then(({ data, error }) => {
+        if (cancelled) return;
+        if (error) { console.warn('[newsletter-send] held-send check failed:', error.message); return; }
+        setHeld((data as Array<{ id: string; last_error: string }>) ?? []);
+      });
+    return () => { cancelled = true; };
+  }, [editionId, gate]);
   const gateReason = gate && !gate.allowed ? sendGateMessage(gate.reason_code, gate.block_id ? blockNames?.[gate.block_id] : null) : undefined;
   // Render the edition to final email HTML with the web-version link substituted
   // (shared by createSend + rerenderContent so both produce identical output).
@@ -246,5 +266,18 @@ export function EditionSendingTab({ editionId, editionDate, subject, preheader, 
     };
   }, [editionId, editionStatus, subject, preheader, collection, newsletterSlug, buildFinalHtml, gateReason, blockNames, refreshGate]);
 
-  return <SendingPanel adapter={adapter} />;
+  return (
+    <>
+      {held.map((h) => {
+        const g = parseSendGateError(h.last_error);
+        return (
+          <div key={h.id} className="mb-3 rounded-md border border-[var(--orange-a6)] bg-[var(--orange-a2)] p-3 text-sm text-[var(--orange-11)]">
+            A scheduled send is being held and will go out once this is resolved:{' '}
+            {g ? sendGateMessage(g.code, g.block_id ? blockNames?.[g.block_id] : null) : h.last_error}
+          </div>
+        );
+      })}
+      <SendingPanel adapter={adapter} />
+    </>
+  );
 }
