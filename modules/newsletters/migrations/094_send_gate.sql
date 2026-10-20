@@ -41,6 +41,7 @@ BEGIN
   END LOOP;
   RETURN QUERY SELECT true, 'OK', NULL::uuid;
 END $$;
+REVOKE ALL ON FUNCTION public.newsletters_send_gate(uuid) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.newsletters_send_gate(uuid) TO authenticated, service_role;
 
 CREATE OR REPLACE FUNCTION public.newsletter_sends_research_gate() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
