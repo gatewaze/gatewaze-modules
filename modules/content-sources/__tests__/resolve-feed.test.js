@@ -70,3 +70,29 @@ test('http and private site URLs are refused before any fetch', async () => {
   assert.equal(r.candidates.length, 0);
   assert.ok(r.errors.some((e) => /scheme http/.test(e)));
 });
+
+test('a page with many alternates: at most 5 tried and at most 14 requests in total', async () => {
+  const links = Array.from({ length: 200 }, (_, i) => `<link rel="alternate" type="application/rss+xml" href="/f${i}.xml">`).join('');
+  const fetch = fakeFetch({ 'https://many.org/': `<html><head>${links}</head></html>` });
+  const r = await resolveFeed('https://many.org', { fetch, probeAll: true });
+  assert.equal(r.candidates.length, 0);
+  const alternates = fetch.calls.filter((u) => /\/f\d+\.xml$/.test(u));
+  assert.equal(alternates.length, 5);
+  assert.ok(fetch.calls.length <= 14, `made ${fetch.calls.length} requests`);
+  assert.ok(r.errors.some((e) => /request limit/.test(e)));
+});
+
+test('the overall deadline stops new fetches and bounds each fetch timeout', async () => {
+  let t = 0;
+  const timeouts = [];
+  const fetch = async (url, o) => {
+    timeouts.push(o.timeoutMs);
+    t += 10_000; // every fetch takes 10 s of fake time
+    return { status: 404, headers: {}, text: '', finalUrl: url, via: 'direct' };
+  };
+  const r = await resolveFeed('https://slow.org', { fetch, probeAll: true, now: () => t });
+  // 30 s deadline at 10 s per fetch: three fetches, then nothing new starts.
+  assert.equal(timeouts.length, 3);
+  assert.deepEqual(timeouts, [12_000, 12_000, 10_000]);
+  assert.ok(r.errors.some((e) => /time limit/.test(e)));
+});
