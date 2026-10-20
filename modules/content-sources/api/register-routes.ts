@@ -18,6 +18,7 @@ import { createRequire } from 'node:module';
 import { join } from 'node:path';
 import type { ModuleContext } from '@gatewaze/shared';
 import { resolve, submit, patch, enqueueRun, SourceError } from '../lib/sources.js';
+import { redisConnection } from '../lib/redis-connection.js';
 
 let _sb: SupabaseClient | null = null;
 function sb(): SupabaseClient {
@@ -93,9 +94,8 @@ function makeAddJob(projectRoot: string) {
     if (!queue) {
       const require = createRequire(join(projectRoot, 'packages', 'api', 'package.json'));
       const { Queue } = require('bullmq');
-      const { getRedisConnection } = require('@gatewaze/shared/redis');
       queue = new Queue(QUEUE_NAME, {
-        connection: getRedisConnection(),
+        connection: redisConnection(),
         prefix: QUEUE_PREFIX,
         defaultJobOptions: { attempts: 3, backoff: { type: 'exponential', delay: 5000 }, removeOnComplete: { count: 1000, age: 24 * 3600 }, removeOnFail: { count: 500, age: 7 * 24 * 3600 } },
       });
