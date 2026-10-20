@@ -20,6 +20,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { computeResearchWindow, type PreviousEditionRow } from '../lib/research-window.js';
 import { queryDiscoveryPosts, type DiscoveryPostsInput } from '../lib/research-input.js';
 import { runResearchRecipe, validateItems, ensureResearchThread, ResearchRecipeError, sanitizeInline } from '../lib/research-recipe.js';
+import { stripTags } from '../lib/sanitize-inline.js';
 import { bindingHash, researchOutputFormat } from '../lib/research-merge.js';
 
 interface RunJobData { kind: string; runId: string }
@@ -121,7 +122,7 @@ export default async function handleResearchRun(job: Job<RunJobData>) {
     else {
       const text = typeof scalar === 'string' ? scalar : (scalar && typeof scalar === 'object' ? String((scalar as Record<string, unknown>).text ?? (scalar as Record<string, unknown>).html ?? (scalar as Record<string, unknown>).summary ?? '') : '');
       if (!text.trim()) throw new ResearchRecipeError('output_invalid', 'recipe produced no text');
-      value = format === 'richtext' ? sanitizeInline(text, { allowAnchors: true }) : sanitizeInline(text).replace(/<[^<>]*>/g, '');
+      value = format === 'richtext' ? sanitizeInline(text, { allowAnchors: true }) : stripTags(sanitizeInline(text));
     }
 
     const hash = await bindingHash(binding);

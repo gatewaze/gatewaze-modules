@@ -38,3 +38,18 @@ export function sanitizeInline(input: string, opts: { allowAnchors?: boolean } =
   const escaped = marked.replace(/</g, '&lt;').replace(/>/g, '&gt;');
   return escaped.replace(/\u0000(\d+)\u0000/g, (_, i: string) => keep[Number(i)] ?? '');
 }
+
+/**
+ * Remove every tag, repeating until nothing changes, so a nested fragment
+ * such as `<<b>script>` cannot reassemble into a tag after one pass.
+ * Entities are left as they are.
+ */
+export function stripTags(s: string): string {
+  let out = s;
+  let prev: string;
+  do {
+    prev = out;
+    out = out.replace(/<[^<>]*>/g, '');
+  } while (out !== prev);
+  return out;
+}
