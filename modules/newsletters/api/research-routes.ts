@@ -12,6 +12,7 @@
  */
 
 import type { Router, Request, Response, NextFunction } from 'express';
+import { redisConnection } from '../lib/redis-connection.js';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 type Wrap = (fn: (req: Request, res: Response, next: NextFunction) => unknown) => (req: Request, res: Response, next: NextFunction) => Promise<void>;
@@ -49,9 +50,7 @@ async function requireAdmin(req: Request, res: Response): Promise<string | null>
 
 async function enqueue(runId: string) {
   const { Queue } = await import('bullmq');
-  // @ts-ignore resolved by the workspace install at runtime (same import the scrapers module uses)
-  const { getRedisConnection } = await import('@gatewaze/shared/redis');
-  const queue = new Queue('jobs', { connection: getRedisConnection(), prefix: `bull:${process.env.BRAND || 'default'}` });
+  const queue = new Queue('jobs', { connection: redisConnection(), prefix: `bull:${process.env.BRAND || 'default'}` });
   try {
     await queue.add('newsletters:research-run', { kind: 'newsletters:research-run', runId }, { jobId: `newsletters-research-run-${runId}`, attempts: 2, backoff: { type: 'exponential', delay: 30_000 }, removeOnComplete: { count: 500 }, removeOnFail: { count: 500 } });
   } finally {
