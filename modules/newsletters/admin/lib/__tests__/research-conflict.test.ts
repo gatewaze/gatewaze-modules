@@ -71,6 +71,21 @@ describe('diffResearchOnly', () => {
     expect(diffResearchOnly(loaded, retpl, research).only_research).toBe(false);
   });
 
+  it('same count, one id swapped for another: not research-only', () => {
+    const fresh = clone(loaded);
+    fresh[0].id = 'intro-replacement';
+    const d = diffResearchOnly(loaded, fresh, research);
+    expect(d.only_research).toBe(false);
+  });
+
+  it('same count, a duplicated id hiding a replaced block: not research-only', () => {
+    // loaded has the same id twice (a stale snapshot), fresh has that id once
+    // plus a block the loaded snapshot never had.
+    const dupLoaded = [clone(loaded)[1], clone(loaded)[1]];
+    const fresh = [clone(loaded)[1], { id: 'new-block', content: {}, sort_order: 2000, templates_block_def_id: 'def-blogs' }];
+    expect(diffResearchOnly(dupLoaded, fresh, research).only_research).toBe(false);
+  });
+
   it('a research field changed AND another block was edited: the other edit wins (not research-only)', () => {
     const fresh = clone(loaded);
     fresh[1].content.items = items2;

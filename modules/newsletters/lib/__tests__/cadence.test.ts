@@ -14,6 +14,8 @@ describe('validateCadence', () => {
   it('requires creation to lead research', () => {
     expect(validateCadence({ ...weekly, create_lead_days: 1, research_lead_hours: 36 }).errors.join()).toMatch(/create_lead_days \* 24/);
     expect(validateCadence({ ...weekly, create_lead_days: 2, research_lead_hours: 36 }).errors).toEqual([]);
+    // Equal is not enough: the edition must exist strictly before research is due.
+    expect(validateCadence({ ...weekly, create_lead_days: 2, research_lead_hours: 48 }).errors.join()).toMatch(/create_lead_days \* 24/);
   });
 });
 
