@@ -19,7 +19,7 @@ const templatesModule: GatewazeModule = {
   name: 'Templates',
   description:
     'Shared block/wrapper authoring: marker grammar, parser, source ingest, A/B engine, version pinning. Consumed by newsletters, sites, and future content modules.',
-  version: '0.1.0',
+  version: '0.2.0',
 
   features: [
     'templates',

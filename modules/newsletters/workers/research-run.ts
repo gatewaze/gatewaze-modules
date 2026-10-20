@@ -201,8 +201,10 @@ async function notifyAdmins(sb: SupabaseClient, r: RunRow, kind: string, message
   const ed = await sb.from('newsletters_editions').select('title').eq('id', r.edition_id).maybeSingle();
   const title = (ed.data as { title?: string } | null)?.title ?? r.edition_id;
   try {
-    // @ts-ignore plain-JS helper in the scrapers module (no declaration file)
-    const alerts = await import('../../scrapers/scripts/lib/scraper-alerts.js');
+    // Plain-JS helper in the scrapers module with no type declarations; the
+    // path is held in a variable so the import is typed by the cast below.
+    const alertsPath = '../../scrapers/scripts/lib/scraper-alerts.js';
+    const alerts = (await import(alertsPath)) as { sendScraperAlert: (a: { severity: string; title: string; message: string; scraperName?: string; jobId?: string }) => Promise<void> };
     await alerts.sendScraperAlert({ severity: 'warning', title: `Newsletter research ${kind}: ${title}`, message, scraperName: 'newsletters:research-run', jobId: r.id });
   } catch {
     console.warn(`[newsletters:research-run] ALERT ${kind} for edition "${title}": ${message}`);
