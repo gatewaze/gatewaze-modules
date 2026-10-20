@@ -42,9 +42,19 @@ export interface EditionResearch {
   research_open?: boolean;
 }
 
+/**
+ * getApiBaseUrl() usually ends in /api (`${VITE_API_URL}/api`, or bare '/api'),
+ * while these routes are registered as /api/admin/newsletters/...: join without
+ * doubling the prefix. Same helper as content-sources' discoveryService.
+ */
+function apiUrl(path: string): string {
+  const base = getApiBaseUrl().replace(/\/+$/, '');
+  return base.endsWith('/api') ? `${base}${path.replace(/^\/api/, '')}` : `${base}${path}`;
+}
+
 async function jfetch<T>(path: string, init?: RequestInit): Promise<T> {
   const { data: { session } } = await supabase.auth.getSession();
-  const r = await fetch(`${getApiBaseUrl()}${path}`, {
+  const r = await fetch(apiUrl(path), {
     ...init,
     headers: {
       'Content-Type': 'application/json',
