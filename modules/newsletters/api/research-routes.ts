@@ -11,6 +11,7 @@
  *   GET  /newsletters/editions/:editionId/research/runs      history (last 50)
  */
 
+import { enqueueResearchRun, type EnqueueJob } from '../lib/enqueue-research-run.js';
 import type { Router, Request, Response, NextFunction } from 'express';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
@@ -47,16 +48,7 @@ async function requireAdmin(req: Request, res: Response): Promise<string | null>
   return u.user.id;
 }
 
-/** The platform's enqueue helper from the module context (server.ts). */
-export type EnqueueJob = (queue: string, name: string, data: Record<string, unknown>, opts?: Record<string, unknown>) => Promise<{ id: string | undefined }>;
-
-// Through the platform's enqueueJob, not a direct bullmq import: the module
-// is loaded from its own directory, where ESM import('bullmq') cannot resolve.
-async function enqueue(runId: string, enqueueJob: EnqueueJob | undefined) {
-  if (typeof enqueueJob !== 'function') throw new Error('no enqueueJob in the module context');
-  const { id } = await enqueueJob('jobs', 'newsletters:research-run', { kind: 'newsletters:research-run', runId }, { jobId: `newsletters-research-run-${runId}`, attempts: 2, backoff: { type: 'exponential', delay: 30_000 }, removeOnComplete: { count: 500 }, removeOnFail: { count: 500 } });
-  if (!id) throw new Error('the jobs queue is not registered');
-}
+export type { EnqueueJob };
 
 interface ResearchBlock { id: string; def_id: string; binding: Record<string, unknown> }
 
@@ -126,7 +118,7 @@ export function registerResearchRoutes(router: Router, wrap: Wrap, enqueueJob?: 
       }
       const runId = (ins.data as { id: string }).id;
       try {
-        await enqueue(runId, enqueueJob);
+        await enqueueResearchRun(runId, enqueueJob);
         queued.push(runId);
       } catch (e) {
         // queued → cancelled: the 093 guard refuses queued → failed, and the
