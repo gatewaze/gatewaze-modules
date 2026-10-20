@@ -97,6 +97,32 @@ async function addJob(projectRoot: string, type: string, data: Record<string, un
 
 const SCRAPER_RUN = 'scraper:run';
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const MAX_SOURCE_IDS = 100;
+
+/**
+ * Per-job options to carry over when a job is started or retried from its
+ * scrapers_jobs row. The job handler reads options only from the BullMQ
+ * payload; without this a re-enqueued single-source FeedScraper run would
+ * silently become a full sweep.
+ *
+ * scrapers_jobs.metadata is writable by any authenticated user (its RLS is
+ * FOR ALL USING (true)), so it is read here, server-side, and narrowed hard:
+ * only for the FeedScraper, only `source_ids`, only an array of 1 to 100
+ * uuid strings. Anything else yields no options (a normal run). The worst a
+ * forged row can do is pick which existing, non-dead, non-html sources a run
+ * covers. That includes pending and paused ones, as the single-source "run
+ * now" does by design; every fetch still goes through the URL guard.
+ */
+export function rerunOptionsFromMetadata(scraperType: unknown, metadata: unknown): { source_ids: string[] } | undefined {
+  if (scraperType !== 'FeedScraper') return undefined;
+  if (!metadata || typeof metadata !== 'object' || Array.isArray(metadata)) return undefined;
+  const ids = (metadata as { source_ids?: unknown }).source_ids;
+  if (!Array.isArray(ids) || ids.length === 0 || ids.length > MAX_SOURCE_IDS) return undefined;
+  if (!ids.every((x) => typeof x === 'string' && UUID_RE.test(x))) return undefined;
+  return { source_ids: [...new Set(ids as string[])] };
+}
+
 export function registerRoutes(app: Express, context?: ModuleContext) {
   const projectRoot = context?.projectRoot || process.cwd();
 
@@ -425,7 +451,7 @@ export function registerRoutes(app: Express, context?: ModuleContext) {
       // Look up the scrapers_jobs row and its parent scraper
       const { data: jobRow, error: jobError } = await supabase
         .from('scrapers_jobs')
-        .select('id, scraper_id, scrapers(id, name, scraper_type, event_type)')
+        .select('id, scraper_id, metadata, scrapers(id, name, scraper_type, event_type)')
         .eq('id', scraperJobId)
         .single();
 
@@ -472,6 +498,7 @@ export function registerRoutes(app: Express, context?: ModuleContext) {
 
       // Normal path: scrapers_jobs row already exists
       const scraper = jobRow.scrapers as any;
+      const options = rerunOptionsFromMetadata(scraper?.scraper_type, (jobRow as any).metadata);
 
       const bullJob = await addJob(projectRoot, SCRAPER_RUN, {
         scraperJobId: jobRow.id,
@@ -480,6 +507,7 @@ export function registerRoutes(app: Express, context?: ModuleContext) {
         scraperType: scraper.scraper_type,
         eventType: scraper.event_type,
         manual: true,
+        ...(options ? { options } : {}),
       });
 
       res.json({
@@ -855,16 +883,25 @@ export function registerRoutes(app: Express, context?: ModuleContext) {
 
       const job = originalJob[0];
 
+      // scrapers_get_job does not return metadata; read it from the row.
+      const { data: originalRow } = await supabase
+        .from('scrapers_jobs')
+        .select('metadata')
+        .eq('id', originalJobId)
+        .maybeSingle();
+      const options = rerunOptionsFromMetadata(job.scraper_type, originalRow?.metadata);
+
       // Create a new job record with retry_of reference
       const { data: newJobData, error: createError } = await supabase
         .rpc('scrapers_create_job', {
           scraper_ids: [job.scraper_id],
-          created_by_name: 'admin-retry',
+          created_by_user: 'admin-retry',
+          ...(options ? { p_metadata: options } : {}),
         });
 
       if (createError) return res.status(500).json({ success: false, error: createError.message });
 
-      const newJobId = newJobData?.[0]?.id || newJobData?.[0];
+      const newJobId = newJobData?.[0]?.job_id;
       if (!newJobId) return res.status(500).json({ success: false, error: 'Failed to create retry job' });
 
       // Set retry_of on the new job
@@ -882,6 +919,7 @@ export function registerRoutes(app: Express, context?: ModuleContext) {
           scraperType: job.scraper_type,
           eventType: job.event_type,
           manual: true,
+          ...(options ? { options } : {}),
         });
       }
 

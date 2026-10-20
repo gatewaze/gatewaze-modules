@@ -24,6 +24,7 @@ import { LinuxFoundationEventsScraper } from './scrapers/LinuxFoundationEventsSc
 import { AaifVirtualEventsScraper } from './scrapers/AaifVirtualEventsScraper.js';
 import { GatewazePortalEventsScraper } from './scrapers/GatewazePortalEventsScraper.js';
 import { fetchImage } from './lib/guarded-fetch.js';
+import { jobCompletionCounts } from './lib/job-completion-counts.js';
 import { TopicMatcher } from './scrapers/TopicMatcher.js';
 import { GeocodingService } from './scrapers/GeocodingService.js';
 import { EventProcessor } from './scrapers/EventProcessor.js';
@@ -401,6 +402,17 @@ export async function runScraperJob(jobId, logger, bullmqJob = null) {
     const job = jobData[0];
     logger.log(`✅ Job loaded: ${job.scraper_name} (${job.event_type})`);
 
+    // Per-job options come from the BullMQ payload ONLY, which only server
+    // code writes (the content-sources run route; the scrapers start/retry
+    // routes, which carry a FeedScraper job's source_ids over after strict
+    // validation in rerunOptionsFromMetadata). scrapers_jobs.metadata
+    // (migration 022) is never read here: that table is writable by any
+    // authenticated user under its RLS, so a DB column must not steer a run
+    // unvalidated. Exposed to the scraper as scraperConfig.options; most
+    // scrapers ignore it.
+    const rawOptions = bullmqJob?.data?.options;
+    const jobOptions = rawOptions && typeof rawOptions === 'object' && !Array.isArray(rawOptions) ? rawOptions : {};
+
     // Get scraper configuration
     const { data: scraperData } = await getSupabase()
       .from('scrapers')
@@ -442,6 +454,9 @@ export async function runScraperJob(jobId, logger, bullmqJob = null) {
       // via events_publish_state_set); these fields expose them to the scraper.
       content_category: scraperData.content_category || null,
       default_publish_state: scraperData.default_publish_state || null,
+      // Per-job options from the BullMQ payload (e.g. { source_ids } for a
+      // single-source run of the content-sources FeedScraper).
+      options: jobOptions,
       config: {
         ...scraperData.config || {},
         baseUrl: scraperData.base_url,
@@ -1068,14 +1083,14 @@ export async function runScraperJob(jobId, logger, bullmqJob = null) {
 
     logger.log(`📊 Final stats: ${processedCount} processed, ${skippedCount} skipped, ${failedCount} failed, ${filteredCount} filtered`);
 
-    // Update job as completed
-    await updateJobStatus(jobId, 'completed', {
-      found: events?.length || 0,
-      total: events?.length || 0,
+    // Update job as completed. A self-persisting scraper (selfPersisting =
+    // true, e.g. the content-sources FeedScraper) reports its own stats;
+    // everything else, streaming scrapers included, reports the counters.
+    await updateJobStatus(jobId, 'completed', jobCompletionCounts(scraper, events, {
       processed: processedCount,
       skipped: skippedCount,
-      failed: failedCount
-    });
+      failed: failedCount,
+    }));
 
     const result = {
       processed: processedCount,
