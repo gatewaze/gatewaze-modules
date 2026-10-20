@@ -1080,8 +1080,18 @@ export async function runScraperJob(jobId, logger, bullmqJob = null) {
 
     logger.log(`📊 Final stats: ${processedCount} processed, ${skippedCount} skipped, ${failedCount} failed, ${filteredCount} filtered`);
 
-    // Update job as completed
-    await updateJobStatus(jobId, 'completed', {
+    // Update job as completed. Scrapers that persist their own rows (blog
+    // scrapers, the content-sources FeedScraper) return no events, so their
+    // own stats are the only counts there are; use them rather than report 0.
+    const own = (!events || events.length === 0) && scraper?.stats && typeof scraper.stats === 'object' ? scraper.stats : null;
+    const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
+    await updateJobStatus(jobId, 'completed', own ? {
+      found: n(own.found),
+      total: n(own.found),
+      processed: n(own.inserted ?? own.processed),
+      skipped: n(own.skipped) + n(own.collapsed_url) + n(own.collapsed_title) + n(own.owned_elsewhere),
+      failed: n(own.failed_items ?? own.failed),
+    } : {
       found: events?.length || 0,
       total: events?.length || 0,
       processed: processedCount,
