@@ -149,7 +149,7 @@ export interface ItemValidationOpts {
   /** Keys the item must come from (discovery_posts input); null for a pure recipe input. */
   inputKeys: Set<string> | null;
   /** Input items by key, so an item's url is taken from the input that owns its key, never from the model. */
-  inputByKey?: Map<string, { url: string }> | null;
+  inputByKey?: Map<string, InputOwner> | null;
   maxItems?: number;
 }
 
@@ -161,6 +161,9 @@ export interface ItemValidationOpts {
  * allow-list and NO anchors (the block's own url field is the only link).
  * Returns the cleaned items or throws output_invalid.
  */
+/** What the input item that owns a key decides, whatever the model returned. */
+export interface InputOwner { url: string; published_at?: string | null; date_label?: string | null; foundation?: string | null }
+
 export function validateItems(raw: unknown, opts: ItemValidationOpts): Array<Record<string, unknown>> {
   const list = Array.isArray(raw) ? raw : (raw && typeof raw === 'object' && Array.isArray((raw as { items?: unknown }).items) ? (raw as { items: unknown[] }).items : null);
   if (!list) throw new ResearchRecipeError('output_invalid', 'output is not an array (or {items: [...]})');
@@ -184,7 +187,13 @@ export function validateItems(raw: unknown, opts: ItemValidationOpts): Array<Rec
     if (opts.inputKeys) {
       if (!key || !opts.inputKeys.has(key)) throw new ResearchRecipeError('output_invalid', `item key missing or not from the input set: ${key.slice(0, 80)}`);
       const owner = opts.inputByKey?.get(key);
-      if (owner) item.url = owner.url; // the input decides where a key points, not the model
+      if (owner) {
+        // The input decides where a key points and when it was published, not the model.
+        item.url = owner.url;
+        if (owner.published_at) item.published_at = owner.published_at;
+        if (owner.date_label) item.date_label = owner.date_label;
+        if (owner.foundation && !item.foundation) item.foundation = owner.foundation;
+      }
     } else if (!key) {
       key = typeof item.url === 'string' && item.url ? normalizeForCompare(item.url) : `h:${hashText(String(item.headline ?? ''))}`;
     }

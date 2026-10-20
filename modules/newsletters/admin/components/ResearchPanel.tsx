@@ -247,7 +247,7 @@ export function ResearchPanel({ editionId, editionStatus, block, getVersion, onE
         ) : (
           <div className="text-[var(--gray-11)]">Research has not run yet for this block.</div>
         )}
-        <div className="flex flex-wrap gap-2 pt-1">
+        <div className="flex flex-wrap items-center gap-2 pt-1">
           <Button size="1" variant="solid" onClick={runNow} disabled={disabled || !canWrite || inFlight}>
             <ArrowPathIcon className="size-3.5" /> Run now
           </Button>
@@ -256,7 +256,7 @@ export function ResearchPanel({ editionId, editionStatus, block, getVersion, onE
               <StopCircleIcon className="size-3.5" /> Cancel
             </Button>
           )}
-          <Button size="1" variant="ghost" onClick={() => setHistoryOpen((v) => !v)}>
+          <Button size="1" variant="soft" color="gray" onClick={() => setHistoryOpen((v) => !v)}>
             {historyOpen ? <ChevronDownIcon className="size-3.5" /> : <ChevronRightIcon className="size-3.5" />} History ({blockRuns.length})
           </Button>
         </div>
