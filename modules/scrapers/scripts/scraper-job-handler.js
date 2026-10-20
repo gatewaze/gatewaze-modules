@@ -24,6 +24,7 @@ import { LinuxFoundationEventsScraper } from './scrapers/LinuxFoundationEventsSc
 import { AaifVirtualEventsScraper } from './scrapers/AaifVirtualEventsScraper.js';
 import { GatewazePortalEventsScraper } from './scrapers/GatewazePortalEventsScraper.js';
 import { fetchImage } from './lib/guarded-fetch.js';
+import { jobCompletionCounts } from './lib/job-completion-counts.js';
 import { TopicMatcher } from './scrapers/TopicMatcher.js';
 import { GeocodingService } from './scrapers/GeocodingService.js';
 import { EventProcessor } from './scrapers/EventProcessor.js';
@@ -402,11 +403,13 @@ export async function runScraperJob(jobId, logger, bullmqJob = null) {
     logger.log(`✅ Job loaded: ${job.scraper_name} (${job.event_type})`);
 
     // Per-job options come from the BullMQ payload ONLY, which only server
-    // code can write (the content-sources admin route). scrapers_jobs.metadata
-    // (migration 022) carries a copy for the audit trail but is never read
-    // here: that table is writable by any authenticated user under its RLS,
-    // so a DB column must not be able to steer a run. Exposed to the scraper
-    // as scraperConfig.options; most scrapers ignore it.
+    // code writes (the content-sources run route; the scrapers start/retry
+    // routes, which carry a FeedScraper job's source_ids over after strict
+    // validation in rerunOptionsFromMetadata). scrapers_jobs.metadata
+    // (migration 022) is never read here: that table is writable by any
+    // authenticated user under its RLS, so a DB column must not steer a run
+    // unvalidated. Exposed to the scraper as scraperConfig.options; most
+    // scrapers ignore it.
     const rawOptions = bullmqJob?.data?.options;
     const jobOptions = rawOptions && typeof rawOptions === 'object' && !Array.isArray(rawOptions) ? rawOptions : {};
 
@@ -451,8 +454,8 @@ export async function runScraperJob(jobId, logger, bullmqJob = null) {
       // via events_publish_state_set); these fields expose them to the scraper.
       content_category: scraperData.content_category || null,
       default_publish_state: scraperData.default_publish_state || null,
-      // Per-job options from scrapers_jobs.metadata (e.g. { source_ids } for
-      // a single-source run of the content-sources FeedScraper).
+      // Per-job options from the BullMQ payload (e.g. { source_ids } for a
+      // single-source run of the content-sources FeedScraper).
       options: jobOptions,
       config: {
         ...scraperData.config || {},
@@ -1080,24 +1083,14 @@ export async function runScraperJob(jobId, logger, bullmqJob = null) {
 
     logger.log(`📊 Final stats: ${processedCount} processed, ${skippedCount} skipped, ${failedCount} failed, ${filteredCount} filtered`);
 
-    // Update job as completed. Scrapers that persist their own rows (blog
-    // scrapers, the content-sources FeedScraper) return no events, so their
-    // own stats are the only counts there are; use them rather than report 0.
-    const own = (!events || events.length === 0) && scraper?.stats && typeof scraper.stats === 'object' ? scraper.stats : null;
-    const n = (v) => (Number.isFinite(Number(v)) ? Number(v) : 0);
-    await updateJobStatus(jobId, 'completed', own ? {
-      found: n(own.found),
-      total: n(own.found),
-      processed: n(own.inserted ?? own.processed),
-      skipped: n(own.skipped) + n(own.collapsed_url) + n(own.collapsed_title) + n(own.owned_elsewhere),
-      failed: n(own.failed_items ?? own.failed),
-    } : {
-      found: events?.length || 0,
-      total: events?.length || 0,
+    // Update job as completed. A self-persisting scraper (selfPersisting =
+    // true, e.g. the content-sources FeedScraper) reports its own stats;
+    // everything else, streaming scrapers included, reports the counters.
+    await updateJobStatus(jobId, 'completed', jobCompletionCounts(scraper, events, {
       processed: processedCount,
       skipped: skippedCount,
-      failed: failedCount
-    });
+      failed: failedCount,
+    }));
 
     const result = {
       processed: processedCount,
