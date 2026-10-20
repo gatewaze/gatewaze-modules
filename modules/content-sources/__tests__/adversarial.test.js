@@ -8,7 +8,7 @@ import assert from 'node:assert/strict';
 import { parseFeed, stripHtml, tagText, decodeEntities } from '../lib/feed-parser.js';
 import { articleBody, headTags, publishedDate, pageDescription, parseSitemap, sanitizeBody } from '../lib/html-meta.js';
 import { cleanText, entryBlurb } from '../lib/blurb.js';
-import { policeUrl } from '../lib/http.js';
+import { policeUrl, conditionalHeaders } from '../lib/http.js';
 
 const timed = (label, fn, budgetMs) => {
   const t0 = performance.now();
@@ -88,4 +88,31 @@ test('policeUrl refuses internal-looking hosts without saying why they resolve',
     assert.throws(() => policeUrl(bad), /not allowed|scheme|port/, bad);
   }
   assert.equal(policeUrl('https://blog.example.org/feed/').hostname, 'blog.example.org');
+});
+
+test('policeUrl: credentials, length, mDNS and home.arpa hosts refused; explicit :443 allowed', () => {
+  assert.throws(() => policeUrl('https://user:pass@example.org/feed/'), /credentials/);
+  assert.throws(() => policeUrl('https://user@example.org/feed/'), /credentials/);
+  assert.throws(() => policeUrl(`https://example.org/${'a'.repeat(2050)}`), /too long/);
+  assert.equal(policeUrl(`https://example.org/${'a'.repeat(2000)}`).hostname, 'example.org');
+  for (const bad of ['https://printer.local/', 'https://nas.home.arpa/feed', 'https://router.HOME.ARPA/', 'https://[::1]/', 'https://[fd00::1]/']) {
+    assert.throws(() => policeUrl(bad), /not allowed/, bad);
+  }
+  const u = policeUrl('https://example.org:443/feed/');
+  assert.equal(u.port, '');
+  assert.equal(u.toString(), 'https://example.org/feed/');
+});
+
+test('conditional GET validators with CR/LF or control characters are dropped, not sent', () => {
+  assert.deepEqual(conditionalHeaders('"abc"', 'Thu, 17 Sep 2026 12:00:00 GMT'), {
+    'If-None-Match': '"abc"',
+    'If-Modified-Since': 'Thu, 17 Sep 2026 12:00:00 GMT',
+  });
+  for (const bad of ['"abc"\r\nX-Injected: 1', '"abc"\nX: 1', '"a\u0000b"', '"\u00e9tag"', 'x'.repeat(257), '']) {
+    assert.equal(conditionalHeaders(bad, null)['If-None-Match'], undefined, JSON.stringify(bad));
+  }
+  for (const bad of ['Thu, 17 Sep 2026\r\nX-Injected: 1', 'Thu\t17', 'x'.repeat(65)]) {
+    assert.equal(conditionalHeaders(null, bad)['If-Modified-Since'], undefined, JSON.stringify(bad));
+  }
+  assert.deepEqual(conditionalHeaders(42, { toString: () => 'x' }), {});
 });
