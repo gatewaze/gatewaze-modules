@@ -1,6 +1,6 @@
 {
   "name": "@gatewaze-modules/content-triage",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "license": "Apache-2.0",
   "description": "Human-review gate for scraped and submitted content",
   "main": "index.ts",

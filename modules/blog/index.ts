@@ -7,7 +7,7 @@ const blogModule: GatewazeModule = {
   visibility: 'public',
   name: 'Blog',
   description: 'Publish and manage blog posts, categories, and integrated content',
-  version: '1.2.2',
+  version: '1.2.3',
   features: [
     'blog',
     'blog.posts',
@@ -26,6 +26,8 @@ const blogModule: GatewazeModule = {
     'migrations/008_blog_authors.sql',
     'migrations/009_member_gating.sql',
     'migrations/010_status_check_triage_states.sql',
+    'migrations/011_register_adapters_retry.sql',
+    'migrations/012_triage_sets_publish_state.sql',
   ],
 
   adminRoutes: [
