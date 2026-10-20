@@ -178,7 +178,17 @@ export function registerRoutes(app: Express, ctx?: RegisterCtx): void {
   // so this router does not depend on that gate being in front of it.
   const importsRouter = Router();
   importsRouter.use(rateLimit({ windowMs: 60_000, limit: 60, standardHeaders: true, legacyHeaders: false }));
-  importsRouter.use(json({ limit: '16kb' }));
+  // The platform parses JSON for everything under /api/modules before this
+  // router sees the request. Parsing again from a module-local copy of
+  // express reads a stream that is already spent ("stream is not readable",
+  // a 500 on every import button), so the local parser only runs when
+  // nothing upstream has.
+  const localJson = json({ limit: '16kb' });
+  importsRouter.use((req, res, next) => {
+    const r = req as { _body?: boolean; body?: unknown };
+    if (r._body || r.body !== undefined) return next();
+    return localJson(req, res, next);
+  });
   importsRouter.use(requireUser);
   importsRouter.use(async (req, res, next) => {
     try {
