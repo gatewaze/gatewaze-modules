@@ -1,0 +1,27 @@
+{
+  "name": "@gatewaze-modules/social-posts",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "main": "index.ts",
+  "types": "index.ts",
+  "description": "Writes LinkedIn post drafts from curated content with the ai module, and keeps them as drafts linked to their source items",
+  "exports": {
+    ".": "./index.ts",
+    "./admin/*": "./admin/*",
+    "./migrations/*": "./migrations/*",
+    "./lib/*": "./lib/*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "peerDependencies": {
+    "@supabase/supabase-js": "*"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.0",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.0"
+  }
+}
