@@ -19,7 +19,7 @@ import type { Job } from 'bullmq';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { computeResearchWindow, type PreviousEditionRow } from '../lib/research-window.js';
 import { queryDiscoveryPosts, type DiscoveryPostsInput } from '../lib/research-input.js';
-import { runResearchRecipe, validateItems, ensureResearchThread, ResearchRecipeError, sanitizeInline } from '../lib/research-recipe.js';
+import { runResearchRecipe, validateItems, ensureResearchThread, ResearchRecipeError, sanitizeInline, type InputOwner } from '../lib/research-recipe.js';
 import { stripTags } from '../lib/sanitize-inline.js';
 import { bindingHash, researchOutputFormat } from '../lib/research-merge.js';
 
@@ -77,7 +77,7 @@ export default async function handleResearchRun(job: Job<RunJobData>) {
     let items: Array<Record<string, unknown>> = [];
     let scalar: unknown = null;
     let inputKeys: Set<string> | null = null;
-    let inputByKey: Map<string, { url: string }> | null = null;
+    let inputByKey: Map<string, InputOwner> | null = null;
     if (binding.input.kind === 'discovery_posts') {
       const ctx = await loadWindowContext(sb, r);
       const w = (binding.input as { window?: unknown }).window;
@@ -86,7 +86,7 @@ export default async function handleResearchRun(job: Job<RunJobData>) {
       const t = binding.transform?.kind === 'template' ? binding.transform : undefined;
       const res = await queryDiscoveryPosts(sb, binding.input, win, { groupBy: t?.group_by ?? 'foundation', blurb: t?.blurb, suppressReleaseTitles: t?.suppress_release_titles });
       inputKeys = new Set(res.items.map((i) => i.key));
-      inputByKey = new Map(res.items.map((i) => [i.key, { url: i.url }]));
+      inputByKey = new Map(res.items.map((i) => [i.key, { url: i.url, published_at: i.published_at, date_label: i.date_label, foundation: i.foundation }]));
       // Template-path items are built from external feed titles and excerpts;
       // they go through the same validator as recipe output.
       items = validateItems(res.items, { inputKeys, inputByKey });
