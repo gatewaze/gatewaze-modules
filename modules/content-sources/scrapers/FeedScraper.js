@@ -227,6 +227,8 @@ export class FeedScraper {
       const r = await fetchFeedConditional(source.feed_url, {
         etag: source.etag,
         lastModified: source.last_modified,
+        // Full-content feeds run large (istio.io/feed.xml is over 5 MB); parsing is linear, so 15 MB is safe.
+        maxBytes: 15 * 1024 * 1024,
         timeoutMs: this.opts.feedTimeoutMs,
         proxyUrl,
       });
