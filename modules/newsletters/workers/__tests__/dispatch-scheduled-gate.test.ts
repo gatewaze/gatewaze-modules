@@ -10,9 +10,10 @@ const state: {
   due: Array<Record<string, unknown>>;
   gate: { allowed: boolean; reason_code: string; block_id: string | null };
   flipError: string | null;
+  gateError: { code?: string; message: string } | null;
   rpcs: Array<[string, unknown]>;
   calls: Call[];
-} = { due: [], gate: { allowed: true, reason_code: 'OK', block_id: null }, flipError: null, rpcs: [], calls: [] };
+} = { due: [], gate: { allowed: true, reason_code: 'OK', block_id: null }, flipError: null, gateError: null, rpcs: [], calls: [] };
 
 function query(table: string) {
   const call: Call = { table, op: 'select', filters: [] };
@@ -38,7 +39,7 @@ vi.mock('@supabase/supabase-js', () => ({
     from: (t: string) => query(t),
     rpc: async (fn: string, args: unknown) => {
       state.rpcs.push([fn, args]);
-      if (fn === 'newsletters_send_gate') return { data: [state.gate], error: null };
+      if (fn === 'newsletters_send_gate') return state.gateError ? { data: null, error: state.gateError } : { data: [state.gate], error: null };
       if (fn === 'fanout_newsletter_send_recipients_batch') return { data: [{ last_email: null, remaining: false }], error: null };
       return { data: null, error: null };
     },
@@ -55,6 +56,7 @@ beforeEach(() => {
   state.due = [{ id: 's1', edition_id: 'e1', last_error: null }];
   state.gate = { allowed: true, reason_code: 'OK', block_id: null };
   state.flipError = null;
+  state.gateError = null;
   state.rpcs = [];
   state.calls = [];
   vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -97,5 +99,22 @@ describe('dispatch-scheduled research gate', () => {
     expect(ups.map((u) => (u.payload as { status?: string }).status)).toEqual(['sending', undefined]);
     expect(ups[1].payload).toMatchObject({ last_error: 'SEND_GATE:RESEARCH_IN_PROGRESS:b2' });
     expect(r.errors).toEqual([]);
+  });
+
+  it('a gate error that is not a missing gate function fails closed: no fan-out', async () => {
+    state.gateError = { code: '42P01', message: 'relation "public.newsletters_research_runs" does not exist' };
+    const r = await handleDispatchScheduled({ data: { kind: 'x' } } as never);
+    expect(dispatchRpcs()).toEqual(['newsletters_send_gate']);
+    expect(r.processed).toBe(0);
+    const ups = updatesTo('newsletter_sends');
+    expect(ups[0].payload).toMatchObject({ status: 'failed', last_error: 'DISPATCH_FAILED' });
+    expect(JSON.stringify(ups[0].payload)).not.toContain('relation');
+  });
+
+  it('a missing gate function (pre-094 database) falls open', async () => {
+    state.gateError = { code: 'PGRST202', message: 'Could not find the function public.newsletters_send_gate(p_edition_id) in the schema cache' };
+    const r = await handleDispatchScheduled({ data: { kind: 'x' } } as never);
+    expect(dispatchRpcs()).toEqual(['newsletters_send_gate', 'fanout_newsletter_send_recipients_batch']);
+    expect(r.processed).toBe(1);
   });
 });

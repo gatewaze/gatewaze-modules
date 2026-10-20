@@ -38,6 +38,7 @@ RETURNS timestamptz LANGUAGE sql STABLE AS $$
   LEFT JOIN public.newsletters_template_collections c ON c.id = e.collection_id
   WHERE e.id = p_edition_id;
 $$;
+REVOKE ALL ON FUNCTION public.newsletters_effective_research_at(uuid) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.newsletters_effective_research_at(uuid) TO authenticated, service_role;
 
 CREATE INDEX IF NOT EXISTS idx_newsletters_editions_send_target

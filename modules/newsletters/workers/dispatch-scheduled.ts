@@ -26,7 +26,8 @@ async function sendGate(
   const { data, error } = await supabase.rpc('newsletters_send_gate', { p_edition_id: editionId });
   if (error) {
     // Pre-094 databases have no gate; the trigger is the enforcement either way.
-    if (/newsletters_send_gate|does not exist|PGRST202/i.test(error.message)) return { allowed: true, reason_code: 'OK', block_id: null };
+    // Only a missing gate FUNCTION falls open, never a missing relation inside it.
+    if (error.code === 'PGRST202' || /function public\.newsletters_send_gate\(.*\) does not exist/i.test(error.message)) return { allowed: true, reason_code: 'OK', block_id: null };
     throw new Error(`send gate check failed: ${error.message}`);
   }
   const row = (Array.isArray(data) ? data[0] : data) as { allowed: boolean; reason_code: string; block_id: string | null } | null;
@@ -173,12 +174,14 @@ export default async function handleDispatchScheduled(_job: Job<DispatchJobData>
     } catch (err) {
       const msg = `Send ${send.id}: ${(err as Error).message}`;
       console.error('[newsletter:dispatch-scheduled] fanout failed:', msg);
+      // last_error is readable by any signed-in user (newsletter_sends_select),
+      // so it carries a code only. The database text stays in the worker log.
       errors.push(msg);
       // Mark the send failed so it doesn't get retried forever and operators
       // see something concrete in the UI.
       const { error: failErr } = await supabase
         .from('newsletter_sends')
-        .update({ status: 'failed', ...(hasLastError ? { last_error: msg.slice(0, 2000) } : {}), updated_at: new Date().toISOString() })
+        .update({ status: 'failed', ...(hasLastError ? { last_error: 'DISPATCH_FAILED' } : {}), updated_at: new Date().toISOString() })
         .eq('id', send.id);
       if (failErr) console.error(`[newsletter:dispatch-scheduled] could not mark send ${send.id} failed: ${failErr.message}`);
     }
