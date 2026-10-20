@@ -63,3 +63,12 @@ describe('sanitizeInline', () => {
     expect(out).toBe('<a href="https://ok.example" rel="noopener nofollow">x</a>0');
   });
 });
+
+describe('validateItems takes dates from the input owner', () => {
+  it('copies published_at, date_label and foundation from the input, overriding the model', async () => {
+    const { validateItems } = await import('../research-recipe.js');
+    const inputByKey = new Map([['a.org/x', { url: 'https://a.org/x', published_at: '2026-10-15T00:00:00Z', date_label: '15 Oct', foundation: 'CNCF' }]]);
+    const out = validateItems([{ key: 'a.org/x', headline: 'H', url: 'https://evil.example/', published_at: '1999-01-01' }], { inputKeys: new Set(['a.org/x']), inputByKey });
+    expect(out[0]).toMatchObject({ url: 'https://a.org/x', published_at: '2026-10-15T00:00:00Z', date_label: '15 Oct', foundation: 'CNCF' });
+  });
+});
