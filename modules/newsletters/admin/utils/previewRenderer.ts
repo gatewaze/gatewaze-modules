@@ -12,6 +12,7 @@
 import { renderTemplate } from './templateParser';
 import { resolveStoragePathsInJson } from '@gatewaze/shared';
 import type { NewsletterEdition, EditionBlock, OutputFormat } from './types';
+import { renderContentOf } from '../lib/research-block';
 
 /**
  * Generate newsletter HTML for preview purposes.
@@ -98,10 +99,13 @@ function renderBlock(block: EditionBlock, useRichText: boolean, storageBucketUrl
     ? blockContent.rich_text_template || blockContent.html_template
     : blockContent.html_template;
 
+  // Research blocks render the resolved output field, never the raw research
+  // layer (lib/research-block.ts); other blocks pass through unchanged.
+  const content = renderContentOf(block);
   // Resolve relative storage paths in block content.
   const resolvedBlockContent = storageBucketUrl
-    ? (resolveStoragePathsInJson(block.content, storageBucketUrl) as Record<string, unknown>)
-    : (block.content as Record<string, unknown>);
+    ? (resolveStoragePathsInJson(content, storageBucketUrl) as Record<string, unknown>)
+    : content;
 
   // Inject bricks content and edition-level data into the block's content context
   const context: Record<string, unknown> = {

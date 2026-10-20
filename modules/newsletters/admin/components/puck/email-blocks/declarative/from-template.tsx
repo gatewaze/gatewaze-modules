@@ -15,12 +15,16 @@ import type { EmailBlockEntry } from '../registry-types.js';
 import { parseTemplate } from './parse-template.js';
 import { DeclarativeBlock, type Content } from './render.js';
 import { NewsletterImageFieldAdapter } from '../image-field-adapter.js';
+import { defaultFor, defaultsFor, type SchemaFieldDef } from '../../../../../lib/schema-defaults.js';
 
-interface DeclField {
-  type?: 'text' | 'textarea' | 'richtext' | 'array' | 'number' | 'slot' | 'image' | 'boolean';
+// The per-field default lives in lib/schema-defaults.ts so the cadence worker
+// seeds a new edition with exactly what dragging the block from the palette
+// gives. Re-exported here so existing importers keep working.
+export { defaultFor, defaultsFor };
+
+interface DeclField extends SchemaFieldDef {
   label?: string;
   fields?: Record<string, DeclField>;
-  default?: unknown;
 }
 
 function titleCase(key: string): string {
@@ -69,23 +73,6 @@ function toField(key: string, def: DeclField): Field {
   }
 }
 
-function defaultFor(def: DeclField): unknown {
-  // Boolean toggles round-trip as the strings 'true'/'false' (see toField),
-  // so normalise the default to a matching string regardless of how it was
-  // written in the schema (true / "true" / omitted → 'true'; false → 'false').
-  if (def.type === 'boolean') return def.default === false || def.default === 'false' ? 'false' : 'true';
-  if (def.default !== undefined) return def.default;
-  if (def.type === 'array' || def.type === 'slot') return [];
-  if (def.type === 'number') return 0;
-  return '';
-}
-
-function defaultsFor(fields: Record<string, DeclField>): Content {
-  const out: Content = {};
-  for (const [k, v] of Object.entries(fields)) out[k] = defaultFor(v);
-  return out;
-}
-
 export interface DeclarativeBlockOptions {
   componentId: string;
   label: string;
@@ -102,11 +89,19 @@ export interface DeclarativeBlockOptions {
    * authority (legacy + test usage).
    */
   schema?: Record<string, unknown>;
+  /**
+   * Schema fields the editor must NOT offer for editing: no Puck sidebar
+   * field and no inline editing on the canvas. Used for a research block's
+   * output field, which only runs write (the Research panel is its editing
+   * surface). The field still renders and keeps its schema default.
+   */
+  lockedFields?: ReadonlyArray<string>;
 }
 
 export function declarativeBlockEntry(opts: DeclarativeBlockOptions): EmailBlockEntry {
   const { schema: parsedSchema, nodes } = parseTemplate(opts.source);
   const schemaMap = (opts.schema ?? parsedSchema ?? {}) as Record<string, DeclField>;
+  const locked = new Set(opts.lockedFields ?? []);
 
   const fields: Record<string, Field> = {};
   const defaultProps: Content = {};
@@ -115,8 +110,9 @@ export function declarativeBlockEntry(opts: DeclarativeBlockOptions): EmailBlock
   // `if` guard, so the operator can click in and fill it.
   const editableFields = new Set<string>();
   for (const [k, v] of Object.entries(schemaMap)) {
-    fields[k] = toField(k, v);
     defaultProps[k] = defaultFor(v);
+    if (locked.has(k)) continue;
+    fields[k] = toField(k, v);
     if (v.type === undefined || v.type === 'text' || v.type === 'textarea' || v.type === 'richtext') {
       editableFields.add(k);
     }
