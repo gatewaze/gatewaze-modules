@@ -83,7 +83,17 @@ async function tickCollection(sb: SupabaseClient, col: CollectionRow, c: Cadence
     throw new Error(`edition insert failed: ${ed.error?.message ?? 'no row'}`);
   }
   const editionId = (ed.data as { id: string }).id;
-  await sb.from('newsletters_cadence_occurrences').update({ edition_id: editionId }).eq('collection_id', col.id).eq('slot', slotIso);
+  // Link the claim to its edition. If this fails the claim still has no
+  // edition_id, and the 10-minute release above would free the slot and a
+  // later tick would create a SECOND edition for it. So undo: delete the
+  // edition (nothing references it yet) and release the claim now; the next
+  // tick starts clean.
+  const link = await sb.from('newsletters_cadence_occurrences').update({ edition_id: editionId }).eq('collection_id', col.id).eq('slot', slotIso).select('slot');
+  if (link.error || !link.data?.length) {
+    const del = await sb.from('newsletters_editions').delete().eq('id', editionId);
+    await sb.from('newsletters_cadence_occurrences').delete().eq('collection_id', col.id).eq('slot', slotIso).is('edition_id', null);
+    throw new Error(`could not link edition ${editionId} to its slot (${link.error?.message ?? 'claim row gone'}); ${del.error ? `and could not delete it: ${del.error.message}` : 'edition deleted, slot released'}`);
+  }
 
   // Seed blocks from edition.json.
   if (library?.new_edition_blocks) {
@@ -112,15 +122,21 @@ async function tickCollection(sb: SupabaseClient, col: CollectionRow, c: Cadence
 
   // Supersede an untouched auto-created draft whose own slot has passed.
   // "Untouched" = no safe-save revision rows (the editor writes one per
-  // save) and no send rows; research writes do not count as touching.
+  // save), no send rows, and no research edit layer on any block (a pin or
+  // an override is saved by newsletters_research_edits_write, which bumps the
+  // version without writing a revision). Research RUNS bump the version too
+  // and do not count as touching, so the version number alone cannot decide.
   const { data: olds } = await sb.from('newsletters_editions').select('id, send_target_at, metadata').eq('collection_id', col.id).eq('status', 'draft').neq('id', editionId).lt('send_target_at', now.toISOString());
   for (const o of (olds ?? []) as Array<{ id: string; send_target_at: string; metadata: Record<string, unknown> | null }>) {
     if (!o.metadata?.auto_created) continue;
-    const [{ count: sends }, { count: revisions }] = await Promise.all([
+    const [sendsQ, revisionsQ, editsQ] = await Promise.all([
       sb.from('newsletter_sends').select('id', { count: 'exact', head: true }).eq('edition_id', o.id),
       sb.from('newsletters_edition_revisions').select('id', { count: 'exact', head: true }).eq('edition_id', o.id),
+      sb.from('newsletters_edition_blocks').select('id', { count: 'exact', head: true }).eq('edition_id', o.id).not('content->research_edits', 'is', null),
     ]);
-    if ((sends ?? 0) > 0 || (revisions ?? 0) > 0) continue;
+    // Any failed count is "touched": never archive on a guess.
+    if (sendsQ.error || revisionsQ.error || editsQ.error) { log(`${col.slug}: could not check edition ${o.id} for edits; left alone`); continue; }
+    if ((sendsQ.count ?? 0) > 0 || (revisionsQ.count ?? 0) > 0 || (editsQ.count ?? 0) > 0) continue;
     // Guard on status so a concurrent edit that published it is not archived; re-read metadata inside the same statement.
     const { data: fresh } = await sb.from('newsletters_editions').select('metadata').eq('id', o.id).eq('status', 'draft').maybeSingle();
     if (!fresh) continue;

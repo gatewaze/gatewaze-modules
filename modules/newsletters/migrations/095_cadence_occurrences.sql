@@ -29,9 +29,10 @@ CREATE POLICY cadence_occ_admin ON public.newsletters_cadence_occurrences
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.newsletters_cadence_occurrences TO authenticated;
 GRANT ALL ON public.newsletters_cadence_occurrences TO service_role;
 
--- Backstop: deleting a cadence edition marks its slot skipped (the delete
--- route does this too). ON DELETE SET NULL already clears edition_id; this
--- flips the state so the tick never recreates it.
+-- Deleting a cadence edition marks its slot skipped. This trigger is the
+-- only place that happens: the editor's delete (EditorTab) is a plain row
+-- delete. ON DELETE SET NULL clears edition_id; this flips the state so the
+-- tick never recreates it.
 CREATE OR REPLACE FUNCTION public.newsletters_cadence_edition_deleted() RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
 BEGIN
   UPDATE public.newsletters_cadence_occurrences

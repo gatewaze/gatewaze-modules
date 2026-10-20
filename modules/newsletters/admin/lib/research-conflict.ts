@@ -58,6 +58,11 @@ export function diffResearchOnly(
   const no = (reason: string): ResearchDiff => ({ only_research: false, replacements: [], reason });
   if (loaded.length !== fresh.length) return no(`block count ${loaded.length} → ${fresh.length}`);
   const freshById = new Map(fresh.map((b) => [b.id, b]));
+  // Equal counts are not equal sets: a duplicated id on either side, or a
+  // fresh block the snapshot never had, is a structural change.
+  const loadedIds = new Set(loaded.map((b) => b.id));
+  if (loadedIds.size !== loaded.length || freshById.size !== fresh.length) return no('duplicate block ids');
+  for (const b of fresh) if (!loadedIds.has(b.id)) return no(`block ${b.id} is new`);
   const replacements: ResearchFieldReplacement[] = [];
 
   for (const a of loaded) {

@@ -14,7 +14,9 @@
  *
  * The blurb rules are the harvest's (render.py entry_blurb), kept here as a
  * small copy of content-sources/lib/blurb.js so this branch does not depend
- * on that module being present; the two carry the same test cases.
+ * on that module being present. lib/__tests__/research-input.test.ts pins
+ * this copy's behaviour (entryBlurb, oneSentence, dateLabel); keep the two
+ * in step by hand when either changes.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
@@ -123,10 +125,14 @@ export async function queryDiscoveryPosts(
     .eq('is_external', true)
     .not('discovery_source_id', 'is', null)
     .in('publish_state', states)
-    .lte('published_at', window.to)
     .order('published_at', { ascending: false, nullsFirst: false })
     .limit(Math.min(opts.limit ?? 1000, 2000));
-  q = requireDate ? q.gte('published_at', window.from) : q.or(`published_at.gte.${window.from},published_at.is.null`);
+  // window.from/to are ISO timestamps computed server-side (research-window),
+  // not user input. Undated posts are kept only when require_date is false,
+  // so the date bounds and the IS NULL branch sit inside one OR.
+  q = requireDate
+    ? q.gte('published_at', window.from).lte('published_at', window.to)
+    : q.or(`and(published_at.gte.${window.from},published_at.lte.${window.to}),published_at.is.null`);
   if (Array.isArray(input.foundations) && input.foundations.length) {
     const safe = input.foundations.filter((f) => typeof f === 'string' && f.length <= 200);
     q = q.in('discovery_sources.foundation', safe);
