@@ -185,6 +185,14 @@ export class FeedScraper {
       }
     }
 
+    // Every write failing is a broken schema or permission, not a quiet week:
+    // fail the job so it shows red, instead of completing with 0 items.
+    if (this.stats.failed_items > 0 && this.stats.inserted === 0 && this.stats.updated === 0) {
+      const msg = `every post write failed (${this.stats.failed_items}); first error: ${this.firstWriteError}`;
+      this.log(`❌ ${msg}`);
+      throw new Error(msg);
+    }
+
     // Phase 2: body backlog.
     if (this.opts.fetchFullContent && this.budgetLeft() > 60_000) {
       await this.fetchBodies(sb);
@@ -482,6 +490,7 @@ export class FeedScraper {
       this.log(`✅ Saved: ${entry.title} (${source.project})`);
     } catch (e) {
       this.stats.failed_items++;
+      if (!this.firstWriteError) this.firstWriteError = String(e?.message ?? e);
       this.log(`❌ Failed "${entry.title}" (${source.project}): ${e?.message ?? e}`);
     }
   }
