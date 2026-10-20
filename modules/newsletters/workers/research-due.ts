@@ -20,14 +20,12 @@
  */
 
 import type { Job } from 'bullmq';
+import { enqueueResearchRun, type EnqueueJob } from '../lib/enqueue-research-run.js';
 import { createClient } from '@supabase/supabase-js';
 
 interface DueJobData { kind: string; daily?: boolean }
 
 const STALE_MINUTES = 30;
-
-/** The platform's enqueue helper, passed to worker handlers (lib/queue/registry.ts). */
-type EnqueueJob = (queue: string, name: string, data: Record<string, unknown>, opts?: Record<string, unknown>) => Promise<{ id: string | undefined }>;
 
 export default async function handleResearchDue(job: Job<DueJobData>, ctx?: { enqueueJob?: EnqueueJob }) {
   const sb = createClient(process.env.SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!, { auth: { autoRefreshToken: false, persistSession: false } });
@@ -111,7 +109,7 @@ export default async function handleResearchDue(job: Job<DueJobData>, ctx?: { en
       }
       const runId = (ins.data as { id: string }).id;
       try {
-        await enqueueRun(runId, ctx?.enqueueJob);
+        await enqueueResearchRun(runId, ctx?.enqueueJob);
         created++;
       } catch (e) {
         // queued → cancelled (the 093 guard refuses queued → failed). It frees
@@ -125,12 +123,3 @@ export default async function handleResearchDue(job: Job<DueJobData>, ctx?: { en
   if (created) log(`enqueued ${created} run(s)`);
 }
 
-// Through the platform's enqueueJob, not a direct bullmq import: the module
-// is loaded from its own directory, where ESM import('bullmq') cannot resolve.
-async function enqueueRun(runId: string, enqueueJob: EnqueueJob | undefined) {
-  if (typeof enqueueJob !== 'function') throw new Error('no enqueueJob in the worker context');
-  const { id } = await enqueueJob('jobs', 'newsletters:research-run', { kind: 'newsletters:research-run', runId }, RUN_JOB_OPTS(runId));
-  if (!id) throw new Error('the jobs queue is not registered in this worker');
-}
-
-const RUN_JOB_OPTS = (runId: string) => ({ jobId: `newsletters-research-run-${runId}`, attempts: 2, backoff: { type: 'exponential', delay: 30_000 }, removeOnComplete: { count: 500 }, removeOnFail: { count: 500 } });
