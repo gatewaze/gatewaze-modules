@@ -200,7 +200,7 @@ export function resolveSite(siteUrl: string): Promise<ResolveResult> {
   });
 }
 
-/** Create a source. Admin callers land it as `active` (cross-domain feeds stay pending). */
+/** Create a source. Admin callers land a same-domain feed or sitemap as `active`; cross-domain feeds and `html` sites stay pending. */
 export async function createSource(body: CreateSourceBody): Promise<DiscoverySource> {
   const r = await request<{ source: DiscoverySource }>('/admin/content-sources/sources', {
     method: 'POST',

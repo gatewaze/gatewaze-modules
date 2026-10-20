@@ -8,9 +8,9 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 // Plain-JS libraries shared with the scraper worker (tsconfig allowJs).
-import { resolveFeed } from './resolve-feed.js';
+import { resolveFeed, isCrossDomain } from './resolve-feed.js';
 import { policeUrl } from './http.js';
-import { normalizeUrl, registrableDomain, hostOf } from './normalize-url.js';
+import { normalizeUrl } from './normalize-url.js';
 
 export const SOURCE_KINDS = ['feed', 'sitemap', 'html'] as const;
 export const SOURCE_STATUSES = ['pending', 'active', 'paused', 'dead'] as const;
@@ -141,7 +141,7 @@ export async function submit(sb: SupabaseClient, input: SubmitInput, ctx: Submit
   let resolvedTitle: string | null = null;
   // Re-checked here even when the caller chose the feed, so a UI cannot hand
   // us a third party's feed under a site's name without the row saying so.
-  let crossDomain = feedUrl ? registrableDomain(hostOf(feedUrl)) !== registrableDomain(hostOf(siteUrl)) : false;
+  let crossDomain = feedUrl ? isCrossDomain(feedUrl, siteUrl) : false;
   if (!feedUrl && kind !== 'html') {
     const r = (await resolveFeed(siteUrl)) as ResolveResult;
     const best = r.candidates[0];
@@ -175,11 +175,7 @@ export async function submit(sb: SupabaseClient, input: SubmitInput, ctx: Submit
     }
   }
 
-  // Activation rules: non-admins always land pending; an admin activates a
-  // feed they chose (cross-domain included, the note records it), but a site
-  // with no feed and no extractor has nothing to run and stays pending.
-  const runnable = kind === 'feed' || kind === 'sitemap' || (kind === 'html' && !!extractorId);
-  const activate = ctx.isAdmin && runnable && !(crossDomain && !input.feed_url) && input.as_pending !== true;
+  const activate = shouldActivate({ kind, crossDomain, isAdmin: ctx.isAdmin, asPending: input.as_pending === true });
   const row = {
     kind,
     site_url: siteUrl,
@@ -202,6 +198,22 @@ export async function submit(sb: SupabaseClient, input: SubmitInput, ctx: Submit
     throw new SourceError(500, 'QUERY_ERROR', error.message);
   }
   return data as unknown as Record<string, unknown>;
+}
+
+/**
+ * Activation rules for a new source. Only an admin-scoped caller activates,
+ * and only a source the FeedScraper can actually run:
+ *  - non-admins always land pending;
+ *  - as_pending (the hosted MCP server's key is the deployment's, not the
+ *    user's) forces pending;
+ *  - a cross-domain feed stays pending even when the admin chose it, so a
+ *    second person confirms a third party's feed under a project's name;
+ *  - kind 'html' stays pending: the FeedScraper reads feeds and sitemaps only,
+ *    so an html row has nothing that would run it yet.
+ */
+export function shouldActivate(o: { kind: SourceKind; crossDomain: boolean; isAdmin: boolean; asPending: boolean }): boolean {
+  const runnable = o.kind === 'feed' || o.kind === 'sitemap';
+  return o.isAdmin && runnable && !o.crossDomain && !o.asPending;
 }
 
 async function findByNorm(sb: SupabaseClient, norm: string) {
@@ -274,6 +286,15 @@ export async function patch(sb: SupabaseClient, id: string, input: PatchInput) {
     if (finalKind === 'sitemap' && !finalPrefix) throw new SourceError(400, 'VALIDATION_ERROR', 'a sitemap source needs a path_prefix');
   }
   if (input.scraper_id !== undefined) upd.scraper_id = scraperId(input.scraper_id);
+  if (upd.status === 'active') {
+    // The FeedScraper cannot run an html row (no extractor yet), so it never goes active.
+    let finalKind = upd.kind as string | undefined;
+    if (!finalKind) {
+      const { data: cur } = await sb.from('discovery_sources').select('kind').eq('id', id).maybeSingle();
+      finalKind = (cur as { kind?: string } | null)?.kind;
+    }
+    if (finalKind === 'html') throw new SourceError(400, 'VALIDATION_ERROR', 'an html source cannot be activated: give it a feed or sitemap first');
+  }
   if (Object.keys(upd).length === 0) throw new SourceError(400, 'VALIDATION_ERROR', 'nothing to change');
 
   const { data, error } = await sb.from('discovery_sources').update(upd).eq('id', id).select(PUBLIC_SOURCE_FIELDS.join(',')).maybeSingle();
