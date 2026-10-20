@@ -1,0 +1,26 @@
+{
+  "name": "@gatewaze-modules/content-sources",
+  "version": "1.0.0",
+  "license": "Apache-2.0",
+  "main": "index.ts",
+  "types": "index.ts",
+  "description": "Registry of feeds and scrape targets (blogs, news, sitemaps) with a generic feed scraper that lands posts in the blog module as pending_review. Sources are managed in the Content hub, the public API, MCP and (later) Slack.",
+  "exports": {
+    ".": "./index.ts",
+    "./migrations/*": "./migrations/*",
+    "./scrapers/*": "./scrapers/*",
+    "./lib/*": "./lib/*"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "node --test '__tests__/*.test.js'"
+  },
+  "dependencies": {
+    "sanitize-html": "^2.13.0",
+    "undici": "^7.24.0"
+  },
+  "peerDependencies": {
+    "@gatewaze/shared": "*",
+    "@supabase/supabase-js": "*"
+  }
+}

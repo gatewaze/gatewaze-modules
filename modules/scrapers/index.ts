@@ -61,6 +61,7 @@ const scrapersModule: GatewazeModule = {
     'migrations/019_started_at_on_pickup.sql',
     'migrations/020_event_type_manual_wins.sql',
     'migrations/021_seed_luma_pending_events_scraper.sql',
+    'migrations/022_create_job_metadata.sql',
   ],
 
   adminRoutes: [

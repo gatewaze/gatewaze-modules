@@ -401,6 +401,15 @@ export async function runScraperJob(jobId, logger, bullmqJob = null) {
     const job = jobData[0];
     logger.log(`✅ Job loaded: ${job.scraper_name} (${job.event_type})`);
 
+    // Per-job options come from the BullMQ payload ONLY, which only server
+    // code can write (the content-sources admin route). scrapers_jobs.metadata
+    // (migration 022) carries a copy for the audit trail but is never read
+    // here: that table is writable by any authenticated user under its RLS,
+    // so a DB column must not be able to steer a run. Exposed to the scraper
+    // as scraperConfig.options; most scrapers ignore it.
+    const rawOptions = bullmqJob?.data?.options;
+    const jobOptions = rawOptions && typeof rawOptions === 'object' && !Array.isArray(rawOptions) ? rawOptions : {};
+
     // Get scraper configuration
     const { data: scraperData } = await getSupabase()
       .from('scrapers')
@@ -442,6 +451,9 @@ export async function runScraperJob(jobId, logger, bullmqJob = null) {
       // via events_publish_state_set); these fields expose them to the scraper.
       content_category: scraperData.content_category || null,
       default_publish_state: scraperData.default_publish_state || null,
+      // Per-job options from scrapers_jobs.metadata (e.g. { source_ids } for
+      // a single-source run of the content-sources FeedScraper).
+      options: jobOptions,
       config: {
         ...scraperData.config || {},
         baseUrl: scraperData.base_url,
