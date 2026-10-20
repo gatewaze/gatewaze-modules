@@ -65,13 +65,14 @@ async function tickCollection(sb: SupabaseClient, col: CollectionRow, c: Cadence
   const tz = c.timezone ?? 'UTC';
   const title = editionTitle(c.title_pattern, slot, tz, `${col.name} — ${localDate(slot, tz).ymd}`);
 
+  // Same columns as the admin's new-edition insert. templates_library_id is not
+  // set: databases baselined past newsletters 020 (AAIF prod, LF dev) lack it.
   const ed = await sb.from('newsletters_editions').insert({
     title,
     edition_date: localDate(slot, tz).ymd,
     status: 'draft',
     collection_id: col.id,
     content_category: col.content_category,
-    templates_library_id: library?.id ?? null,
     send_target_at: slotIso,
     research_at: null,
     metadata: { auto_created: true, cadence_slot: slotIso },
