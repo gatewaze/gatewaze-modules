@@ -12,10 +12,16 @@
 --     cannot double the AI spend).
 --   * a state trigger makes terminal states terminal.
 --   * newsletters_research_write() is the ONLY write path for the research
---     layer: one field by jsonb_set, draft editions only, refused when a
---     newer run has already completed, and it BUMPS the edition version so
---     an editor holding a stale copy gets version_conflict instead of
---     writing the old list back. Service role only.
+--     layer: one field by jsonb_set, open editions only (see
+--     newsletters_edition_research_open), refused when a newer run has
+--     already completed, and it BUMPS the edition version so an editor
+--     holding a stale copy gets version_conflict instead of writing the old
+--     list back. Service role only.
+--   * "Open" is a draft OR a published edition that has not started going
+--     out. Sending requires published, so research due before a scheduled
+--     send must still land on the published edition; once any send of the
+--     edition is sending/sent/paused/cancelling, or has sent to anyone, the
+--     content is what went out and research stops.
 -- Executed in the spec's .layer4.sql run. Idempotent.
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS public.newsletters_research_runs (
@@ -33,7 +39,7 @@ CREATE TABLE IF NOT EXISTS public.newsletters_research_runs (
   failure_kind    text CHECK (failure_kind IN ('cost_cap','recipe','input','stale','output_invalid','other')),
   input_summary   jsonb,                     -- counts, window, source ids; not the payload
   output          jsonb,                     -- the value written to output.field
-  ai_thread_id    uuid REFERENCES public.ai_threads(id) ON DELETE SET NULL,
+  ai_thread_id    uuid,                      -- ai_threads.id; no FK, newsletters does not depend on the ai module's schema
   cost_micro_usd  bigint NOT NULL DEFAULT 0,
   error           text,
   started_at      timestamptz,
@@ -41,6 +47,8 @@ CREATE TABLE IF NOT EXISTS public.newsletters_research_runs (
   created_by      uuid REFERENCES auth.users(id) ON DELETE SET NULL,
   created_at      timestamptz NOT NULL DEFAULT now()
 );
+-- An earlier draft of this migration had an FK to ai_threads; drop it where it ran.
+ALTER TABLE public.newsletters_research_runs DROP CONSTRAINT IF EXISTS newsletters_research_runs_ai_thread_id_fkey;
 CREATE INDEX IF NOT EXISTS idx_newsletters_research_runs_block ON public.newsletters_research_runs (edition_id, block_id, seq DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS newsletters_research_runs_one_inflight
   ON public.newsletters_research_runs (block_id) WHERE status IN ('queued','running');
@@ -73,6 +81,23 @@ REVOKE ALL ON public.newsletters_research_runs FROM PUBLIC, anon, authenticated;
 GRANT SELECT ON public.newsletters_research_runs TO authenticated;
 GRANT ALL ON public.newsletters_research_runs TO service_role;
 
+-- Whether research may still change an edition (runs and the edit layer).
+-- Service role only: it would otherwise tell any signed-in user whether an
+-- edition has gone out. The two SECURITY DEFINER writers below call it as
+-- the owner.
+CREATE OR REPLACE FUNCTION public.newsletters_edition_research_open(p_edition_id uuid)
+RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path = public, pg_temp AS $$
+  SELECT coalesce((
+    SELECT e.status IN ('draft','published')
+       AND NOT EXISTS (
+         SELECT 1 FROM public.newsletter_sends s
+          WHERE s.edition_id = e.id
+            AND (s.status IN ('sending','sent','paused','cancelling') OR coalesce(s.sent_count, 0) > 0))
+      FROM public.newsletters_editions e WHERE e.id = p_edition_id), false);
+$$;
+REVOKE ALL ON FUNCTION public.newsletters_edition_research_open(uuid) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.newsletters_edition_research_open(uuid) TO service_role;
+
 -- The research layer write.
 CREATE OR REPLACE FUNCTION public.newsletters_research_write(p_block_id uuid, p_field text, p_value jsonb, p_run_id uuid)
 RETURNS integer LANGUAGE plpgsql SECURITY DEFINER SET search_path = public, pg_temp AS $$
@@ -83,7 +108,7 @@ BEGIN
   FROM public.newsletters_edition_blocks b JOIN public.newsletters_editions e ON e.id = b.edition_id
   WHERE b.id = p_block_id AND b.deleted_at IS NULL FOR UPDATE OF e;
   IF v_edition IS NULL THEN RAISE EXCEPTION 'BLOCK_NOT_FOUND'; END IF;
-  IF v_status <> 'draft' THEN RAISE EXCEPTION 'EDITION_NOT_DRAFT %', v_status; END IF;
+  IF NOT public.newsletters_edition_research_open(v_edition) THEN RAISE EXCEPTION 'EDITION_NOT_OPEN %', v_status; END IF;
   -- Only a RUNNING run may write: a run cancelled or swept while the worker
   -- was still going must not land its output.
   SELECT seq INTO v_run_seq FROM public.newsletters_research_runs
@@ -115,7 +140,7 @@ BEGIN
   FROM public.newsletters_edition_blocks b JOIN public.newsletters_editions e ON e.id = b.edition_id
   WHERE b.id = p_block_id AND b.deleted_at IS NULL FOR UPDATE OF e;
   IF v_edition IS NULL THEN RAISE EXCEPTION 'BLOCK_NOT_FOUND'; END IF;
-  IF v_status <> 'draft' THEN RAISE EXCEPTION 'EDITION_NOT_DRAFT %', v_status; END IF;
+  IF NOT public.newsletters_edition_research_open(v_edition) THEN RAISE EXCEPTION 'EDITION_NOT_OPEN %', v_status; END IF;
   IF p_expected_version IS NULL THEN RAISE EXCEPTION 'VERSION_REQUIRED'; END IF;
   IF v_version <> p_expected_version THEN
     RAISE EXCEPTION 'version_conflict' USING ERRCODE = '55006';

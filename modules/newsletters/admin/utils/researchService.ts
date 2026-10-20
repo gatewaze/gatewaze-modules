@@ -38,6 +38,8 @@ export interface EditionResearch {
   blocks: Array<{ id: string; def_id: string; binding: Record<string, unknown>; latest_run: ResearchRun | null }>;
   gate: SendGate | null;
   effective_research_at: string | null;
+  /** Research may still change this edition: a draft, or published and not yet sending (newsletters_edition_research_open). */
+  research_open?: boolean;
 }
 
 async function jfetch<T>(path: string, init?: RequestInit): Promise<T> {
@@ -79,7 +81,7 @@ export const researchService = {
 export function sendGateMessage(code: string, blockName?: string | null): string {
   const block = blockName ? `"${blockName}"` : 'a research block';
   switch (code) {
-    case 'NO_RESEARCH_RUN': return `Research has not run yet for ${block}. Run it from the block's Research panel, or remove the block.`;
+    case 'NO_RESEARCH_RUN': return `Research has not run yet for ${block}. Run it from the block's Research panel (this works on a published edition too), or remove the block.`;
     case 'RESEARCH_IN_PROGRESS': return `Research is still running for ${block}. Wait for it to finish (or cancel it) before sending.`;
     case 'COST_CAP_BREACH': return `Research failed on its cost cap for ${block}; raise the cap and re-run, or remove the block.`;
     default: return `This edition cannot be sent yet (${code}).`;

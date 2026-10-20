@@ -10,7 +10,7 @@
  * Steps: queued → running; resolve the input (discovery_posts query, or a
  * recipe); apply the transform (template, or a recipe); validate the output;
  * write the research layer through newsletters_research_write (one field,
- * draft only, newer-run-wins, bumps the edition version); complete. Any
+ * open editions only, newer-run-wins, bumps the edition version); complete. Any
  * failure records failure_kind so the send gate and the UI can tell a cost
  * cap from a broken recipe.
  */
@@ -20,7 +20,7 @@ import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { computeResearchWindow, type PreviousEditionRow } from '../lib/research-window.js';
 import { queryDiscoveryPosts, type DiscoveryPostsInput } from '../lib/research-input.js';
 import { runResearchRecipe, validateItems, ensureResearchThread, ResearchRecipeError, sanitizeInline } from '../lib/research-recipe.js';
-import { bindingHash } from '../lib/research-merge.js';
+import { bindingHash, researchOutputFormat } from '../lib/research-merge.js';
 
 interface RunJobData { kind: string; runId: string }
 
@@ -56,7 +56,10 @@ export default async function handleResearchRun(job: Job<RunJobData>) {
 
   const fail = async (kind: 'cost_cap' | 'recipe' | 'input' | 'stale' | 'output_invalid' | 'other', message: string, cost = 0) => {
     log(`FAILED (${kind}): ${message}`);
-    await sb.from('newsletters_research_runs').update({ status: 'failed', failure_kind: kind, error: message.slice(0, 2000), cost_micro_usd: cost }).eq('id', runId);
+    // Only a run still running can fail: one cancelled or swept meanwhile
+    // keeps its terminal state (the 093 guard would refuse the write anyway).
+    const { error: fErr } = await sb.from('newsletters_research_runs').update({ status: 'failed', failure_kind: kind, error: message.slice(0, 2000), cost_micro_usd: cost }).eq('id', runId).eq('status', 'running');
+    if (fErr) log(`could not record the failure: ${fErr.message}`);
     if (kind === 'cost_cap' || kind === 'stale') await notifyAdmins(sb, r, kind, message).catch(() => {});
   };
 
@@ -64,7 +67,7 @@ export default async function handleResearchRun(job: Job<RunJobData>) {
     const binding = r.binding;
     if (!binding || binding.kind !== 'research' || !binding.output?.field) return fail('input', 'run has no research binding');
     const field = binding.output.field;
-    const format = binding.output.format ?? 'array';
+    const format = researchOutputFormat(binding);
     let cost = 0;
     let aiThreadId: string | null = null;
     let inputSummary: Record<string, unknown> = {};
@@ -129,7 +132,7 @@ export default async function handleResearchRun(job: Job<RunJobData>) {
         await sb.from('newsletters_research_runs').update({ status: 'complete', output: value as never, input_summary: inputSummary, cost_micro_usd: cost, binding_hash: hash, error: 'superseded: not applied' }).eq('id', runId);
         return;
       }
-      if (/EDITION_NOT_DRAFT/.test(wErr.message)) return fail('other', `edition is no longer a draft: ${wErr.message}`, cost);
+      if (/EDITION_NOT_OPEN/.test(wErr.message)) return fail('other', `edition has started sending or is no longer a draft or published: ${wErr.message}`, cost);
       throw new Error(`research write failed: ${wErr.message}`);
     }
     const done = await sb.from('newsletters_research_runs').update({ status: 'complete', output: value as never, input_summary: inputSummary, cost_micro_usd: cost, binding_hash: hash }).eq('id', runId).select('id');
@@ -178,7 +181,14 @@ async function loadWindowContext(sb: SupabaseClient, r: RunRow) {
       let researchStartedAt: string | null = null;
       let keys: string[] = [];
       if (b) {
-        const lastRun = await sb.from('newsletters_research_runs').select('started_at, binding').eq('block_id', b.id).eq('status', 'complete').order('seq', { ascending: false }).limit(1).maybeSingle();
+        // The window starts where the previous edition's own research started:
+        // its latest completed SCHEDULED run. A revert re-applies old output
+        // and a daily run is not the edition's research, so neither counts; a
+        // manual run is the fallback for an edition that never had a schedule.
+        const lastOf = (trigger: 'schedule' | 'manual') =>
+          sb.from('newsletters_research_runs').select('started_at, binding').eq('block_id', b.id).eq('status', 'complete').eq('triggered_by', trigger).order('seq', { ascending: false }).limit(1).maybeSingle();
+        let lastRun = await lastOf('schedule');
+        if (!lastRun.error && !lastRun.data) lastRun = await lastOf('manual');
         const lr = lastRun.data as { started_at: string | null; binding: Binding } | null;
         researchStartedAt = lr?.started_at ?? null;
         const field = lr?.binding?.output?.field ?? r.binding?.output?.field;

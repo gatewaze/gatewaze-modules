@@ -16,18 +16,11 @@
  */
 
 import type { BlockTemplate, EditionBlock, ResearchBinding } from '../utils/types.js';
-import { bindingHash, resolveBlockContent } from '../../lib/research-merge.js';
-
-const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+import { bindingHash, researchBindingFromDef, researchOutputFormat as outputFormatOf, resolveBlockContent } from '../../lib/research-merge.js';
 
 /** The research binding of a block template, or null for every other block. */
 export function researchBindingOf(tpl: Pick<BlockTemplate, 'source_kind' | 'data_source'> | null | undefined): ResearchBinding | null {
-  if (!tpl || tpl.source_kind !== 'research') return null;
-  const ds = tpl.data_source;
-  if (!isObj(ds) || ds.kind !== 'research') return null;
-  const output = ds.output;
-  if (!isObj(output) || typeof output.field !== 'string' || !output.field) return null;
-  return ds as unknown as ResearchBinding;
+  return researchBindingFromDef(tpl) as unknown as ResearchBinding | null;
 }
 
 /** The ai_use_cases id a recipe binding names (transform first, then input), or null for template-only research. */
@@ -40,9 +33,9 @@ export function researchUseCaseOf(binding: ResearchBinding | null): string | nul
   return null;
 }
 
-/** 'array' | 'richtext' | 'text' for the binding's output, defaulting from the stored value's shape. */
-export function researchOutputFormat(binding: ResearchBinding, research: unknown): 'array' | 'richtext' | 'text' {
-  return binding.output.format ?? (Array.isArray(research) ? 'array' : 'richtext');
+/** 'array' | 'richtext' | 'text' for the binding's output: `output.format`, else 'array' (the same rule as the worker and the resolver). */
+export function researchOutputFormat(binding: ResearchBinding): 'array' | 'richtext' | 'text' {
+  return outputFormatOf(binding);
 }
 
 /**

@@ -47,7 +47,11 @@ import { researchService, type EditionResearch, type ResearchRun } from '../util
 
 export interface ResearchPanelProps {
   editionId: string;
-  /** Writes are refused unless the edition is a draft; the panel disables them. */
+  /**
+   * Writes are refused unless the edition is a draft or published (and has
+   * not started sending, which the server reports as `research_open`); the
+   * panel disables them otherwise.
+   */
   editionStatus?: string;
   block: EditionBlock;
   /** The edition version the editor currently holds (newsletters_editions.version). */
@@ -94,7 +98,7 @@ function statusColor(run: ResearchRun | null | undefined): 'green' | 'orange' | 
 export function ResearchPanel({ editionId, editionStatus, block, getVersion, onEditsWritten, onResearchChanged }: ResearchPanelProps): ReactElement | null {
   const binding = researchBindingOf(block.block_template);
   const hash = block.block_template.binding_hash ?? '';
-  const canWrite = (editionStatus ?? 'draft') === 'draft' && UUID.test(editionId);
+  const statusOpen = ['draft', 'published'].includes(editionStatus ?? 'draft');
 
   const [info, setInfo] = useState<EditionResearch | null>(null);
   const [runs, setRuns] = useState<ResearchRun[]>([]);
@@ -102,6 +106,9 @@ export function ResearchPanel({ editionId, editionStatus, block, getVersion, onE
   const [busy, setBusy] = useState<string | null>(null);
   const [revertTarget, setRevertTarget] = useState<ResearchRun | null>(null);
   const [lastSeenComplete, setLastSeenComplete] = useState<string | null>(null);
+
+  // The server knows whether a send has started; until it answers, go by status.
+  const canWrite = statusOpen && UUID.test(editionId) && info?.research_open !== false;
 
   const latest = useMemo(() => info?.blocks.find((b) => b.id === block.id)?.latest_run ?? null, [info, block.id]);
   const blockRuns = useMemo(() => runs.filter((r) => r.block_id === block.id), [runs, block.id]);
@@ -139,13 +146,13 @@ export function ResearchPanel({ editionId, editionStatus, block, getVersion, onE
   const field = binding.output.field;
   const research = block.content[field];
   const editsRaw = block.content.research_edits;
-  const format = researchOutputFormat(binding, research);
+  const format = researchOutputFormat(binding);
   const useCase = researchUseCaseOf(binding);
   const transform = (binding.transform ?? {}) as { kind?: string; group_by?: string; max_items?: number; max_per_group?: number };
 
   // ---- writes -------------------------------------------------------------
   const writeEdits = async (edits: Record<string, unknown>, label: string) => {
-    if (!canWrite) { toast.error('Research edits can only be made on a draft edition'); return; }
+    if (!canWrite) { toast.error('Research edits can only be made on a draft or published edition that has not started sending'); return; }
     setBusy(label);
     try {
       let attempt = 0;
@@ -604,7 +611,7 @@ interface ScalarOutputProps {
 function ScalarOutput({ research, editsRaw, hash, format, latestComplete, runs, disabled, onWrite }: ScalarOutputProps): ReactElement {
   const [draft, setDraft] = useState<string | null>(null);
   const parsed = asResearchEdits(editsRaw);
-  const r = resolveResearchScalar(research, editsRaw, hash);
+  const r = resolveResearchScalar(research, editsRaw, hash, format);
   const fromRunId = parsed && parsed.format !== 'array' ? parsed.from_run_id ?? null : null;
   const fromRun = fromRunId ? runs.find((x) => x.id === fromRunId) : undefined;
   // A newer run applied since the edit: the edit's run is known and older,
@@ -663,7 +670,7 @@ function ScalarOutput({ research, editsRaw, hash, format, latestComplete, runs, 
                 <ArrowUturnLeftIcon className="size-3.5" /> Reset to research
               </Button>
             )}
-            <Button size="1" variant="outline" onClick={() => setDraft(asText(r.value))} disabled={disabled}>
+            <Button size="1" variant="outline" onClick={() => setDraft(asText(r.edited ? (parsed as { value?: unknown } | null)?.value : r.value))} disabled={disabled}>
               <PencilSquareIcon className="size-3.5" /> Edit text
             </Button>
           </div>
