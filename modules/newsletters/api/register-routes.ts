@@ -119,7 +119,7 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
   // Research blocks: run / cancel / revert / status (api/research-routes.ts).
   // Each handler re-checks is_admin() as the caller on top of requireJwt.
   const { registerResearchRoutes } = await import('./research-routes.js');
-  registerResearchRoutes(router, wrap);
+  registerResearchRoutes(router, wrap, context?.enqueueJob as Parameters<typeof registerResearchRoutes>[2]);
 
   router.post('/newsletters/editions/:editionId/publish-to-git', wrap(publishHandler));
   router.post('/newsletters/editions/:editionId/unpublish-from-git', wrap(unpublishHandler));
