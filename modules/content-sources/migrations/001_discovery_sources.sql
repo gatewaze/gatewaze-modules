@@ -115,8 +115,12 @@ GRANT ALL ON public.discovery_sources TO service_role;
 -- ---------------------------------------------------------------------------
 -- 3. Absorb the private content-pipeline module's registry, if present.
 --    `content_discovery_sources` was the same plan; nothing ever ran it.
---    rss → feed, everything else → html (an admin attaches a feed later);
---    is_active → active / paused. Idempotent on the normalised feed URL.
+--    rss → feed, everything else → html (an admin attaches a feed later).
+--    A feed keeps is_active → active / paused; an html row always lands
+--    pending, because the FeedScraper cannot run it. Idempotent: ON CONFLICT
+--    DO NOTHING (no target) skips a row that hits either unique index, the
+--    normalised feed URL or the no-feed site+project key, so a re-run is a
+--    no-op.
 -- ---------------------------------------------------------------------------
 DO $$
 BEGIN
@@ -131,15 +135,13 @@ BEGIN
          CASE WHEN s.source_type = 'rss' THEN s.source_url END,
          'Unassigned',
          s.name,
-         CASE WHEN s.is_active THEN 'active' ELSE 'paused' END,
+         CASE WHEN s.source_type IS DISTINCT FROM 'rss' THEN 'pending'
+              WHEN s.is_active THEN 'active'
+              ELSE 'paused' END,
          'import',
          'copied from content_discovery_sources ' || s.id::text || ' (content-pipeline)',
          s.created_at
   FROM public.content_discovery_sources s
   WHERE s.source_url ~ '^https://'
-    AND NOT EXISTS (
-    SELECT 1 FROM public.discovery_sources d
-    WHERE d.feed_url IS NOT NULL AND s.source_type = 'rss'
-      AND public.discovery_normalize_url(d.feed_url) = public.discovery_normalize_url(s.source_url)
-  );
+  ON CONFLICT DO NOTHING;
 END $$;

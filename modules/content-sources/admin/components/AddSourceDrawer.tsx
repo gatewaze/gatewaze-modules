@@ -35,7 +35,7 @@ interface Details {
   path_prefix: string;
 }
 
-/** Sentinel for "save without a feed" (kind html, lands pending for a follow-up). */
+/** Sentinel for "save without a feed" (kind html, always lands pending: the feed scraper cannot run it). */
 const NO_FEED = '__no_feed__';
 
 const inputClass =

@@ -14,7 +14,7 @@ If the private content-pipeline module's `content_discovery_sources` table exist
 
 ### Resolving a feed from a site URL
 
-Users give a site, not a feed. `lib/resolve-feed.js` fetches the page and reads its `<link rel="alternate">` feed tags; failing that it probes the twelve common paths in order (`/feed/`, `/feed.xml`, `/rss.xml`, `/index.xml`, and so on). Every candidate must be https on a public host, must parse, and must have at least one dated entry. A candidate on a different registrable domain than the site is returned flagged `cross_domain` and is never activated automatically, so a page cannot register a third party's feed under its own name. A section feed is preferred over a root `index.xml`.
+Users give a site, not a feed. `lib/resolve-feed.js` fetches the page and reads its `<link rel="alternate">` feed tags; failing that it probes the twelve common paths in order (`/feed/`, `/feed.xml`, `/rss.xml`, `/index.xml`, and so on). Every candidate must be https on a public host, must parse, and must have at least one dated entry. A candidate on a different registrable domain than the site is returned flagged `cross_domain` and lands `pending` even when an admin picked it, so a page cannot register a third party's feed under its own name without a second look. A site with no feed is saved as kind `html` and always stays `pending`: the feed scraper reads feeds and sitemaps only, skips `html` rows, and the API refuses to activate one. A section feed is preferred over a root `index.xml`.
 
 ### The scraper
 
