@@ -106,6 +106,20 @@ test('every source failed: the run throws "network dead" and inserts nothing', a
   assert.equal(sb.writes('discovery_sources').length, 2);
 });
 
+test('every post write failing fails the run with the first database error', async () => {
+  const sb = fakeSupabase((e) => {
+    if (e.table === 'discovery_sources' && e.op === 'select') return { data: [SRC], error: null };
+    // A single-row lookup finds nothing; the index load gets an empty list.
+    if (e.table === 'blog_posts' && e.op === 'select') return { data: e.calls.some((c) => c[0] === 'maybeSingle') ? null : [], error: null };
+    if (e.table === 'blog_posts' && e.op === 'insert') return { data: null, error: { message: 'new row for relation "blog_posts" violates check constraint "blog_posts_status_check"' } };
+    return { data: null, error: null };
+  });
+  const s = new FeedScraper({ config: {} }, { supabase: sb, logger: { log() {} } });
+  const fresh = new Date(Date.now() - 3_600_000).toISOString();
+  s.fetchSource = async (source) => ({ source, status: 'ok', entries: [{ ...ENTRY, publishedAt: fresh }, { ...ENTRY, title: 'Two', link: 'https://a.example.org/blog/two', publishedAt: fresh }] });
+  await assert.rejects(() => s.scrape(), /every post write failed \(2\); first error: .*blog_posts_status_check/);
+});
+
 test('loadSources never selects html-kind rows, sweep or single-source', async () => {
   for (const options of [{}, { source_ids: ['src-a'] }]) {
     const sb = fakeSupabase(() => ({ data: [], error: null }));
