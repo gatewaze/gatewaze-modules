@@ -13,19 +13,23 @@
 import { emailBlockRegistry } from '../index.js';
 import type { EmailBlockEntry, EmailBlockRegistry } from '../registry-types.js';
 import { declarativeBlockEntry } from './from-template.js';
+import { researchBindingOf } from '../../../../lib/research-block.js';
 
 interface DeclarativeSource {
   block_type?: string;
   brick_type?: string;
   name?: string;
-  render_kind?: string;
+  render_kind?: string | null;
+  /** templates_block_defs.source_kind; 'research' locks the binding's output field in the editor. */
+  source_kind?: string | null;
+  data_source?: unknown;
   /**
    * Present on `render_kind='react-email'` rows (selected as a column, equal to
    * `block_type` for these). Lets us look the block up in the static
    * `emailBlockRegistry` when merging react-email blocks into a git-driven
    * newsletter's registry (see `addReactEmail`).
    */
-  component_id?: string;
+  component_id?: string | null;
   content?: {
     html_template?: string;
     /**
@@ -45,11 +49,15 @@ function addDeclarative(merged: Map<string, EmailBlockEntry>, items: ReadonlyArr
     const id = t.block_type ?? t.brick_type;
     if (!id || t.render_kind !== 'declarative' || !t.content?.html_template) continue;
     try {
+      // A research block's output field is written by runs only; the Research
+      // panel in the block sidebar is its editing surface (spec §5.2).
+      const research = researchBindingOf(t);
       const entry = declarativeBlockEntry({
         componentId: id,
         label: t.name ?? id,
         category: 'Template',
         source: t.content.html_template,
+        ...(research ? { lockedFields: [research.output.field] } : {}),
         // Pass the DB schema explicitly. parseTemplate() will only see a
         // SCHEMA comment if it's still present in the html source — which
         // it isn't, because templates_apply_source extracts it server-side

@@ -19,11 +19,12 @@
  * EditionCanvas doesn't have them either).
  */
 
-import { useEffect, useMemo, useRef, useState, type FC, type ReactElement, type ReactNode, type CSSProperties } from 'react';
+import { createContext, useContext, useEffect, useMemo, useRef, useState, type FC, type ReactElement, type ReactNode, type CSSProperties } from 'react';
 import { builtinWrapperFor, isPlainShell } from '../../../lib/plain-email/wrapper.js';
 import { setEmailShell } from './email-blocks/shell-context.js';
 import {
   type Config,
+  type Overrides,
   ActionBar,
   createUsePuck,
 } from '@puckeditor/core';
@@ -47,6 +48,7 @@ import type {
 } from '../../../../sites/admin/components/canvas/puck/types.js';
 import type {
   NewsletterEdition,
+  EditionBlock,
   BlockTemplate,
   BrickTemplate,
 } from '../../utils/types.js';
@@ -127,7 +129,49 @@ interface NewsletterPuckCanvasProps {
   /** Custom actions rendered in the right of the page-actions row (e.g. a
    *  broadcast's Save / Send buttons). Shown regardless of hideDefaultActions. */
   toolbarActions?: ReactNode;
+  /**
+   * Extra panel rendered beneath Puck's fields for the selected block (the
+   * block from `edition.blocks` whose id matches the selection). Return null
+   * for blocks that have nothing to add. Used by the edition page to mount
+   * the Research panel for research blocks (spec §5.2, §5.4).
+   */
+  blockSidebarExtra?: (block: EditionBlock) => ReactNode;
 }
+
+/**
+ * Carries the current edition + the host's per-block sidebar renderer to the
+ * `fields` override, which Puck renders inside its own tree. A context (not
+ * a closure) so the override can be a module-level constant: an inline
+ * closure would be a new component identity every render and remount the
+ * fields panel — and any input inside the extra panel — on each keystroke.
+ */
+const BlockSidebarContext = createContext<{
+  edition: NewsletterEdition;
+  render: ((block: EditionBlock) => ReactNode) | undefined;
+} | null>(null);
+
+const UUID_IN_ID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
+
+/** Mounted inside Puck's Fields panel: finds the selected edition block and asks the host for its extra panel. */
+function SelectedBlockSidebarAddon(): ReactElement | null {
+  const ctx = useContext(BlockSidebarContext);
+  const selectedId = usePuckSelected((s) => (s.selectedItem?.props as { id?: unknown } | undefined)?.id ?? null);
+  if (!ctx?.render || typeof selectedId !== 'string') return null;
+  // Puck ids may be `<type>-<uuid>`; edition block ids are the bare uuid.
+  const uuid = selectedId.match(UUID_IN_ID)?.[0] ?? selectedId;
+  const block = ctx.edition.blocks.find((b) => b.id === uuid);
+  if (!block) return null;
+  const extra = ctx.render(block);
+  if (!extra) return null;
+  return <div className="gw-block-sidebar-extra" style={{ padding: '0 16px 16px' }}>{extra}</div>;
+}
+
+const fieldsWithBlockAddon: NonNullable<Overrides['fields']> = ({ children }) => (
+  <>
+    {children}
+    <SelectedBlockSidebarAddon />
+  </>
+);
 
 export const NewsletterPuckCanvas: FC<NewsletterPuckCanvasProps> = (props) => {
   // Per-newsletter scope for user-saved blocks. v1 uses localStorage
@@ -156,10 +200,12 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
   viewOnlineUrl,
   hideDefaultActions,
   toolbarActions,
+  blockSidebarExtra,
 }) => {
   // Default false so the Publish button renders enabled when the
   // parent doesn't thread the saving state through.
   const isSavingNow = isSaving ?? false;
+  const blockSidebarValue = useMemo(() => ({ edition, render: blockSidebarExtra }), [edition, blockSidebarExtra]);
 
   // Wrapper template HTML. Prefer the prop; if the parent hasn't threaded it
   // yet (load-order), fetch the latest templates_wrappers row for this
@@ -690,6 +736,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
         onSaveEdition: onSave ? (async () => { await onSave({ silent: true }); }) : undefined,
       }}
     >
+    <BlockSidebarContext.Provider value={blockSidebarValue}>
     <div
       className="newsletter-puck-canvas puck-canvas-email"
       style={{ height: '100%', display: 'flex', flexDirection: 'column', gap: 12 }}
@@ -1058,6 +1105,10 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
             // Search box at the top of the Blocks drawer — filters the
             // (now large) block palette by label / component id.
             components: BlockSearchComponents as never,
+            // Puck's fields for the selected block, then the host's extra
+            // panel for it (research blocks). Module-level constant: see
+            // BlockSidebarContext.
+            fields: fieldsWithBlockAddon,
             // Inject "Save block" alongside Puck's default
             // delete/duplicate buttons in the contextual action bar
             // that appears around the selected component. Mirrors the
@@ -1129,6 +1180,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
         ready={emailSizeBytes !== null}
       />
     </div>
+    </BlockSidebarContext.Provider>
     </NewsletterEditingProvider>
   );
 };
