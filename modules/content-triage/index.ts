@@ -7,7 +7,7 @@ const contentTriageModule: GatewazeModule = {
   visibility: 'hidden',
   name: 'Content Triage',
   description: 'Human-review gate for scraped and submitted content. Generic queue, routing, notifications, audit trail.',
-  version: '1.0.0',
+  version: '1.0.1',
   features: [
     'content-triage',
     'content-triage.manage',     // CRUD routes/teams/prefs
@@ -26,6 +26,7 @@ const contentTriageModule: GatewazeModule = {
     'migrations/002_content_triage_rpcs.sql',
     'migrations/003_seed_default_route.sql',
     'migrations/004_fix_triage_submit_ambiguity.sql',
+    'migrations/005_revoke_public_rpc_execute.sql',
   ],
 
   // Surfaced inside the Content hub via adminSlots below.

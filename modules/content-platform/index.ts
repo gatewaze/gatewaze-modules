@@ -7,7 +7,7 @@ const contentPlatformModule: GatewazeModule = {
   visibility: 'hidden',
   name: 'Content Platform',
   description: 'Cross-content-type publishing, categorization, source tracking, and the unified Content Inbox.',
-  version: '1.0.0',
+  version: '1.0.1',
   features: [
     'content-platform',
     'content-platform.inbox',
@@ -47,6 +47,7 @@ const contentPlatformModule: GatewazeModule = {
     'migrations/008_content_access_registry.sql',
     'migrations/009_content_access_action_email.sql',
     'migrations/010_content_access_allowed_tiers.sql',
+    'migrations/011_revoke_public_rpc_execute.sql',
   ],
 
   adminRoutes: [

@@ -5,7 +5,7 @@
  * processes each row (evaluate or delete), commits via
  * ck_complete_queue_row, or fails via ck_fail_queue_row.
  *
- * Triggered: per-INSERT push from base table triggers, plus 5s recurring.
+ * Triggered by the module's 30s crons[] tick on the shared 'jobs' queue.
  */
 
 import { createClient } from '@supabase/supabase-js';
@@ -34,10 +34,11 @@ export default async function handler(_job) {
   for (const row of rows) {
     try {
       if (row.op === 'delete') {
-        await sb.from('content_keyword_item_state')
+        const { error: delErr } = await sb.from('content_keyword_item_state')
           .delete()
           .eq('content_type', row.content_type)
           .eq('content_id', row.content_id);
+        if (delErr) throw delErr;
       } else {
         const { error: evalErr } = await sb.rpc('ck_evaluate_item', {
           p_content_type: row.content_type,
@@ -45,21 +46,23 @@ export default async function handler(_job) {
         });
         if (evalErr) throw evalErr;
       }
-      await sb.rpc('ck_complete_queue_row', {
+      const { error: completeErr } = await sb.rpc('ck_complete_queue_row', {
         p_content_type: row.content_type,
         p_content_id: row.content_id,
       });
+      if (completeErr) throw completeErr;
       processed++;
     } catch (err) {
       failed++;
       try {
-        await sb.rpc('ck_fail_queue_row', {
+        const { error: markErr } = await sb.rpc('ck_fail_queue_row', {
           p_content_type: row.content_type,
           p_content_id: row.content_id,
           p_error: String(err?.message ?? err).slice(0, 1000),
         });
-      } catch (markErr) {
-        console.error('[ck:drain-queue] failed to mark queue row failed', markErr);
+        if (markErr) throw markErr;
+      } catch (e) {
+        console.error('[ck:drain-queue] failed to mark queue row failed', e);
       }
     }
   }
