@@ -39,7 +39,10 @@ export function driveFolderId(value: unknown): string | null {
  * again once the first run has had time to start.
  */
 export function dedupeJobId(prefix: string, scope: string, nowMs = Date.now()): string {
-  return `${prefix}:${scope}:${Math.floor(nowMs / 600_000)}`;
+  // Hyphens, not colons: BullMQ 5.81 refuses a custom job id containing ':'
+  // (it is the key separator), and the refusal surfaced as an unhandled
+  // rejection and a 500 on every import button.
+  return `${prefix}-${scope.replace(/:/g, '-')}-${Math.floor(nowMs / 600_000)}`;
 }
 
 export function mountImportsRoutes(router: Router, deps: ImportsDeps): void {
