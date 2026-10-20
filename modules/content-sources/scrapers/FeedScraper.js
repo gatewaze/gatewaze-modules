@@ -22,8 +22,12 @@
  *   concurrency (16), per_host (2), feed_timeout_ms (20000), page_timeout_ms (8000),
  *   lookback_days (21), body_fetch_cap (200), sitemap_page_cap (60),
  *   run_budget_minutes (20), fetch_full_content (true)
- * Per-job options (scraperConfig.options, from scrapers_jobs.metadata):
+ * Per-job options (scraperConfig.options, from the BullMQ job payload; the
+ * scrapers_jobs.metadata copy is audit only and never read by the handler):
  *   source_ids: string[]  run only these sources (any status except dead)
+ *
+ * kind='html' sources are never run: this scraper only reads feeds and
+ * sitemaps, so html rows stay pending until an html extractor exists.
  */
 
 import { fetchFeedConditional, fetchText, residentialProxyUrl, FetchRefusedError, scrubSecrets } from '../lib/http.js';
@@ -85,6 +89,9 @@ export class FeedScraper {
       fetchFullContent: c.fetch_full_content !== false,
     };
     this.jobOptions = config.options || {};
+    // Tells the scrapers job handler to record this.stats as the job's counts
+    // (this scraper writes its own rows and returns []).
+    this.selfPersisting = true;
     this.stats = {
       sources: 0, alive: 0, not_modified: 0, failed: 0,
       found: 0, processed: 0, inserted: 0, updated: 0, skipped: 0, failed_items: 0,
@@ -208,6 +215,8 @@ export class FeedScraper {
     const ids = Array.isArray(this.jobOptions.source_ids) ? this.jobOptions.source_ids.filter((x) => typeof x === 'string') : null;
     let q = sb.from('discovery_sources').select('*');
     q = ids && ids.length ? q.in('id', ids).neq('status', 'dead') : q.eq('status', 'active');
+    // No html extractor yet: an html row must never be fetched as a feed.
+    q = q.neq('kind', 'html');
     const { data, error } = await q.order('foundation').order('project');
     if (error) throw new Error(`discovery_sources load failed: ${error.message}`);
     return data ?? [];
@@ -277,14 +286,7 @@ export class FeedScraper {
         } catch { /* skip child */ }
       }
     }
-    const prefixSlash = prefix ? (prefix.endsWith('/') ? prefix : `${prefix}/`) : '';
-    const siteDomain = registrableDomain(hostOf(sitemapUrl));
-    const candidates = entries
-      .filter((u) => prefixSlash && u.loc.startsWith(prefixSlash) && u.loc !== prefixSlash)
-      .filter((u) => registrableDomain(hostOf(u.loc)) === siteDomain)
-      .filter((u) => u.lastmod && u.lastmod >= cutoff) // undated sitemap entries are unrankable
-      .sort((a, b) => b.lastmod.localeCompare(a.lastmod))
-      .slice(0, this.opts.sitemapPageCap);
+    const candidates = sitemapCandidates(entries, { sitemapUrl, prefix, cutoff, cap: this.opts.sitemapPageCap });
     const out = [];
     for (const c of candidates) {
       if (this.budgetLeft() < 0) break;
@@ -327,10 +329,7 @@ export class FeedScraper {
       } else if (r.status === 'failed') {
         patch.last_error = scrubSecrets(r.reason ?? 'failed', this._proxyUrl);
         patch.consecutive_failures = (s.consecutive_failures ?? 0) + 1;
-        // Egress auto-flip: two consecutive 403s, on a healthy run, on an unlocked direct source.
-        const is403 = /status=403/.test(String(r.reason));
-        const prev403 = /status=403/.test(String(s.last_error ?? ''));
-        if (is403 && prev403 && s.egress === 'direct' && !s.egress_locked && !guardTripped && failureRate < 0.25) {
+        if (shouldFlipEgress(s, r, { guardTripped, failureRate })) {
           patch.egress = 'residential';
           patch.egress_auto = true;
           this.stats.egress_flipped++;
@@ -550,6 +549,34 @@ export class FeedScraper {
       },
     });
   }
+}
+
+/**
+ * Sitemap page candidates: same registrable domain as the sitemap, under the
+ * source's path prefix (never the prefix page itself), dated inside the
+ * window, newest first, capped.
+ */
+export function sitemapCandidates(entries, { sitemapUrl, prefix, cutoff, cap }) {
+  const prefixSlash = prefix ? (prefix.endsWith('/') ? prefix : `${prefix}/`) : '';
+  if (!prefixSlash) return [];
+  const siteDomain = registrableDomain(hostOf(sitemapUrl));
+  return entries
+    .filter((u) => typeof u?.loc === 'string' && u.loc.startsWith(prefixSlash) && u.loc !== prefixSlash)
+    .filter((u) => registrableDomain(hostOf(u.loc)) === siteDomain)
+    .filter((u) => u.lastmod && u.lastmod >= cutoff) // undated sitemap entries are unrankable
+    .sort((a, b) => b.lastmod.localeCompare(a.lastmod))
+    .slice(0, cap);
+}
+
+/**
+ * Egress auto-flip: two consecutive 403s (this run and the stored last
+ * error), on a healthy run (guard not tripped, failure rate under 25%), on an
+ * unlocked source that is still fetching direct.
+ */
+export function shouldFlipEgress(source, result, { guardTripped, failureRate }) {
+  const is403 = /status=403/.test(String(result?.reason ?? ''));
+  const prev403 = /status=403/.test(String(source?.last_error ?? ''));
+  return is403 && prev403 && source.egress === 'direct' && !source.egress_locked && !guardTripped && failureRate < 0.25;
 }
 
 function num(v, d) {
