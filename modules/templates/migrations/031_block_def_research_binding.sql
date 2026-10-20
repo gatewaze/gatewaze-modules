@@ -103,7 +103,9 @@ BEGIN
     -- parts that matter to the worker here too, so a caller that bypasses the
     -- parser cannot persist a binding the worker would act on blindly.
     IF b_item->'data_source'->>'kind' = 'research' THEN
-      IF NOT (b_item->'data_source'->'input'->>'kind' IN ('discovery_posts','recipe')) THEN
+      -- COALESCE: a missing input.kind is NULL, and NOT (NULL IN (...)) is
+      -- NULL, which IF treats as false; it must raise like any other bad kind.
+      IF COALESCE(b_item->'data_source'->'input'->>'kind', '') NOT IN ('discovery_posts','recipe') THEN
         RAISE EXCEPTION 'block % research binding: input.kind must be discovery_posts or recipe', b_item->>'key';
       END IF;
       IF NOT (COALESCE(b_item->'data_source'->'output'->>'field','') ~ '^[a-z][a-z0-9_]{0,63}$')
@@ -255,8 +257,11 @@ $body$;
 COMMENT ON FUNCTION public.templates_apply_source(uuid, text, jsonb, jsonb, jsonb, boolean)
   IS 'Persist a templates parse result for one source. Declarative-output: every block_def + brick_def lands with render_kind=''declarative'' + component_id=key so the routing in EditionEmail dispatches them through the declarative renderer. Per spec-templates-module §6 + migration 022 check constraint.';
 
--- The apply RPC is SECURITY DEFINER and writes block HTML and bindings; only
--- the api process (service role) runs the ingest. The default ACL on a newly
--- created function includes PUBLIC, so say so explicitly.
-REVOKE ALL ON FUNCTION public.templates_apply_source(uuid, text, jsonb, jsonb, jsonb, boolean) FROM PUBLIC, anon;
-GRANT EXECUTE ON FUNCTION public.templates_apply_source(uuid, text, jsonb, jsonb, jsonb, boolean) TO service_role, authenticated;
+-- The apply RPC is SECURITY DEFINER, writes block HTML and bindings, and
+-- checks no caller role itself. Only the api process calls it, with the
+-- service-role client (templates api/sources.ts and the drift monitor, both
+-- through lib/sources/apply.ts); the admin UI never calls it directly. So
+-- service role only. The default ACL on a function includes PUBLIC, and
+-- earlier migrations never revoked it, so revoke explicitly.
+REVOKE ALL ON FUNCTION public.templates_apply_source(uuid, text, jsonb, jsonb, jsonb, boolean) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.templates_apply_source(uuid, text, jsonb, jsonb, jsonb, boolean) TO service_role;

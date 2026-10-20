@@ -31,6 +31,17 @@ describe('validateResearchBinding', () => {
     expect(validateResearchBinding({ ...good, input: { kind: 'recipe' } }, schema).join()).toMatch(/input.use_case/);
     expect(validateResearchBinding({ ...good, transform: { kind: 'recipe' } }, schema).join()).toMatch(/transform.use_case/);
   });
+  it('output.field must be an OWN schema key: "constructor" (on every object\'s prototype) is not a field', () => {
+    expect(validateResearchBinding({ ...good, output: { field: '__proto__' } }, schema).length).toBeGreaterThan(0);
+    expect(validateResearchBinding({ ...good, output: { field: 'constructor' } }, schema).join()).toMatch(/not a field in SCHEMA/);
+  });
+
+  it('a non-array output field must name its format', () => {
+    expect(validateResearchBinding({ ...good, output: { field: 'summary' } }, schema).join()).toMatch(/output.format is required for the richtext field "summary"/);
+    expect(validateResearchBinding({ ...good, output: { field: 'summary', format: 'richtext' } }, schema)).toEqual([]);
+    expect(validateResearchBinding({ ...good, output: { field: 'items' } }, schema)).toEqual([]);
+  });
+
   it('refuses reserved output fields, non-newsletter use cases and non-scalar params', () => {
     expect(validateResearchBinding({ ...good, output: { field: 'research_edits' } }, { ...schema, research_edits: { type: 'text' } }).join()).toMatch(/reserved/);
     expect(validateResearchBinding({ ...good, input: { kind: 'recipe', use_case: 'daily-briefing-research' } }, schema).join()).toMatch(/newsletter-/);

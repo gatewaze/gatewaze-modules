@@ -86,10 +86,18 @@ export function validateResearchBinding(ds: unknown, schema: Record<string, unkn
     errors.push('output.field is required (a SCHEMA field name)');
   } else if (RESERVED_FIELDS.has(output.field)) {
     errors.push(`output.field "${output.field}" is reserved`);
-  } else if (!(output.field in schema)) {
+  } else if (!Object.hasOwn(schema, output.field)) {
+    // Own keys only: `in` would accept "constructor", "toString" and friends.
     errors.push(`output.field "${output.field}" is not a field in SCHEMA`);
   } else if (output.format !== undefined && (typeof output.format !== 'string' || !OUTPUT_FORMATS.has(output.format))) {
     errors.push(`output.format must be one of ${[...OUTPUT_FORMATS].join(', ')}`);
+  } else if (output.format === undefined) {
+    // Every reader and the worker take the format from the binding and
+    // default to 'array' (newsletters lib/research-merge researchOutputFormat),
+    // so a non-array field must say what it is.
+    const def = schema[output.field];
+    const type = isObj(def) ? def.type : undefined;
+    if (type !== 'array') errors.push(`output.format is required for the ${typeof type === 'string' ? type : 'non-array'} field "${output.field}" (one of ${[...OUTPUT_FORMATS].join(', ')})`);
   }
 
   // schedule
