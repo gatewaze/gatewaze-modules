@@ -1,8 +1,9 @@
-import { useMemo, useCallback } from 'react';
+import { useMemo, useCallback, useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
 import { SendingPanel } from '@/components/sending';
 import type { SendingAdapter, SendComposerConfig } from '@/components/sending';
 import { getViewOnlineUrl } from '../utils/view-online-url';
+import { parseSendGateError, sendGateMessage, type SendGate } from '../utils/researchService';
 
 interface CollectionInfo {
   id?: string;
@@ -27,6 +28,25 @@ interface EditionSendingTabProps {
   editionStatus?: string;
   /** Async renderer producing the final email-safe HTML for the edition. */
   getRenderedHtml?: () => Promise<string>;
+  /** Block id → label, so the research send gate can name the offending block. */
+  blockNames?: Record<string, string>;
+}
+
+/**
+ * Ask newsletters_send_gate (migration 094) whether the edition may be sent.
+ * The same function backs the BEFORE INSERT trigger on newsletter_sends, which
+ * is the enforcement; this call exists so the author sees the reason in words.
+ * A missing function (pre-migration) or a query error does not block: the
+ * trigger still has the final say.
+ */
+async function checkSendGate(editionId: string): Promise<SendGate | null> {
+  const { data, error } = await supabase.rpc('newsletters_send_gate', { p_edition_id: editionId });
+  if (error) {
+    console.warn('[newsletter-send] send gate check failed:', error.message);
+    return null;
+  }
+  const row = (Array.isArray(data) ? data[0] : data) as SendGate | null | undefined;
+  return row ?? null;
 }
 
 /**
@@ -40,7 +60,17 @@ interface EditionSendingTabProps {
  * newsletter-level (collection), shown read-only with an Edit link to the
  * newsletter settings. The editor keeps its own test send; this adds one too.
  */
-export function EditionSendingTab({ editionId, editionDate, subject, preheader, collection, newsletterSlug, editionStatus, getRenderedHtml }: EditionSendingTabProps) {
+export function EditionSendingTab({ editionId, editionDate, subject, preheader, collection, newsletterSlug, editionStatus, getRenderedHtml, blockNames }: EditionSendingTabProps) {
+  // Research send gate (spec §5.3): shown as the "can't send yet" reason so
+  // the author learns it before the insert. Re-checked when the tab mounts
+  // and after every send attempt; the DB trigger remains the enforcement.
+  const [gate, setGate] = useState<SendGate | null>(null);
+  const refreshGate = useCallback(async () => {
+    if (!editionId || editionId === 'new') { setGate(null); return; }
+    setGate(await checkSendGate(editionId));
+  }, [editionId]);
+  useEffect(() => { void refreshGate(); }, [refreshGate]);
+  const gateReason = gate && !gate.allowed ? sendGateMessage(gate.reason_code, gate.block_id ? blockNames?.[gate.block_id] : null) : undefined;
   // Render the edition to final email HTML with the web-version link substituted
   // (shared by createSend + rerenderContent so both produce identical output).
   const buildFinalHtml = useCallback(async (): Promise<{ html: string | null; webVersionUrl: string; portalBaseUrl: string }> => {
@@ -92,14 +122,14 @@ export function EditionSendingTab({ editionId, editionDate, subject, preheader, 
       sendEndpoint: 'newsletter-send',
       // A preheader is mandatory: Gmail sends mail without one to spam.
       // Migration 090 enforces the same rule on newsletter_sends inserts.
-      canSend: editionStatus === 'published' && hasPreheader,
+      canSend: editionStatus === 'published' && hasPreheader && !gateReason,
       canSendReason: isNew
         ? 'Save the edition first'
         : editionStatus !== 'published'
           ? 'This edition is a draft. Publish it before sending — the email’s “View Online” link points at the published page.'
           : !hasPreheader
             ? 'Add a preheader on the Details tab before sending'
-            : undefined,
+            : gateReason,
       features: { deliveryStrategy: true, excludeSent: true },
       emailDetails: {
         editable: false,
@@ -141,6 +171,13 @@ export function EditionSendingTab({ editionId, editionDate, subject, preheader, 
         return (data as { timezone: string; recipients: number; send_at: string }[]) || [];
       },
       async createSend(config: SendComposerConfig) {
+        // Research send gate first, so the author gets words rather than a
+        // database error. The BEFORE INSERT trigger below is the enforcement.
+        const g = await checkSendGate(editionId);
+        if (g && !g.allowed) {
+          setGate(g);
+          throw new Error(sendGateMessage(g.reason_code, g.block_id ? blockNames?.[g.block_id] : null));
+        }
         const { html, webVersionUrl, portalBaseUrl } = await buildFinalHtml();
         const { data, error } = await supabase.from('newsletter_sends').insert({
           edition_id: editionId,
@@ -169,7 +206,16 @@ export function EditionSendingTab({ editionId, editionDate, subject, preheader, 
           exclude_sent_send_ids: config.excludeSentSendIds.length > 0 ? config.excludeSentSendIds : null,
           metadata: { web_version_url: webVersionUrl, portal_base_url: portalBaseUrl },
         }).select('id').single();
-        if (error) throw error;
+        if (error) {
+          // The trigger raised SEND_GATE:<code>:<block> (check_violation): same
+          // words as the pre-check, since the state may have changed in between.
+          const gated = parseSendGateError(error.message);
+          if (gated) {
+            void refreshGate();
+            throw new Error(sendGateMessage(gated.code, gated.block_id ? blockNames?.[gated.block_id] : null));
+          }
+          throw error;
+        }
         return { id: data.id as string };
       },
       async rerenderContent(sendId: string) {
@@ -198,7 +244,7 @@ export function EditionSendingTab({ editionId, editionDate, subject, preheader, 
         }
       },
     };
-  }, [editionId, editionStatus, subject, preheader, collection, newsletterSlug, buildFinalHtml]);
+  }, [editionId, editionStatus, subject, preheader, collection, newsletterSlug, buildFinalHtml, gateReason, blockNames, refreshGate]);
 
   return <SendingPanel adapter={adapter} />;
 }

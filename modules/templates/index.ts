@@ -65,6 +65,7 @@ const templatesModule: GatewazeModule = {
     'migrations/028_sources_token_column_privileges.sql',
     // Blocks a new edition starts with, from the template repo's edition.json.
     'migrations/029_library_new_edition_blocks.sql',
+    'migrations/031_block_def_research_binding.sql',
   ],
 
   // HTTP routes per spec-templates-module §6.9. Mounted under

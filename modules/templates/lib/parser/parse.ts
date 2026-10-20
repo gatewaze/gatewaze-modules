@@ -18,6 +18,7 @@ import type {
   ParseWarning,
   BlockDefDataSource,
 } from '../../types/index.js';
+import { isResearchBinding, validateResearchBinding } from './research-binding.js';
 import {
   extractDataSourcePayload,
   extractRichTextTemplate,
@@ -296,8 +297,22 @@ function extractBlocks(
       const ext = extractDataSourcePayload(bodyAfterBricks);
       bodyAfterDataSource = ext.remaining;
       if (ext.dataSource) {
-        // Type-narrow. The data-source schema validation happens elsewhere.
-        data_source = ext.dataSource as unknown as BlockDefDataSource;
+        // Type-narrow. A research binding is validated here (the apply RPC
+        // persists whatever it is handed); other adapters elsewhere.
+        if (isResearchBinding(ext.dataSource)) {
+          const problems = validateResearchBinding(ext.dataSource, schema);
+          for (const msg of problems) {
+            errors.push({
+              code: 'templates.parse.block_research_binding_invalid',
+              message: `BLOCK:${open.key} research binding: ${msg}`,
+              path: sourcePath,
+              line: open.location.line,
+            });
+          }
+          data_source = problems.length === 0 ? (ext.dataSource as unknown as BlockDefDataSource) : null;
+        } else {
+          data_source = ext.dataSource as unknown as BlockDefDataSource;
+        }
       }
     } catch (e) {
       errors.push({
