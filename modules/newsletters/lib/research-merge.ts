@@ -28,7 +28,7 @@
  * is set aside: the resolver ignores it and reports `edits_set_aside`.
  */
 
-import { sanitizeInline } from './sanitize-inline.js';
+import { sanitizeInline, stripTags } from './sanitize-inline.js';
 
 export interface ResearchItem {
   key: string;
@@ -97,7 +97,7 @@ export function asResearchEdits(v: unknown): ResearchEdits | null {
 
 // Edit-layer values are typed by an admin but rendered into emails; keep them
 // text (tags stripped, angle brackets escaped) and keep urls https.
-const cleanStr = (v: unknown): unknown => (typeof v === 'string' ? v.slice(0, 4000).replace(/<[^<>]*>/g, '').replace(/</g, '&lt;').replace(/>/g, '&gt;') : v);
+const cleanStr = (v: unknown): unknown => (typeof v === 'string' ? stripTags(v.slice(0, 4000)).replace(/</g, '&lt;').replace(/>/g, '&gt;') : v);
 const cleanItem = (item: Record<string, unknown>): ResearchItem => {
   const out: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(item)) {

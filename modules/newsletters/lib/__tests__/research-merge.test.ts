@@ -137,3 +137,12 @@ describe('bindingHash', () => {
     expect(await bindingHash({ a: 1 })).not.toBe(await bindingHash({ a: 2 }));
   });
 });
+
+describe('stripTags', () => {
+  it('repeats until no tag can reassemble', async () => {
+    const { stripTags } = await import('../sanitize-inline.js');
+    expect(stripTags('<<b>script>alert(1)<</b>/script>')).not.toMatch(/<script/i);
+    expect(stripTags('a <i>b</i> c')).toBe('a b c');
+    expect(stripTags('x &lt;y&gt;')).toBe('x &lt;y&gt;');
+  });
+});
