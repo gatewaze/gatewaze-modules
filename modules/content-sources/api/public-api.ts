@@ -22,6 +22,16 @@ interface ApiKeyLike { id?: string; scopes: string[] }
 // Small fixed-window limiter per API key for the two routes that fetch the
 // internet on the caller's behalf. In-memory per process; the public API is a
 // single api deployment per brand, which is enough to blunt a loop.
+//
+// The bucket is the API key, nothing finer. The hosted MCP server
+// (packages/mcp GatewazeApiClient) calls with its deployment key and sends
+// only X-API-Key: no user JWT and no verified caller identity reaches this
+// API, so every hosted-MCP user shares that key's bucket. That is the
+// intended ceiling for the key, not a per-user quota. Do not split on a
+// client-supplied header (a caller id, X-Forwarded-For): any key holder could
+// rotate it to mint fresh buckets. If the MCP server starts forwarding a
+// verified identity (a signed user token this API checks), bucket on
+// key id + that identity instead.
 const buckets = new Map<string, { count: number; resetAt: number }>();
 function rateLimited(key: string, perMinute: number): boolean {
   const now = Date.now();
