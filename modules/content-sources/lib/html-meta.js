@@ -225,6 +225,10 @@ export async function sanitizeBody(html, maxChars = 60_000) {
       allowedSchemesByTag: { img: ['https'] },
       allowProtocolRelative: false,
       transformTags: { a: (tagName, attribs) => ({ tagName: 'a', attribs: { ...attribs, rel: 'noopener nofollow', target: '_blank' } }) },
+      // sanitize-html lets RELATIVE urls through regardless of allowedSchemes;
+      // a relative image src would resolve against our own portal host, so an
+      // image survives only with an absolute https source.
+      exclusiveFilter: (frame) => frame.tag === 'img' && !/^https:\/\//i.test(String(frame.attribs?.src ?? '')),
     }).trim();
     return out.length > maxChars ? out.slice(0, maxChars) : out;
   } catch (e) {

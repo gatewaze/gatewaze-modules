@@ -76,7 +76,10 @@ test('sanitizeBody fails closed when sanitize-html is unavailable', async () => 
   if (!hasDep) assert.equal(out, null);
   else {
     assert.ok(!/onerror|onclick|javascript:/i.test(out));
-    assert.ok(!/<img/i.test(out), 'http(s)-less img dropped');
+    assert.ok(!/<img/i.test(out), 'an img without an absolute https src is dropped');
+    const kept = await sanitizeBody('<p>x</p><img src="https://a.org/i.png" alt="a"><img src="/local.png"><img src="//cdn.x/i.png">');
+    assert.equal((kept.match(/<img/g) || []).length, 1);
+    assert.match(kept, /src="https:\/\/a\.org\/i\.png"/);
   }
 });
 
