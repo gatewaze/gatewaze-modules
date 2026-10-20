@@ -13,6 +13,7 @@
  */
 
 import type { Job } from 'bullmq';
+import { redisConnection } from '../lib/redis-connection.js';
 import { createClient } from '@supabase/supabase-js';
 
 interface DueJobData { kind: string; daily?: boolean }
@@ -100,9 +101,7 @@ export default async function handleResearchDue(job: Job<DueJobData>) {
 
 async function enqueueRun(runId: string) {
   const { Queue } = await import('bullmq');
-  // @ts-ignore resolved by the workspace install at runtime (same import the scrapers module uses)
-  const { getRedisConnection } = await import('@gatewaze/shared/redis');
-  const queue = new Queue('jobs', { connection: getRedisConnection(), prefix: `bull:${process.env.BRAND || 'default'}` });
+  const queue = new Queue('jobs', { connection: redisConnection(), prefix: `bull:${process.env.BRAND || 'default'}` });
   try {
     await queue.add('newsletters:research-run', { kind: 'newsletters:research-run', runId }, { jobId: `newsletters-research-run-${runId}`, attempts: 2, backoff: { type: 'exponential', delay: 30_000 }, removeOnComplete: { count: 500 }, removeOnFail: { count: 500 } });
   } finally {
