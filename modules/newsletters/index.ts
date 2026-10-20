@@ -7,7 +7,7 @@ const newslettersModule: GatewazeModule = {
   visibility: 'public',
   name: 'Newsletters',
   description: 'Create, edit, and distribute newsletters with edition management and subscriber tracking',
-  version: '1.1.2',
+  version: '1.2.0',
   features: [
     'newsletters',
     'newsletters.editor',
@@ -70,9 +70,51 @@ const newslettersModule: GatewazeModule = {
       name: 'newsletters:buzzword-replies',
       handler: './workers/buzzword-replies.ts',
     },
+    {
+      // Research blocks (spec-content-discovery-and-research-blocks §5.3):
+      // creates the due `queued` run rows (one in flight per block, enforced
+      // by a partial unique index), enqueues them, sweeps stale runs.
+      name: 'newsletters:research-due',
+      handler: './workers/research-due.ts',
+    },
+    {
+      // One research run: input (discovery posts or a recipe) → transform →
+      // validated output → the research layer, through a version-bumping RPC.
+      name: 'newsletters:research-run',
+      handler: './workers/research-run.ts',
+    },
+    {
+      // Edition cadence (spec §6): claims the next occurrence slot and creates
+      // the edition from edition.json ahead of its send; never creates a send.
+      name: 'newsletters:cadence-tick',
+      handler: './workers/cadence-tick.ts',
+    },
   ],
 
   crons: [
+    {
+      // Research runs due for `schedule: edition` blocks (effective research
+      // time passed) plus the stale sweep. Idempotent per (block, scheduled_for).
+      name: 'newsletters-research-due',
+      queue: 'jobs',
+      schedule: { every: 5 * 60_000 },
+      data: { kind: 'newsletters:research-due' },
+    },
+    {
+      // `schedule: daily` blocks on open editions, after the 05:30 discovery
+      // sweep. Cheap inputs only (the ingest refuses daily for recipes).
+      name: 'newsletters-research-daily',
+      queue: 'jobs',
+      schedule: { pattern: '0 6 * * *', tz: 'UTC' },
+      data: { kind: 'newsletters:research-due', daily: true },
+    },
+    {
+      // Hourly cadence tick; idempotent on (collection, slot).
+      name: 'newsletters-cadence-tick',
+      queue: 'jobs',
+      schedule: { pattern: '7 * * * *', tz: 'UTC' },
+      data: { kind: 'newsletters:cadence-tick' },
+    },
     {
       // Per spec-content-modules-git-architecture §15.4: snapshot editions
       // <snapshot_delay_days> days post-send. Job is idempotent; running
@@ -367,6 +409,10 @@ const newslettersModule: GatewazeModule = {
     // Reject a newsletter_sends insert without a preheader (Gmail spams mail without one).
     'migrations/090_require_send_preheader.sql',
     'migrations/091_signup_double_opt_in.sql',
+    'migrations/092_editions_research_time.sql',
+    'migrations/093_research_runs.sql',
+    'migrations/094_send_gate.sql',
+    'migrations/095_cadence_occurrences.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes

@@ -43,6 +43,7 @@ import { parseTemplate } from './declarative/parse-template.js';
 import { DeclarativeBlock } from './declarative/render.js';
 import { setEmailShell } from './shell-context.js';
 import { isPlainShell } from '../../../../lib/plain-email/wrapper.js';
+import { renderContentOf } from '../../../lib/research-block.js';
 
 /** UTF-8-safe base64 for the gate sentinel config. Runs in the Node worker
  *  (Buffer) and the browser editor (btoa) — both produce/consume base64 the
@@ -279,6 +280,11 @@ function BlockSlot({ block, format, meta, registry }: BlockSlotProps): ReactElem
     mustache_html: block.block_template.content.html_template ?? '',
   };
 
+  // Research blocks render the resolved output field (research layer + edit
+  // layer, grouped) and never the raw field — spec §5.2. Every other block's
+  // content passes through unchanged.
+  const content = renderContentOf(block);
+
   if (effective.render_kind === 'react-email') {
     if (!effective.component_id) {
       return <Fallback message={`block ${block.id}: react-email render_kind missing component_id`} />;
@@ -288,7 +294,7 @@ function BlockSlot({ block, format, meta, registry }: BlockSlotProps): ReactElem
       return <Fallback message={`block ${block.id}: unknown component_id '${effective.component_id}'`} />;
     }
     const Comp = pickFormatComponent(entry.Component, entry.formats, format);
-    const props = { ...(block.content as Record<string, unknown>) };
+    const props: Record<string, unknown> = { ...content };
     // Pluck the universal spacing props off — they belong on the
     // wrapper, not on the block's render. Strip from props BEFORE the
     // slot/children handling so they don't leak through to the
@@ -348,7 +354,7 @@ function BlockSlot({ block, format, meta, registry }: BlockSlotProps): ReactElem
   try {
     rendered = renderTemplate(
       html,
-      { ...block.content, bricks: bricksHtml },
+      { ...content, bricks: bricksHtml },
       { partials: new Map<string, string>() },
     );
   } catch (e) {

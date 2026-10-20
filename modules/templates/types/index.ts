@@ -42,7 +42,51 @@ export interface TemplatesLibraryRow {
   updated_at: string;
 }
 
-export type BlockDefSourceKind = 'static' | 'external-api' | 'internal-content';
+export type BlockDefSourceKind = 'static' | 'external-api' | 'internal-content' | 'research';
+
+/**
+ * A research binding (spec-content-discovery-and-research-blocks.md §5.1):
+ * the block's `output.field` is filled by a scheduled research run rather
+ * than typed by the author. Declared in the block file's DATA_SOURCE marker
+ * with `"kind": "research"`; validated at ingest by lib/parser/research-binding.ts.
+ */
+export interface ResearchInputDiscoveryPosts {
+  kind: 'discovery_posts';
+  /** Default 'since_previous_edition'. */
+  window?: 'since_previous_edition' | { days: number };
+  /** Foundation labels to include; 'all' or omitted = every foundation. */
+  foundations?: 'all' | string[];
+  /** blog_posts publish states to include; default ['published','pending_review']. */
+  publish_states?: string[];
+  /** Exclude posts with no published_at; default true. */
+  require_date?: boolean;
+}
+export interface ResearchInputRecipe {
+  kind: 'recipe';
+  /** ai_use_cases.id whose bound recipe produces the input. */
+  use_case: string;
+  params?: Record<string, string | number | boolean>;
+}
+export interface ResearchTransformTemplate {
+  kind: 'template';
+  group_by?: 'foundation' | 'project';
+  max_items?: number;
+  max_per_group?: number;
+  blurb?: 'first_sentence' | 'none';
+  suppress_release_titles?: boolean;
+}
+export interface ResearchTransformRecipe {
+  kind: 'recipe';
+  use_case: string;
+  params?: Record<string, string | number | boolean>;
+}
+export interface BlockDefDataSourceResearch {
+  kind: 'research';
+  input: ResearchInputDiscoveryPosts | ResearchInputRecipe;
+  transform?: ResearchTransformTemplate | ResearchTransformRecipe;
+  output: { field: string; format?: 'array' | 'richtext' | 'text' };
+  schedule?: 'edition' | 'daily' | 'manual';
+}
 
 export interface BlockDefDataSourceHttp {
   adapter: 'http';
@@ -60,7 +104,7 @@ export interface BlockDefDataSourceAdapter {
   cacheTtlSeconds?: number;
 }
 
-export type BlockDefDataSource = BlockDefDataSourceHttp | BlockDefDataSourceAdapter;
+export type BlockDefDataSource = BlockDefDataSourceHttp | BlockDefDataSourceAdapter | BlockDefDataSourceResearch;
 
 export interface TemplatesBlockDefRow {
   id: string;

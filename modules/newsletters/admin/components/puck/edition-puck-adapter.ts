@@ -30,6 +30,7 @@ import type {
   PuckBrickEntry,
 } from '../../../../sites/admin/components/canvas/puck/types.js';
 import type { EmailBlockEntry, EmailBlockRegistry } from './email-blocks/registry-types.js';
+import { preserveResearchLayers, renderContentOf } from '../../lib/research-block.js';
 
 const STRUCTURAL_PROPS = new Set(['id', 'children']);
 
@@ -57,9 +58,12 @@ export function editionToPuckData(
   const content: PuckBlockEntry[] = sortedBlocks.map((b) => {
     const blockType = b.block_template.block_type;
     const hasBricks = b.block_template.content.has_bricks ?? false;
+    // Research blocks: the canvas sees the RESOLVED output field (research
+    // layer + edit layer merged, grouped) and no `research_edits`, exactly
+    // what the export renders. puckDataToEdition restores the raw layers.
     const props: PuckBlockEntry['props'] = {
       id: b.id,
-      ...b.content,
+      ...renderContentOf(b),
     };
 
     if (hasBricks) {
@@ -164,7 +168,14 @@ export function puckDataToEdition(args: {
       bricks = prev?.bricks ?? [];
     }
 
-    const content = extractContent(entry.props);
+    // The canvas props carry the resolved research field (see
+    // editionToPuckData); never write that back. The research layer and the
+    // edit layer are the previously loaded values — each has its own RPC.
+    // The palette template normally carries the binding; fall back to the
+    // block's own loaded template so a palette without this def (or a
+    // registry-synthesised one) cannot turn the guard off.
+    const bindingTpl = tpl.source_kind === 'research' ? tpl : (prev?.block_template ?? tpl);
+    const content = preserveResearchLayers(bindingTpl, extractContent(entry.props), prev?.content);
     if (registryChildren !== undefined) {
       content.children = registryChildren;
     }

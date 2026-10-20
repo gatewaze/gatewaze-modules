@@ -3,7 +3,7 @@ import type { Job } from 'bullmq';
 // from this module-file location does not resolve in the worker runtime
 // (ERR_MODULE_NOT_FOUND), whereas a top-level import does — matching every
 // other module worker (ai/*, calendars, newsletters/list-hygiene).
-import { createClient } from '@supabase/supabase-js';
+import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 
 const supabaseUrl = process.env.SUPABASE_URL!;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
@@ -14,6 +14,24 @@ interface DispatchJobData {
 
 interface DueSend {
   id: string;
+  edition_id: string;
+  last_error: string | null;
+}
+
+/** The research send gate (migration 094) for one edition; null when the check itself failed. */
+async function sendGate(
+  supabase: SupabaseClient,
+  editionId: string,
+): Promise<{ allowed: boolean; reason_code: string; block_id: string | null } | null> {
+  const { data, error } = await supabase.rpc('newsletters_send_gate', { p_edition_id: editionId });
+  if (error) {
+    // Pre-094 databases have no gate; the trigger is the enforcement either way.
+    // Only a missing gate FUNCTION falls open, never a missing relation inside it.
+    if (error.code === 'PGRST202' || /function public\.newsletters_send_gate\(.*\) does not exist/i.test(error.message)) return { allowed: true, reason_code: 'OK', block_id: null };
+    throw new Error(`send gate check failed: ${error.message}`);
+  }
+  const row = (Array.isArray(data) ? data[0] : data) as { allowed: boolean; reason_code: string; block_id: string | null } | null;
+  return row ?? null;
 }
 
 /**
@@ -28,9 +46,12 @@ interface DueSend {
  *
  * Per-tick sequence (in order):
  *   1. Select due `status='scheduled'` rows (scheduled_at <= now()).
- *   2. For each: call `fanout_newsletter_send_recipients` to populate the
- *      per-recipient timing queue, then flip the send to 'sending' (or
- *      'failed' if fanout errors).
+ *   2. For each: check the research send gate (newsletters_send_gate). A
+ *      refusal leaves the send 'scheduled' with the reason in last_error, so
+ *      it goes out on a later tick once research completes. Otherwise call
+ *      `fanout_newsletter_send_recipients` to populate the per-recipient
+ *      timing queue, then flip the send to 'sending' (or 'failed' if fanout
+ *      errors).
  *   3. Run a drip tick over the shared high-throughput send engine — picks
  *      up any due recipient rows (including ones just fanned out in step 2
  *      for the 'global' strategy where send_at = now() per migration 054).
@@ -46,13 +67,23 @@ export default async function handleDispatchScheduled(_job: Job<DispatchJobData>
   // 1. Find due scheduled sends.
   let processed = 0;
   const errors: string[] = [];
-  const { data: due, error: selectErr } = await supabase
+  // last_error arrives with migration 094. Module code can reach a database
+  // before its migrations do, and this cron is the send pipeline, so a
+  // missing column degrades to "no reason recorded" rather than stopping
+  // every scheduled send.
+  const selectDue = (cols: string) => supabase
     .from('newsletter_sends')
-    .select('id')
+    .select(cols)
     .eq('status', 'scheduled')
     .lte('scheduled_at', new Date().toISOString())
     .order('scheduled_at')
     .limit(10);
+  let hasLastError = true;
+  let { data: due, error: selectErr } = await selectDue('id, edition_id, last_error');
+  if (selectErr && /last_error/.test(selectErr.message)) {
+    hasLastError = false;
+    ({ data: due, error: selectErr } = await selectDue('id, edition_id'));
+  }
 
   if (selectErr) {
     // Throw so BullMQ records the failure and retries on the next tick.
@@ -67,8 +98,30 @@ export default async function handleDispatchScheduled(_job: Job<DispatchJobData>
   // of list size. Idempotent: the keyset cursor advances by email, so a partial
   // run resumes cleanly on the next tick.
   const FANOUT_BATCH = Number(process.env.NEWSLETTER_FANOUT_BATCH ?? 5000);
-  for (const send of (due ?? []) as DueSend[]) {
+  // Hold a send the research gate refuses: stay 'scheduled', say why. The
+  // write is skipped when the reason has not changed, so a held send does not
+  // churn the row (and its realtime subscribers) every tick.
+  const hold = async (send: DueSend, reason: string) => {
+    if (!hasLastError || send.last_error === reason) return;
+    const { error } = await supabase
+      .from('newsletter_sends')
+      .update({ last_error: reason, updated_at: new Date().toISOString() })
+      .eq('id', send.id)
+      .eq('status', 'scheduled');
+    if (error) console.error(`[newsletter:dispatch-scheduled] could not record the hold on send ${send.id}: ${error.message}`);
+  };
+
+  for (const send of (due ?? []) as unknown as DueSend[]) {
     try {
+      // Research gate BEFORE fan-out: a refusal must not fan out recipients
+      // or mark the send failed.
+      const gate = await sendGate(supabase, send.edition_id);
+      if (gate && !gate.allowed) {
+        const reason = `SEND_GATE:${gate.reason_code}:${gate.block_id ?? ''}`;
+        console.warn(`[newsletter:dispatch-scheduled] holding send ${send.id}: ${reason}`);
+        await hold(send, reason);
+        continue;
+      }
       let after: string | null = null;
       let guard = 0;
       for (;;) {
@@ -100,21 +153,37 @@ export default async function handleDispatchScheduled(_job: Job<DispatchJobData>
           status: 'sending',
           started_at: new Date().toISOString(),
           total_recipients: count ?? 0,
+          ...(hasLastError ? { last_error: null } : {}),
           updated_at: new Date().toISOString(),
         })
         .eq('id', send.id);
-      if (flipErr) throw new Error(`flip to sending: ${flipErr.message}`);
+      if (flipErr) {
+        // The gate trigger can still refuse here if a research run started
+        // between the check above and this flip. Same handling as above: hold.
+        // The fanned-out recipients wait; the drip only claims 'sending' sends
+        // and the fan-out resumes idempotently next tick.
+        if (/SEND_GATE:/.test(flipErr.message)) {
+          const reason = /SEND_GATE:[A-Z_]+:[0-9a-f-]*/i.exec(flipErr.message)?.[0] ?? flipErr.message;
+          console.warn(`[newsletter:dispatch-scheduled] holding send ${send.id} at flip: ${reason}`);
+          await hold(send, reason);
+          continue;
+        }
+        throw new Error(`flip to sending: ${flipErr.message}`);
+      }
       processed++;
     } catch (err) {
       const msg = `Send ${send.id}: ${(err as Error).message}`;
       console.error('[newsletter:dispatch-scheduled] fanout failed:', msg);
+      // last_error is readable by any signed-in user (newsletter_sends_select),
+      // so it carries a code only. The database text stays in the worker log.
       errors.push(msg);
       // Mark the send failed so it doesn't get retried forever and operators
       // see something concrete in the UI.
-      await supabase
+      const { error: failErr } = await supabase
         .from('newsletter_sends')
-        .update({ status: 'failed', updated_at: new Date().toISOString() })
+        .update({ status: 'failed', ...(hasLastError ? { last_error: 'DISPATCH_FAILED' } : {}), updated_at: new Date().toISOString() })
         .eq('id', send.id);
+      if (failErr) console.error(`[newsletter:dispatch-scheduled] could not mark send ${send.id} failed: ${failErr.message}`);
     }
   }
 
