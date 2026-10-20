@@ -11,9 +11,14 @@
 
 import type { McpContributions, ModuleRuntimeContext } from '@gatewaze/shared';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { list, get, submit, resolve } from './lib/sources.js';
+// Loaded lazily through a non-literal specifier: the admin bundle imports this
+// file (via index.ts) for the tool catalogue, and lib/sources.js pulls in the
+// Node-only fetch stack, which must never be bundled for the browser.
+type SourcesLib = typeof import('./lib/sources.js');
+const SOURCES_LIB = './lib/sources.js';
+const lib = (): Promise<SourcesLib> => import(/* @vite-ignore */ SOURCES_LIB) as Promise<SourcesLib>;
 
-export function getContentDiscoveryMcpContributions(): McpContributions {
+export function getContentSourcesMcpContributions(): McpContributions {
   return {
     tools: [
       {
@@ -32,20 +37,20 @@ export function getContentDiscoveryMcpContributions(): McpContributions {
         handler: async (params, ctx: ModuleRuntimeContext) => {
           const limit = Math.min(Math.max(Number(params.limit) || 25, 1), 100);
           const offset = Math.max(Number(params.offset) || 0, 0);
-          return list(ctx.supabase as SupabaseClient, { status: params.status, foundation: params.foundation, q: params.q, limit, offset });
+          return (await lib()).list(ctx.supabase as SupabaseClient, { status: params.status, foundation: params.foundation, q: params.q, limit, offset });
         },
       },
       {
         name: 'get',
         description: 'Get one discovery source by id.',
         inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] },
-        handler: async (params, ctx) => get(ctx.supabase as SupabaseClient, String(params.id)),
+        handler: async (params, ctx) => (await lib()).get(ctx.supabase as SupabaseClient, String(params.id)),
       },
       {
         name: 'resolve',
         description: 'Given a site URL, find its RSS/Atom feed candidates without saving anything.',
         inputSchema: { type: 'object', properties: { site_url: { type: 'string' } }, required: ['site_url'] },
-        handler: async (params) => resolve(params.site_url),
+        handler: async (params) => (await lib()).resolve(params.site_url),
       },
       {
         name: 'submit',
@@ -62,7 +67,7 @@ export function getContentDiscoveryMcpContributions(): McpContributions {
           required: ['site_url'],
         },
         handler: async (params, ctx) =>
-          submit(
+          (await lib()).submit(
             ctx.supabase as SupabaseClient,
             { site_url: params.site_url, feed_url: params.feed_url, foundation: params.foundation, project: params.project, note: params.note },
             { personId: null, addedVia: 'mcp', isAdmin: false },

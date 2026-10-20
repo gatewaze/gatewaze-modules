@@ -1,5 +1,6 @@
 // Before committing: run a security review of your diff (see CLAUDE.md — /security-review or `pragma:security`).
 import type { GatewazeModule, ModuleContext } from '@gatewaze/shared';
+import { getContentSourcesMcpContributions } from './mcp.js';
 
 /**
  * Content Discovery — where content comes from.
@@ -73,12 +74,11 @@ const contentDiscoveryModule: GatewazeModule = {
   },
 
   // ── MCP: catalogued here; callable through the hosted server (packages/mcp) ──
-  mcpContributions: () => {
-    // Lazy require keeps the admin bundle free of server code.
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    const { getContentDiscoveryMcpContributions } = require('./mcp') as typeof import('./mcp');
-    return getContentDiscoveryMcpContributions();
-  },
+  // mcp.ts holds only the tool schemas; its handlers load the server-side
+  // library lazily, so this static import keeps Node-only code out of the
+  // admin bundle. The admin Vite plugin stubs dynamic imports of server-only
+  // paths such as the mcp file, so the manifest must not import it lazily.
+  mcpContributions: () => getContentSourcesMcpContributions(),
 
   configSchema: {
     default_content_category: {
