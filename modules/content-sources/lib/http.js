@@ -123,11 +123,22 @@ export async function fetchText(url, opts = {}) {
  * ones. A 304 has status 304 and empty text. Same guard as fetchText.
  */
 export async function fetchFeedConditional(url, { etag, lastModified, maxBytes = 5 * 1024 * 1024, timeoutMs = 20_000, proxyUrl = null } = {}) {
-  const cond = {};
-  if (etag && /^[\x21-\x7e ]{1,256}$/.test(etag)) cond['If-None-Match'] = etag;
-  if (lastModified && /^[\x20-\x7e]{1,64}$/.test(lastModified)) cond['If-Modified-Since'] = lastModified;
+  const cond = conditionalHeaders(etag, lastModified);
   const r = await fetchText(url, { maxBytes, timeoutMs, headers: cond, proxyUrl });
   return { ...r, etag: r.headers.etag ?? null, lastModified: r.headers['last-modified'] ?? null };
+}
+
+/**
+ * Request validators from the stored ETag / Last-Modified. Both came from a
+ * remote server, so each is sent back only when it is printable ASCII with no
+ * CR, LF or other control character (no header injection) and of sane length;
+ * otherwise it is dropped and the fetch is unconditional.
+ */
+export function conditionalHeaders(etag, lastModified) {
+  const cond = {};
+  if (typeof etag === 'string' && /^[\x21-\x7e ]{1,256}$/.test(etag)) cond['If-None-Match'] = etag;
+  if (typeof lastModified === 'string' && /^[\x20-\x7e]{1,64}$/.test(lastModified)) cond['If-Modified-Since'] = lastModified;
+  return cond;
 }
 
 let _undici = null;
