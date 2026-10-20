@@ -14,11 +14,21 @@
  * pinned first then newest first → max_per_group / max_items. Caps come
  * last so a removal frees a slot and an addition takes one.
  *
- * Scalar/richtext edits: { value, from_run_id }; while present it wins.
+ * Scalar/richtext edits: { value, from_run_id }; while present it wins,
+ * sanitised the same way research output is (richtext keeps the inline
+ * allow-list with https anchors, text and scalar become plain text).
+ *
+ * The output format is the binding's `output.format`, defaulting to 'array'
+ * (researchOutputFormat). The worker, the resolver and the editor all use
+ * that one function, so the shape a run writes is the shape every reader
+ * expects; the templates parser requires an explicit format for a field
+ * that is not an array.
  *
  * An edit layer made against a different binding (binding_hash mismatch)
  * is set aside: the resolver ignores it and reports `edits_set_aside`.
  */
+
+import { sanitizeInline } from './sanitize-inline.js';
 
 export interface ResearchItem {
   key: string;
@@ -176,15 +186,41 @@ function cap<T>(items: T[], n?: number): T[] {
   return n && n > 0 ? items.slice(0, n) : items;
 }
 
-/** Resolve a SCALAR / richtext research field: the edit wins while present. */
-export function resolveResearchScalar(research: unknown, edits: unknown, currentBindingHash: string): ResolveResult<unknown> & { edited: boolean } {
+export type ResearchOutputFormat = 'array' | 'richtext' | 'text';
+
+/** The binding's output format; 'array' when the binding does not say. The one rule every writer and reader uses. */
+export function researchOutputFormat(binding: { output: { format?: string } }): ResearchOutputFormat {
+  const f = binding.output.format;
+  return f === 'richtext' || f === 'text' ? f : 'array';
+}
+
+/**
+ * Sanitise an edit-layer scalar for rendering: richtext keeps the inline
+ * allow-list (https anchors only), text/scalar become plain text. Numbers and
+ * booleans pass; anything else is not a usable edit (undefined).
+ */
+function cleanScalarEdit(v: unknown, format: string): unknown {
+  if (typeof v === 'number' || typeof v === 'boolean') return v;
+  if (typeof v !== 'string') return undefined;
+  if (format === 'richtext') return sanitizeInline(v, { allowAnchors: true });
+  return cleanStr(v);
+}
+
+/**
+ * Resolve a SCALAR / richtext research field: the edit wins while present.
+ * `format` is the binding's output format; the edit layer's own `format`
+ * is used only when the caller does not know it.
+ */
+export function resolveResearchScalar(research: unknown, edits: unknown, currentBindingHash: string, format?: ResearchOutputFormat): ResolveResult<unknown> & { edited: boolean } {
   const e = asResearchEdits(edits);
   if (!e) return { value: research, edits_set_aside: false, stale_keys: [], edited: false };
   if (e.format === 'array' || e.binding_hash !== currentBindingHash) return { value: research, edits_set_aside: true, stale_keys: [], edited: false };
   // `{ format, binding_hash }` with no value is how the editor resets to
   // research: the layer exists but holds nothing, so research wins.
   if (e.value === undefined) return { value: research, edits_set_aside: false, stale_keys: [], edited: false };
-  return { value: e.value, edits_set_aside: false, stale_keys: [], edited: true };
+  const value = cleanScalarEdit(e.value, format ?? e.format);
+  if (value === undefined) return { value: research, edits_set_aside: false, stale_keys: [], edited: false };
+  return { value, edits_set_aside: false, stale_keys: [], edited: true };
 }
 
 /**
@@ -201,13 +237,61 @@ export function resolveBlockContent(
   const field = binding.output.field;
   const { research_edits: edits, ...rest } = content;
   const research = content[field];
-  const format = binding.output.format ?? (Array.isArray(research) ? 'array' : 'richtext');
+  const format = researchOutputFormat(binding);
   if (format === 'array') {
     const r = resolveResearchArray(research, edits, binding.transform ?? {}, currentBindingHash);
     return { ...rest, [field]: r.value };
   }
-  const r = resolveResearchScalar(research, edits, currentBindingHash);
+  const r = resolveResearchScalar(research, edits, currentBindingHash, format);
   return { ...rest, [field]: r.value };
+}
+
+export interface ResearchBindingLike {
+  kind: 'research';
+  output: { field: string; format?: string };
+  transform?: TransformConfig & { kind?: string };
+  [k: string]: unknown;
+}
+
+/**
+ * The research binding of a block def row (`source_kind` + `data_source`),
+ * or null for every other block.
+ */
+export function researchBindingFromDef(def: { source_kind?: string | null; data_source?: unknown } | null | undefined): ResearchBindingLike | null {
+  if (!def || def.source_kind !== 'research') return null;
+  const ds = def.data_source;
+  if (!isObj(ds) || ds.kind !== 'research') return null;
+  const output = ds.output;
+  if (!isObj(output) || typeof output.field !== 'string' || !output.field) return null;
+  return ds as unknown as ResearchBindingLike;
+}
+
+/**
+ * Server-side and portal twin of the editor's renderContentOf(): the content
+ * a public surface (View Online, the git edition.json) should carry for a
+ * block, given its def row. Research blocks resolve through the edit layer
+ * and lose `research_edits`; every other block passes through. `hashes`
+ * caches binding hashes by def id across the blocks of one edition.
+ */
+export async function resolveContentForDef(
+  content: Record<string, unknown> | null | undefined,
+  def: { id?: string; source_kind?: string | null; data_source?: unknown } | null | undefined,
+  hashes: Map<string, string> = new Map(),
+): Promise<Record<string, unknown>> {
+  const c = (content ?? {}) as Record<string, unknown>;
+  const binding = researchBindingFromDef(def);
+  if (!binding) {
+    if (!('research_edits' in c)) return c;
+    const { research_edits: _drop, ...rest } = c;
+    return rest;
+  }
+  const cacheKey = def?.id ?? canonicalJson(binding);
+  let hash = hashes.get(cacheKey);
+  if (hash === undefined) {
+    hash = await bindingHash(binding);
+    hashes.set(cacheKey, hash);
+  }
+  return resolveBlockContent(c, binding, hash);
 }
 
 /** sha1 of the canonical JSON of a binding; the edit layer records which version it was made against. */
@@ -218,7 +302,9 @@ export async function bindingHash(binding: unknown): Promise<string> {
     const buf = await g.crypto.subtle.digest('SHA-1', new TextEncoder().encode(text));
     return Array.from(new Uint8Array(buf)).map((b) => b.toString(16).padStart(2, '0')).join('');
   }
-  const { createHash } = await import('node:crypto');
+  // Only reached where Web Crypto is missing (old Node); kept out of
+  // browser bundles, which always have crypto.subtle.
+  const { createHash } = await import(/* webpackIgnore: true */ /* @vite-ignore */ 'node:crypto');
   return createHash('sha1').update(text).digest('hex');
 }
 

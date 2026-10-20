@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { resolveResearchArray, resolveResearchScalar, resolveBlockContent, asResearchEdits, canonicalJson, bindingHash } from '../research-merge.js';
+import { resolveResearchArray, resolveResearchScalar, resolveBlockContent, asResearchEdits, canonicalJson, bindingHash, researchOutputFormat, resolveContentForDef } from '../research-merge.js';
 
 const H = 'hash-1';
 const items = [
@@ -60,6 +60,62 @@ describe('resolveResearchScalar', () => {
   });
   it('a reset ({ format, binding_hash } with no value) means research wins and nothing is edited', () => {
     expect(resolveResearchScalar('<p>research</p>', { format: 'richtext', binding_hash: H }, H)).toMatchObject({ value: '<p>research</p>', edited: false, edits_set_aside: false });
+  });
+});
+
+describe('resolveResearchScalar sanitising', () => {
+  it('a richtext edit keeps the inline allow-list and https anchors only', () => {
+    const v = '<p onclick="x()">hi <script>alert(1)</script><a href="javascript:alert(1)">bad</a> <a href="https://ok.example">ok</a><img src=x onerror=y></p>';
+    const r = resolveResearchScalar('<p>r</p>', { format: 'richtext', binding_hash: H, value: v }, H, 'richtext');
+    expect(r.edited).toBe(true);
+    expect(r.value).not.toMatch(/script|onclick|onerror|javascript:|<img/i);
+    expect(r.value).toContain('<a href="https://ok.example" rel="noopener nofollow">ok</a>');
+    expect(String(r.value).startsWith('<p>hi')).toBe(true);
+  });
+
+  it('a text edit is plain text: tags stripped, brackets escaped', () => {
+    const r = resolveResearchScalar('r', { format: 'text', binding_hash: H, value: '<b>bold</b> a < b' }, H, 'text');
+    expect(r.value).toBe('bold a &lt; b');
+  });
+
+  it("the binding's format wins over the edit layer's own claim", () => {
+    const r = resolveResearchScalar('r', { format: 'richtext', binding_hash: H, value: '<p>x</p>' }, H, 'text');
+    expect(r.value).toBe('x');
+  });
+
+  it('an object value is not a usable edit: research wins', () => {
+    expect(resolveResearchScalar('r', { format: 'text', binding_hash: H, value: { html: '<script>' } }, H, 'text')).toMatchObject({ value: 'r', edited: false });
+  });
+
+  it('resolveBlockContent sanitises scalar edits too', () => {
+    const out = resolveBlockContent({ summary: '<p>r</p>', research_edits: { format: 'richtext', binding_hash: H, value: '<p>e<script>x</script></p>' } }, { output: { field: 'summary', format: 'richtext' } }, H);
+    expect(out.summary).toBe('<p>e </p>');
+  });
+});
+
+describe('researchOutputFormat', () => {
+  it("is the binding's format, defaulting to array, whatever the stored value looks like", () => {
+    expect(researchOutputFormat({ output: {} })).toBe('array');
+    expect(researchOutputFormat({ output: { format: 'richtext' } })).toBe('richtext');
+    expect(researchOutputFormat({ output: { format: 'text' } })).toBe('text');
+    expect(researchOutputFormat({ output: { format: 'nonsense' } })).toBe('array');
+  });
+});
+
+describe('resolveContentForDef', () => {
+  const binding = { kind: 'research', input: { kind: 'discovery_posts' }, output: { field: 'items', format: 'array' } };
+  it('resolves a research block through its own binding hash and drops research_edits', async () => {
+    const h = await bindingHash(binding);
+    const content = { items, research_edits: { format: 'array', binding_hash: h, removed: ['a'] } };
+    const out = await resolveContentForDef(content, { id: 'd1', source_kind: 'research', data_source: binding });
+    expect(out.research_edits).toBeUndefined();
+    expect((out.items as Array<{ key: string }>).map((i) => i.key)).not.toContain('a');
+  });
+
+  it('a non-research block passes through, minus any stray research_edits', async () => {
+    const c = { body: 'x' };
+    expect(await resolveContentForDef(c, { id: 'd2', source_kind: 'static', data_source: null })).toBe(c);
+    expect(await resolveContentForDef({ body: 'x', research_edits: {} }, null)).toEqual({ body: 'x' });
   });
 });
 

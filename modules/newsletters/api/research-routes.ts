@@ -88,7 +88,8 @@ export function registerResearchRoutes(router: Router, wrap: Wrap) {
     for (const r of runs as Array<{ block_id: string }>) if (!latest[r.block_id]) latest[r.block_id] = r;
     const { data: gate } = await sb().rpc('newsletters_send_gate', { p_edition_id: editionId });
     const { data: eff } = await sb().rpc('newsletters_effective_research_at', { p_edition_id: editionId });
-    res.json({ blocks: blocks.map((b) => ({ ...b, latest_run: latest[b.id] ?? null })), gate: Array.isArray(gate) ? gate[0] : gate, effective_research_at: eff ?? null });
+    const { data: open } = await sb().rpc('newsletters_edition_research_open', { p_edition_id: editionId });
+    res.json({ blocks: blocks.map((b) => ({ ...b, latest_run: latest[b.id] ?? null })), gate: Array.isArray(gate) ? gate[0] : gate, effective_research_at: eff ?? null, research_open: open === true });
   }));
 
   router.get('/newsletters/editions/:editionId/research/runs', wrap(async (req, res) => {
@@ -108,7 +109,11 @@ export function registerResearchRoutes(router: Router, wrap: Wrap) {
     if (!UUID.test(editionId) || (blockId && !UUID.test(blockId))) return void res.status(400).json({ error: { code: 'VALIDATION_ERROR', message: 'invalid id' } });
     const { data: ed } = await sb().from('newsletters_editions').select('status').eq('id', editionId).maybeSingle();
     if (!ed) return void res.status(404).json({ error: { code: 'NOT_FOUND', message: 'edition not found' } });
-    if ((ed as { status: string }).status !== 'draft') return void res.status(409).json({ error: { code: 'EDITION_NOT_DRAFT', message: 'research only runs on draft editions' } });
+    // Drafts and published editions that have not started sending (the same
+    // rule newsletters_research_write applies when the run lands).
+    const { data: open, error: openErr } = await sb().rpc('newsletters_edition_research_open', { p_edition_id: editionId });
+    if (openErr) return void res.status(500).json({ error: { code: 'QUERY_ERROR', message: openErr.message } });
+    if (open !== true) return void res.status(409).json({ error: { code: 'EDITION_NOT_OPEN', message: 'research only runs on draft or published editions that have not started sending' } });
     const blocks = await researchBlocksOf(editionId, blockId);
     if (!blocks.length) return void res.status(404).json({ error: { code: 'NO_RESEARCH_BLOCKS', message: blockId ? 'that block has no research binding' : 'this edition has no research blocks' } });
     const queued: string[] = [];
@@ -124,7 +129,11 @@ export function registerResearchRoutes(router: Router, wrap: Wrap) {
         await enqueue(runId);
         queued.push(runId);
       } catch (e) {
-        await sb().from('newsletters_research_runs').update({ status: 'failed', failure_kind: 'other', error: `enqueue failed: ${e instanceof Error ? e.message : String(e)}` }).eq('id', runId).eq('status', 'queued');
+        // queued → cancelled: the 093 guard refuses queued → failed, and the
+        // row must leave queued so it stops holding the one-in-flight slot.
+        const msg = e instanceof Error ? e.message : String(e);
+        const { error: cErr } = await sb().from('newsletters_research_runs').update({ status: 'cancelled', failure_kind: 'other', error: `enqueue failed: ${msg}` }).eq('id', runId).eq('status', 'queued');
+        if (cErr) console.error(`[newsletters:research] could not cancel run ${runId} after enqueue failure: ${cErr.message}`);
         return void res.status(503).json({ error: { code: 'QUEUE_UNAVAILABLE', message: 'could not queue the research run; try again shortly' } });
       }
     }
