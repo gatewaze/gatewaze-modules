@@ -14,9 +14,10 @@
 --   2. re-creates templates_apply_source so block defs persist data_source,
 --      source_kind ('research' when the marker says so, else 'static') and
 --      block_kind ('ai-generated' when a recipe is involved, else
---      'gatewaze-internal'; 'static' otherwise) with freshness 'build-time'
---      (the 014 trigger requires it for gatewaze-internal), so the palette's
---      existing labelling stays truthful.
+--      'gatewaze-internal'; 'static' otherwise), so the palette's existing
+--      labelling stays truthful. freshness is 'build-time' on gatewaze-internal
+--      defs and NULL on ai-generated ones: the 014 trigger requires it on the
+--      first kind and forbids it on the second.
 -- Everything else in the function is byte-for-byte migration 026.
 -- Idempotent.
 -- ============================================================================
@@ -141,8 +142,13 @@ BEGIN
                                  OR (b_item->'data_source'->'transform'->>'kind') = 'recipe'
                                THEN 'ai-generated' ELSE 'gatewaze-internal' END
                      ELSE 'static' END,
-                -- research output is produced ahead of render, never at send time
-                CASE WHEN b_item->'data_source'->>'kind' = 'research' THEN 'build-time' ELSE NULL END)
+                -- research output is produced ahead of render, never at send time.
+                -- The 014 trigger allows a freshness only on gatewaze-internal and
+                -- external-fetched kinds, so an ai-generated def carries NULL.
+                CASE WHEN b_item->'data_source'->>'kind' = 'research'
+                      AND NOT ((b_item->'data_source'->'input'->>'kind') = 'recipe'
+                            OR (b_item->'data_source'->'transform'->>'kind') = 'recipe')
+                     THEN 'build-time' ELSE NULL END)
         RETURNING id INTO v_block_def_id;
       ELSE
         v_block_def_id := gen_random_uuid();
@@ -172,7 +178,10 @@ BEGIN
                                                OR (b_item->'data_source'->'transform'->>'kind') = 'recipe'
                                              THEN 'ai-generated' ELSE 'gatewaze-internal' END
                                    WHEN source_kind = 'research' THEN 'static' ELSE block_kind END,
-               freshness    = CASE WHEN b_item->'data_source'->>'kind' = 'research' THEN 'build-time'
+               freshness    = CASE WHEN b_item->'data_source'->>'kind' = 'research'
+                                   THEN CASE WHEN (b_item->'data_source'->'input'->>'kind') = 'recipe'
+                                               OR (b_item->'data_source'->'transform'->>'kind') = 'recipe'
+                                             THEN NULL ELSE 'build-time' END
                                    WHEN source_kind = 'research' THEN NULL ELSE freshness END,
                updated_at   = now()
          WHERE id = v_block_def_id;
