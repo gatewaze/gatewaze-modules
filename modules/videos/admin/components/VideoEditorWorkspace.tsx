@@ -15,6 +15,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Link } from 'react-router';
 import { toast } from 'sonner';
 import {
   ArrowUpTrayIcon,
@@ -38,6 +39,7 @@ import {
   getCopy,
   mintUploads,
   completeUpload,
+  checkUpload,
   schedulePublication,
   putToStorage,
   probeVideo,
@@ -62,7 +64,7 @@ const STEPS = [
   { id: 'publish', label: 'Titles and schedule', icon: ClockIcon },
 ];
 
-type ItemStatus = 'queued' | 'minting' | 'uploading' | 'finalising' | 'done' | 'failed';
+type ItemStatus = 'queued' | 'minting' | 'uploading' | 'finalising' | 'done' | 'failed' | 'cli';
 
 interface QueueItem {
   key: string;
@@ -73,6 +75,9 @@ interface QueueItem {
   error?: string;
   assetId?: string;
   videoId?: string;
+  /** Set when the file is to go up from the command line instead of this tab. */
+  cliCommand?: string;
+  cliExpiresIn?: number;
 }
 
 /** Two at a time: enough to use the connection, few enough to read. */
@@ -96,6 +101,9 @@ export default function VideoEditorWorkspace() {
 
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [running, setRunning] = useState(false);
+  // Large files can go up from a terminal on a signed URL instead of through
+  // this tab: the tab then only mints and, later, checks that the bytes landed.
+  const [viaCli, setViaCli] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
   const [videos, setVideos] = useState<EditorVideo[]>([]);
@@ -248,6 +256,7 @@ export default function VideoEditorWorkspace() {
           bytes: p.file.size,
           kind: p.kind,
           title: unit?.label,
+          ...(viaCli ? { cli_upload: true } : {}),
         })),
       });
     } catch (err) {
@@ -268,6 +277,13 @@ export default function VideoEditorWorkspace() {
         patchItem(item.key, {
           status: 'failed',
           error: mint?.reason ? describeReason(mint.reason) : 'The server refused this file',
+        });
+        return;
+      }
+      if (viaCli && mint.cli_upload_command) {
+        patchItem(item.key, {
+          status: 'cli', assetId: mint.asset_id, videoId: mint.video_id,
+          cliCommand: mint.cli_upload_command, cliExpiresIn: mint.cli_upload_expires_in,
         });
         return;
       }
@@ -312,6 +328,21 @@ export default function VideoEditorWorkspace() {
   const cancelUploads = () => {
     abortRef.current?.abort();
     setRunning(false);
+  };
+
+  /** Ask the server whether a command-line upload has landed, and close it if so. */
+  const checkCli = async (item: QueueItem) => {
+    if (!item.assetId) return;
+    try {
+      const r = await checkUpload(item.assetId);
+      if (r.status === 'complete' || r.status === 'already_complete') {
+        patchItem(item.key, { status: 'done', progress: 1 });
+        toast.success('Upload confirmed');
+        await refreshVideos();
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Not there yet');
+    }
   };
 
   // ── Copy + scheduling ──────────────────────────────────────────────────────
@@ -597,6 +628,11 @@ export default function VideoEditorWorkspace() {
                 />
               </div>
 
+              <label className="flex items-center gap-2 text-xs text-[var(--gray-11)] mb-3 cursor-pointer">
+                <input type="checkbox" checked={viaCli} onChange={(e) => setViaCli(e.target.checked)} disabled={running} />
+                Upload from the command line instead of this tab (for very large files: you get a curl line per file, valid for 12 hours, and press Check when it has finished)
+              </label>
+
               {queue.length > 0 && (
                 <div className="border border-[var(--gray-a6)] rounded mb-4">
                   <div className="px-3 py-2 flex items-center justify-between border-b border-[var(--gray-a5)]">
@@ -634,6 +670,8 @@ export default function VideoEditorWorkspace() {
                             <span className="text-xs text-[var(--green-11)]">Uploaded</span>
                           ) : q.status === 'failed' ? (
                             <span className="text-xs text-[var(--red-11)]" title={q.error}>Failed</span>
+                          ) : q.status === 'cli' ? (
+                            <Button size="xs" variant="outline" onClick={() => void checkCli(q)}>Check</Button>
                           ) : (
                             <span className="text-xs text-[var(--gray-9)]">queued</span>
                           )}
@@ -656,6 +694,19 @@ export default function VideoEditorWorkspace() {
                       {queue.find((q) => q.error)?.error}
                     </div>
                   )}
+                  {queue.filter((q) => q.status === 'cli' && q.cliCommand).map((q) => (
+                    <div key={`cli-${q.key}`} className="px-3 py-2 border-t border-[var(--gray-a5)] text-xs">
+                      <div className="text-[var(--gray-11)] mb-1">
+                        Run this in a terminal in the folder that holds <b>{q.file.name}</b>, then press Check. The link works for {Math.round((q.cliExpiresIn ?? 43200) / 3600)} hours.
+                      </div>
+                      <div className="flex items-start gap-2">
+                        <code className="flex-1 block whitespace-pre-wrap break-all bg-[var(--gray-a3)] rounded p-2 select-all">{q.cliCommand}</code>
+                        <Button size="xs" variant="outline" onClick={() => {
+                          navigator.clipboard?.writeText(q.cliCommand ?? '').then(() => toast.success('Copied')).catch(() => toast.error('Select and copy the line'));
+                        }}>Copy</Button>
+                      </div>
+                    </div>
+                  ))}
                 </div>
               )}
 
@@ -740,11 +791,18 @@ export default function VideoEditorWorkspace() {
                             <Badge color={v.kind === 'short' ? 'blue' : 'green'} variant="soft">{v.kind}</Badge>
                             <span className="text-sm font-medium">{v.title}</span>
                           </span>
-                          {!copy && (
-                            <Button size="xs" variant="outline" onClick={() => void loadCopy(v.id)}>
-                              Draft titles
-                            </Button>
-                          )}
+                          <span className="flex items-center gap-2">
+                            {ready && v.kind !== 'short' && (
+                              <Link to={`/videos/studio/${v.id}`} className="text-xs text-[var(--accent-11)] hover:underline">
+                                Open in studio
+                              </Link>
+                            )}
+                            {!copy && (
+                              <Button size="xs" variant="outline" onClick={() => void loadCopy(v.id)}>
+                                Draft titles
+                              </Button>
+                            )}
+                          </span>
                         </div>
 
                         {copy && (
@@ -886,6 +944,11 @@ function UploadedList({ videos, loading }: { videos: EditorVideo[]; loading: boo
                 <Badge color={a.state === 'ready' ? 'green' : a.state === 'failed' ? 'red' : 'amber'} variant="soft">
                   {a.state}
                 </Badge>
+                {a.kind === 'master' && a.state === 'ready' && (
+                  <Link to={`/videos/studio/${v.id}`} className="text-xs text-[var(--accent-11)] hover:underline shrink-0">
+                    Studio
+                  </Link>
+                )}
               </li>
             )),
         )}
