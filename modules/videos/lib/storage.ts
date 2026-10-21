@@ -57,7 +57,15 @@ export interface MasterStore {
    * module (a local shipper, a bulk copy). Bounded, so a mistaken prefix
    * cannot walk a whole bucket.
    */
-  listPrefix(prefix: string, max?: number): Promise<Array<{ path: string; bytes: number }>>;
+  listPrefix(prefix: string, max?: number): Promise<Array<{ path: string; bytes: number; etag?: string }>>;
+  /**
+   * Copy an object to another key in the same bucket, server side. Used to
+   * move an uploaded batch file out of the prefix the uploader's key can
+   * still write to (and, on B2, hide), so the adopted master is ours alone.
+   */
+  copy(from: string, to: string, mimeType?: string, ifMatchEtag?: string): Promise<void>;
+  /** The first `bytes` of an object, to sniff what it really is before trusting its name. */
+  readHead(path: string, bytes: number): Promise<Buffer>;
 }
 
 /**
@@ -161,6 +169,7 @@ export function externalise(url: string, env: Record<string, string | undefined>
 
 export function supabaseStore(supabase, bucket: string): MasterStore {
   const from = () => supabase.storage.from(bucket);
+  const from_ = from;
   return {
     provider: 'supabase',
     bucket,
@@ -201,6 +210,17 @@ export function supabaseStore(supabase, bucket: string): MasterStore {
       const up = await from().upload(assertSafeKey(path), stream, { contentType: mimeType, upsert: true, duplex: 'half' });
       if (up.error) throw new Error(`storage upload failed: ${up.error.message}`);
       return { bytes: count() };
+    },
+    async copy(from, to) {
+      const r = await from_().copy(assertSafeKey(from), assertSafeKey(to));
+      if (r.error) throw new Error(`storage copy failed: ${r.error.message}`);
+    },
+    async readHead(path, bytes) {
+      const signed = await from_().createSignedUrl(assertSafeKey(path), 60);
+      if (signed.error || !signed.data?.signedUrl) throw new Error('could not sign a read');
+      const r = await fetch(signed.data.signedUrl, { headers: { Range: `bytes=0-${Math.max(0, bytes - 1)}` }, signal: AbortSignal.timeout(30_000) });
+      if (!r.ok) throw new Error(`read ${r.status}`);
+      return Buffer.from(await r.arrayBuffer()).subarray(0, bytes);
     },
     async listPrefix(prefix, max = 2000) {
       // Supabase lists one folder level at a time, a page at a time; walk it.
@@ -325,16 +345,40 @@ export function s3Store(settings: S3Settings, bucket: string = settings.bucket):
       await up.done();
       return { bytes: count() };
     },
+    async copy(from, to, mimeType, ifMatchEtag) {
+      const [{ CopyObjectCommand }, client] = await Promise.all([import('@aws-sdk/client-s3'), s3Client(settings)]);
+      // Same bucket, server side: no bytes leave the store. Up to 5 GB in
+      // one call on S3 and on B2; a larger master would need a multipart
+      // copy, which no conference talk has needed yet. With an ETag the copy
+      // is conditional, so a source replaced between the listing and the
+      // copy fails rather than adopting bytes the listing never saw.
+      await client.send(new CopyObjectCommand({
+        Bucket: bucket,
+        CopySource: `/${bucket}/${assertSafeKey(from).split('/').map(encodeURIComponent).join('/')}`,
+        Key: assertSafeKey(to),
+        ...(ifMatchEtag ? { CopySourceIfMatch: ifMatchEtag } : {}),
+        ...(mimeType ? { ContentType: mimeType, MetadataDirective: 'REPLACE' } : {}),
+      }));
+    },
+    async readHead(path, bytes) {
+      const [{ GetObjectCommand }, client] = await Promise.all([import('@aws-sdk/client-s3'), s3Client(settings)]);
+      const r = await client.send(new GetObjectCommand({ Bucket: bucket, Key: assertSafeKey(path), Range: `bytes=0-${Math.max(0, bytes - 1)}` }));
+      const body = r.Body as { transformToByteArray?: () => Promise<Uint8Array> } | undefined;
+      if (!body?.transformToByteArray) throw new Error('no body');
+      return Buffer.from(await body.transformToByteArray()).subarray(0, bytes);
+    },
     async listPrefix(prefix, max = 2000) {
       const [{ ListObjectsV2Command }, client] = await Promise.all([import('@aws-sdk/client-s3'), s3Client(settings)]);
-      const out: Array<{ path: string; bytes: number }> = [];
+      const out: Array<{ path: string; bytes: number; etag?: string }> = [];
       let token: string | undefined;
       do {
         const r = await client.send(new ListObjectsV2Command({
           Bucket: bucket, Prefix: assertFolderPrefix(prefix), ContinuationToken: token, MaxKeys: Math.min(1000, max - out.length),
         }));
         for (const o of r.Contents ?? []) {
-          if (o.Key && !o.Key.endsWith('/')) out.push({ path: o.Key, bytes: Number(o.Size ?? 0) });
+          // The ETag names the bytes; a later upload under the same key
+          // changes it, which is how a replaced file is noticed.
+          if (o.Key && !o.Key.endsWith('/')) out.push({ path: o.Key, bytes: Number(o.Size ?? 0), etag: o.ETag ? String(o.ETag).replace(/"/g, '') : undefined });
         }
         token = r.IsTruncated ? r.NextContinuationToken : undefined;
       } while (token && out.length < max);
