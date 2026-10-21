@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseGoogleDocId, cleanDocHtml, buildFillPrompt, validateProposal, type FillTargetBlock, type FillLibraryBlock } from '../gdoc-fill.js';
+import { parseGoogleDocId, cleanDocHtml, buildFillPrompt, validateProposal, splitDocSections, mergeProposals, type FillTargetBlock, type FillLibraryBlock } from '../gdoc-fill.js';
 
 const ID = '1AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-abc';
 
@@ -107,5 +107,49 @@ describe('validateProposal', () => {
   });
   it('throws on a reply that is not JSON', () => {
     expect(() => validateProposal('sorry, I cannot', blocks, library)).toThrow();
+  });
+});
+
+describe('splitDocSections', () => {
+  const section = (h: string, n: number) => `<h2>${h}</h2>` + Array.from({ length: n }, (_, i) => `<p>${h} item ${i} ${'x'.repeat(80)}</p>`).join('');
+  it('keeps a short document in one part', () => {
+    const html = `<p>Subject: Hi</p>${section('A', 2)}${section('B', 2)}`;
+    expect(splitDocSections(html, 9000)).toEqual([html.replace(/(?=<h2>)/g, '\n').trim().replace(/^\n/, '')].map((x) => x));
+  });
+  it('splits at headings, packs sections and keeps the preamble first', () => {
+    const html = `<p>Subject: Hi</p>${section('A', 20)}${section('B', 20)}${section('C', 20)}`;
+    const parts = splitDocSections(html, 2500);
+    expect(parts.length).toBeGreaterThan(1);
+    expect(parts[0].startsWith('<p>Subject: Hi</p>')).toBe(true);
+    expect(parts.every((p) => p.length <= 2600)).toBe(true);
+    // Nothing is lost or duplicated apart from repeated headings.
+    const items = parts.join('').match(/item \d+/g)!.length;
+    expect(items).toBe(60);
+  });
+  it('breaks one oversized section at paragraph boundaries and repeats its heading', () => {
+    const parts = splitDocSections(section('Big', 60), 2000);
+    expect(parts.length).toBeGreaterThan(1);
+    expect(parts.every((p) => p.startsWith('<h2>Big</h2>'))).toBe(true);
+    expect(parts.join('').match(/Big item \d+/g)!.length).toBe(60);
+  });
+});
+
+describe('mergeProposals', () => {
+  it('joins list fields of the same block across parts and keeps first scalars', () => {
+    const m = mergeProposals([
+      { subject: 'S', preheader: null, unmapped: [{ heading: 'X', reason: '' }], blocks: [
+        { target_block_id: 'b1', block_type: 'stories', source_heading: 'TOP', content: { eyebrow: '', items: [{ headline: '1' }] } },
+      ] },
+      { subject: 'ignored', preheader: 'P', unmapped: [], blocks: [
+        { target_block_id: 'b1', block_type: 'stories', source_heading: 'MORE', content: { eyebrow: 'TOP STORIES', items: [{ headline: '2' }] } },
+        { target_block_id: null, block_type: 'finds', source_heading: 'F', content: { items: [{ headline: 'f' }] } },
+      ] },
+    ]);
+    expect(m.subject).toBe('S');
+    expect(m.preheader).toBe('P');
+    expect(m.blocks).toHaveLength(2);
+    expect(m.blocks[0].content).toEqual({ eyebrow: 'TOP STORIES', items: [{ headline: '1' }, { headline: '2' }] });
+    expect(m.blocks[0].source_heading).toBe('TOP; MORE');
+    expect(m.unmapped).toHaveLength(1);
   });
 });

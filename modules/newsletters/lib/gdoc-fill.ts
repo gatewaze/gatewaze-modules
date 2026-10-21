@@ -137,6 +137,8 @@ export function buildFillPrompt(opts: {
   docHtml: string;
   blocks: FillTargetBlock[];
   library: FillLibraryBlock[];
+  /** When the draft was split: this is part `index` (1-based) of `total`. */
+  part?: { index: number; total: number };
 }): string {
   const slots = opts.blocks
     .map((b, i) => [
@@ -158,7 +160,7 @@ The edition already has these blocks, in this order:
 
 ${slots || '(none)'}
 
-${extra ? `Block types that are not in the edition yet, which you may propose adding for a section that fits none of the blocks above:\n\n${extra}\n\n` : ''}THE DRAFT (HTML):
+${extra ? `Block types that are not in the edition yet, which you may propose adding for a section that fits none of the blocks above:\n\n${extra}\n\n` : ''}${opts.part && opts.part.total > 1 ? `The draft is long, so you are given PART ${opts.part.index} OF ${opts.part.total}. Map only the sections in this part. Other parts are mapped separately and merged afterwards, so it is fine to use a block that another part may also use.${opts.part.index > 1 ? ' Return null for subject and preheader.' : ''}\n\n` : ''}THE DRAFT (HTML):
 ${opts.docHtml}
 
 INSTRUCTIONS
@@ -331,6 +333,94 @@ export function validateProposal(
     const rec = (u ?? {}) as Record<string, unknown>;
     const heading = coerceText(rec.heading);
     if (heading) out.unmapped.push({ heading, reason: coerceText(rec.reason) ?? '' });
+  }
+  return out;
+}
+
+// ---------------------------------------------------------------------------
+// Long documents: split into parts, map the parts in parallel, merge.
+// One model call per document ran out of output room on a real 3,700-word
+// draft (162 links): copying that much content verbatim into JSON needs more
+// than one reply can hold, and took minutes. Parts of a few sections each
+// keep every reply small, and run side by side.
+// ---------------------------------------------------------------------------
+
+/**
+ * Split cleaned doc HTML at its headings into parts of at most `maxChars`
+ * (a single section longer than that is split at paragraph and list-item
+ * boundaries). Whatever comes before the first heading (title, subject,
+ * preheader notes) is kept at the front of the first part.
+ */
+export function splitDocSections(html: string, maxChars = 9_000): string[] {
+  const pieces = html.split(/(?=<h[1-4]>)/i).map((p) => p.trim()).filter(Boolean);
+  const sized: string[] = [];
+  for (const p of pieces) {
+    if (p.length <= maxChars) { sized.push(p); continue; }
+    // Oversized section: break between block elements, repeating its heading.
+    const heading = /^<h[1-4]>[\s\S]*?<\/h[1-4]>/i.exec(p)?.[0] ?? '';
+    const body = heading ? p.slice(heading.length) : p;
+    const blocks = body.split(/(?<=<\/(?:p|li|ul|ol|table|div)>)/i);
+    let cur = heading;
+    for (const b of blocks) {
+      if (cur.length + b.length > maxChars && cur.length > heading.length) {
+        sized.push(cur);
+        cur = heading ? `${heading}<p><em>(continued)</em></p>` : '';
+      }
+      cur += b;
+    }
+    if (cur.replace(heading, '').trim()) sized.push(cur);
+  }
+  const parts: string[] = [];
+  let cur = '';
+  for (const s of sized) {
+    if (cur && cur.length + s.length > maxChars) { parts.push(cur); cur = ''; }
+    cur += (cur ? '\n' : '') + s;
+  }
+  if (cur) parts.push(cur);
+  return parts;
+}
+
+function isEmptyValue(v: unknown): boolean {
+  if (v === null || v === undefined) return true;
+  if (typeof v === 'string') return v.trim() === '';
+  if (Array.isArray(v)) return v.length === 0;
+  return false;
+}
+
+const MAX_MERGED_ITEMS = 120;
+
+/**
+ * Merge the proposals of several parts, in document order. Two parts that
+ * fill the same existing block (or the same new block type) are joined: list
+ * fields are concatenated, any other field keeps the first non-empty value.
+ * Subject and preheader come from the first part that has them.
+ */
+export function mergeProposals(parts: FillProposal[]): FillProposal {
+  const out: FillProposal = { subject: null, preheader: null, blocks: [], unmapped: [] };
+  const index = new Map<string, FillProposalBlock>();
+  for (const p of parts) {
+    out.subject = out.subject ?? p.subject;
+    out.preheader = out.preheader ?? p.preheader;
+    out.unmapped.push(...p.unmapped);
+    for (const b of p.blocks) {
+      const key = b.target_block_id ? `id:${b.target_block_id}` : `new:${b.block_type}`;
+      const prev = index.get(key);
+      if (!prev) {
+        const copy: FillProposalBlock = { ...b, content: { ...b.content } };
+        index.set(key, copy);
+        out.blocks.push(copy);
+        continue;
+      }
+      for (const [k, v] of Object.entries(b.content)) {
+        const cur = prev.content[k];
+        if (Array.isArray(cur) && Array.isArray(v)) prev.content[k] = [...cur, ...v].slice(0, MAX_MERGED_ITEMS);
+        else if (isEmptyValue(cur) && !isEmptyValue(v)) prev.content[k] = v;
+      }
+      if (!prev.source_heading && b.source_heading) prev.source_heading = b.source_heading;
+      else if (b.source_heading && prev.source_heading && !prev.source_heading.includes(b.source_heading)) {
+        prev.source_heading = `${prev.source_heading}; ${b.source_heading}`.slice(0, 300);
+      }
+    }
   }
   return out;
 }
