@@ -56,7 +56,7 @@ describe('artboardHtml', () => {
   it('sizes the shout line to its longest word so nothing breaks mid-word', () => {
     expect(emphSize('REAL RESULTS')).toBe(14);
     expect(emphSize('BUT STILL VULNERABLE')).toBeLessThan(14);
-    expect(emphSize('BUT STILL VULNERABLE')).toBeGreaterThan(12);
+    expect(emphSize('BUT STILL VULNERABLE')).toBeGreaterThan(9);
     expect(emphSize('INCOMPREHENSIBILITIES')).toBe(7);
     expect(leadSize('Agent attacks and what stops them')).toBe(6);
     expect(leadSize('x'.repeat(120))).toBe(3.6);

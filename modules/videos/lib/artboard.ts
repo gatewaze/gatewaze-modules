@@ -66,7 +66,8 @@ export const ARTBOARD_CSS = `
   text-shadow: 0 .4cqw 1.6cqw rgba(0,0,0,.75); display: grid; grid-template-columns: minmax(0, 1fr); gap: .6cqw; }
 .art .txt > * { min-width: 0; }
 .art .lead { font-weight: 500; font-size: 6cqw; line-height: 1.02; letter-spacing: -.01em; text-wrap: balance; }
-.art .emph { font-weight: 900; font-size: 14cqw; line-height: .88; letter-spacing: -.025em; text-transform: uppercase; white-space: normal; text-wrap: balance; }
+.art .emph { font-weight: 900; font-size: 14cqw; line-height: .88; letter-spacing: -.025em; text-transform: uppercase; white-space: normal; text-wrap: balance;
+  overflow-wrap: normal; word-break: keep-all; }
 .art .brand { position: absolute; left: 0; top: 0; z-index: 2; background: #000;
   padding: 1.3cqw 2cqw 1.2cqw 2.4cqw; border-bottom-right-radius: 1.6cqw; }
 .art .brand img { display: block; width: 16cqw; height: auto; max-width: none; }
@@ -84,8 +85,9 @@ export const ARTBOARD_CSS = `
  * stays on one or two lines.
  */
 export function emphSize(emph: string): number {
+  // Archivo at weight 900 in capitals runs close to 0.9em per glyph.
   const longest = Math.max(1, ...String(emph ?? '').split(/\s+/).map((w) => w.length));
-  return Math.round(Math.min(14, Math.max(7, 92 / (0.72 * longest))) * 10) / 10;
+  return Math.round(Math.min(14, Math.max(7, 92 / (0.9 * longest))) * 10) / 10;
 }
 
 export function leadSize(lead: string): number {
