@@ -227,9 +227,18 @@ export class FeedScraper {
   // Sources
   // ───────────────────────────────────────────────────────────────────────
   async loadSources(sb) {
-    const ids = Array.isArray(this.jobOptions.source_ids) ? this.jobOptions.source_ids.filter((x) => typeof x === 'string') : null;
+    const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+    const pick = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string' && UUID.test(x)).slice(0, 500) : []);
+    // A job's own source_ids (run now, retry) may name any non-dead source.
+    // A scraper row's config.source_ids makes a focused scraper (a subset of
+    // the registry on its own schedule); the scrapers table is broadly
+    // writable, so that list only ever selects sources that are already active.
+    const jobIds = pick(this.jobOptions.source_ids);
+    const rowIds = jobIds.length ? [] : pick((this.config.config || {}).source_ids);
     let q = sb.from('discovery_sources').select('*');
-    q = ids && ids.length ? q.in('id', ids).neq('status', 'dead') : q.eq('status', 'active');
+    if (jobIds.length) q = q.in('id', jobIds).neq('status', 'dead');
+    else if (rowIds.length) q = q.in('id', rowIds).eq('status', 'active');
+    else q = q.eq('status', 'active');
     // No html extractor yet: an html row must never be fetched as a feed.
     q = q.neq('kind', 'html');
     const { data, error } = await q.order('foundation').order('project');
