@@ -47,6 +47,8 @@ interface NewsletterCanvasEditorProps {
   toolbarActions?: ReactNode;
   /** Extra sidebar panel for the selected block (see NewsletterPuckCanvas). */
   blockSidebarExtra?: (block: EditionBlock) => ReactNode;
+  /** Approver's cut-down editor (see NewsletterPuckCanvas). */
+  reviewMode?: boolean;
 }
 
 export const NewsletterCanvasEditor: FC<NewsletterCanvasEditorProps> = (props) => (
@@ -65,6 +67,7 @@ export const NewsletterCanvasEditor: FC<NewsletterCanvasEditorProps> = (props) =
     {...(props.hideDefaultActions !== undefined ? { hideDefaultActions: props.hideDefaultActions } : {})}
     {...(props.toolbarActions !== undefined ? { toolbarActions: props.toolbarActions } : {})}
     {...(props.blockSidebarExtra ? { blockSidebarExtra: props.blockSidebarExtra } : {})}
+    {...(props.reviewMode ? { reviewMode: true } : {})}
   />
 );
 

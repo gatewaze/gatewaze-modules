@@ -136,6 +136,13 @@ interface NewsletterPuckCanvasProps {
    * the Research panel for research blocks (spec §5.2, §5.4).
    */
   blockSidebarExtra?: (block: EditionBlock) => ReactNode;
+  /**
+   * The approver's cut-down editor: canvas + Fields only. Hides the view
+   * toggle, the newsletter actions, the AI plugin, the block palette and the
+   * outline, and stops blocks being added, moved or removed. Pair with
+   * `toolbarActions` for the approval buttons.
+   */
+  reviewMode?: boolean;
 }
 
 /**
@@ -165,6 +172,15 @@ function SelectedBlockSidebarAddon(): ReactElement | null {
   if (!extra) return null;
   return <div className="gw-block-sidebar-extra" style={{ padding: '0 16px 16px' }}>{extra}</div>;
 }
+
+const NO_PLUGINS: ReadonlyArray<never> = [];
+
+/** Review mode's action bar: the block's name only, no save/duplicate/delete. */
+const ReviewActionBar: NonNullable<Overrides['actionBar']> = ({ label }) => (
+  <ActionBar>
+    <ActionBar.Group>{label ? <ActionBar.Label label={label} /> : null}</ActionBar.Group>
+  </ActionBar>
+);
 
 const fieldsWithBlockAddon: NonNullable<Overrides['fields']> = ({ children }) => (
   <>
@@ -201,6 +217,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
   hideDefaultActions,
   toolbarActions,
   blockSidebarExtra,
+  reviewMode = false,
 }) => {
   // Default false so the Publish button renders enabled when the
   // parent doesn't thread the saving state through.
@@ -760,6 +777,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
           flexWrap: 'wrap',
         }}
       >
+        {!reviewMode && (
         <div role="group" aria-label="View mode" style={toolbarSegment()}>
           <button
             type="button"
@@ -802,9 +820,10 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
             <CodeBracketIcon className="w-4 h-4" />
           </button>
         </div>
+        )}
 
         <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
-          {!hideDefaultActions && (
+          {!hideDefaultActions && !reviewMode && (
           <>
           {/* Output destinations grouped in a single connected segment
               (same visual treatment as the Light/Dark + view toggles)
@@ -1062,7 +1081,8 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
           hostKind="newsletter"
           hostId={collectionId ?? edition.id}
           targetId={edition.id}
-          extraPlugins={aiCopilotPlugins}
+          extraPlugins={reviewMode ? NO_PLUGINS : aiCopilotPlugins}
+          variant={reviewMode ? 'review' : 'full'}
           // Disable AI on unsaved editions — the generate endpoint
           // looks up the edition row in newsletters_editions to build
           // its prompt context (library, blocks, preheader), and would
@@ -1077,7 +1097,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
           // false even when the row was status='enabled'). Keep
           // hasEditorAi as a belt-and-braces OR so the gate still
           // honours a deliberate disable from the modules admin.
-          aiEnabled={(aiCopilotPlugins.length > 0 || hasEditorAi) && edition.id !== 'new'}
+          aiEnabled={!reviewMode && (aiCopilotPlugins.length > 0 || hasEditorAi) && edition.id !== 'new'}
           {...(edition.id === 'new'
             ? { aiDisabledReason: 'Save the edition first, then come back to use AI to generate content.' }
             : {})}
@@ -1114,7 +1134,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
             // that appears around the selected component. Mirrors the
             // puckeditor.com DefaultActionBar shape — <ActionBar>
             // wrapper + two <ActionBar.Group> sections.
-            actionBar: ({ children, parentAction, label }) => (
+            actionBar: reviewMode ? ReviewActionBar : ({ children, parentAction, label }) => (
               <ActionBar>
                 <ActionBar.Group>
                   {parentAction}
@@ -1174,11 +1194,11 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
           the operator can watch the size grow as blocks are added. The
           first paint shows "…" until the debounced exportEditionHtml
           resolves; subsequent edits update after a 600ms idle. */}
-      <EmailSizeIndicator
+      {!reviewMode && <EmailSizeIndicator
         sizeInBytes={emailSizeBytes ?? 0}
         blocksCount={edition.blocks.length}
         ready={emailSizeBytes !== null}
-      />
+      />}
     </div>
     </BlockSidebarContext.Provider>
     </NewsletterEditingProvider>
