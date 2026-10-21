@@ -17,7 +17,7 @@ describe('sanitiseSelection', () => {
       analysis: { hacked: true }, state: 'approved',
     }, analysis);
     expect(s).toEqual({
-      cut: 'cut-20', scale: 1.5, x: 0.4, lead: 'Lead', emph: 'Big words', panels: false,
+      cut: 'cut-20', scale: 1.5, x: 0.4, y: null, lead: 'Lead', emph: 'Big words', panels: false, panel_keys: null,
       trim_in: 30, trim_out: 600, preroll: false, card_title: 'A title',
       card_speakers: [{ name: 'Dex', role: null, company: 'HumanLayer' }],
     });

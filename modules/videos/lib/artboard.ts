@@ -15,15 +15,17 @@
 export interface ArtboardSelection {
   /** Speaker scale, 0.7 to 1.5 (1 = the cut-out at its natural size). */
   scale: number;
-  /** Where the speaker's centre sits across the frame, 0.4 to 0.85. */
+  /** Where the speaker's head sits across the frame, 0.4 to 0.85. */
   x: number;
+  /** Where the speaker's head sits down the frame, 0.05 to 0.75; null keeps the frame's own height. */
+  y: number | null;
   lead: string;
   emph: string;
   /** Show the slide panels behind the speaker. */
   panels: boolean;
 }
 
-export const DEFAULT_SELECTION: ArtboardSelection = { scale: 1, x: 0.62, lead: '', emph: '', panels: true };
+export const DEFAULT_SELECTION: ArtboardSelection = { scale: 1, x: 0.62, y: null, lead: '', emph: '', panels: true };
 
 export const ARTBOARD_WIDTH = 1280;
 export const ARTBOARD_HEIGHT = 720;
@@ -37,6 +39,7 @@ export function clampSelection(sel: Partial<ArtboardSelection>): ArtboardSelecti
   return {
     scale: n(sel.scale, 0.7, 1.5, 1),
     x: n(sel.x, 0.4, 0.85, 0.62),
+    y: sel.y === null || sel.y === undefined || (sel.y as unknown) === '' ? null : n(sel.y, 0.05, 0.75, 0.25),
     lead: String(sel.lead ?? '').replace(/\s+/g, ' ').trim().slice(0, 60),
     emph: String(sel.emph ?? '').replace(/\s+/g, ' ').trim().slice(0, 40),
     panels: sel.panels !== false,
@@ -54,7 +57,7 @@ export const ARTBOARD_CSS = `
 .art .card.b { right: 2.5%; top: 11%; width: 46%; filter: saturate(.8) brightness(.7); }
 .art .card.solo { left: 50%; top: 5%; width: 62%; transform: translateX(-50%); }
 .art .cut { position: absolute; left: 0; top: 0; width: 100%; height: 100%; max-width: none;
-  object-fit: contain; transform-origin: 50% 100%;
+  object-fit: contain; transform-origin: 50% 20%;
   filter: brightness(1.14) contrast(1.1) saturate(1.06) drop-shadow(0 .8cqw 2.4cqw rgba(0,0,0,.7)); }
 .art .scrim { position: absolute; inset: 0;
   background: linear-gradient(180deg, rgba(0,0,0,.55) 0%, rgba(0,0,0,0) 26%, rgba(0,0,0,0) 44%, rgba(0,0,0,.42) 66%, rgba(0,0,0,.74) 100%); }
@@ -69,8 +72,6 @@ export const ARTBOARD_CSS = `
 .art .brand img { display: block; width: 16cqw; height: auto; max-width: none; }
 .art .mark { position: absolute; z-index: 2; top: 30%; max-width: 30%; height: 9cqw; width: auto;
   filter: brightness(0) invert(1) drop-shadow(0 .5cqw 1.4cqw rgba(0,0,0,.7)); opacity: .96; object-fit: contain; }
-.art .mark.name { height: auto; font-family: "Archivo", "Arial Black", Impact, sans-serif; font-weight: 700; font-size: 4cqw; letter-spacing: .06em;
-  text-transform: uppercase; color: #fff; filter: drop-shadow(0 .4cqw 1.2cqw rgba(0,0,0,.7)); top: 32%; }
 .art .mark.l { left: 4.5%; } .art .mark.r { right: 4.5%; }
 .art .mark.tr { top: 6%; right: 4%; height: 7cqw; }
 `;
@@ -86,8 +87,9 @@ export interface ArtboardInput {
   logoSrc: string;
   cutSrc: string | null;
   panelSrcs: string[];
-  /** The company mark: an image, or a name set in type. */
+  /** The company logo, when the talk has one. No logo means no mark at all. */
   markSrc?: string | null;
+  /** Ignored: a name is no longer set in place of a missing logo. */
   markName?: string | null;
   /** Cut-out bounds as fractions of the frame, for placing the mark away from the speaker. */
   cutBounds?: [number, number, number, number] | null;
@@ -100,8 +102,45 @@ export function markPosition(sel: ArtboardSelection, cutBounds?: [number, number
   return sel.x > 0.5 ? 'l' : 'r';
 }
 
-export function cutTransform(sel: ArtboardSelection): string {
-  return `translateX(${((sel.x - 0.5) * 100).toFixed(2)}%) scale(${sel.scale.toFixed(3)})`;
+/** Where the head is in a cut-out, as fractions: the bounds' centre, a little below their top. */
+export function headPoint(bbox: [number, number, number, number] | null | undefined): { hx: number; hy: number } {
+  if (!bbox) return { hx: 0.5, hy: 0.2 };
+  const [x0, y0, x1, y1] = bbox;
+  return { hx: (x0 + x1) / 2, hy: y0 + (y1 - y0) * 0.08 };
+}
+
+/**
+ * The cut-out's placement, anchored on the head so that scaling never
+ * pushes the face out of the frame.
+ *
+ * The transform origin is the head point, so a scale leaves the head where
+ * it is. `x` and `y` say where the head should sit; the translation is the
+ * difference from where it is, clamped so the head stays inside the frame.
+ * When the figure is scaled down, it is also pushed down so its feet stay
+ * on the bottom edge rather than floating above a cut edge.
+ */
+export function cutPlacement(sel: ArtboardSelection, bbox?: [number, number, number, number] | null): { transform: string; origin: string } {
+  const { hx, hy } = headPoint(bbox);
+  const s = sel.scale;
+  let dx = sel.x - hx;
+  let dy = (sel.y ?? hy) - hy;
+  // Feet on the floor when shrinking: bottom edge y1 maps to hy + (y1 - hy) * s + dy.
+  const y1 = bbox ? bbox[3] : 1;
+  const floor = 1 - hy - (y1 - hy) * s;
+  if (s < 1 && dy < floor) dy = floor;
+  // The head stays in the picture.
+  dx = Math.min(0.88 - hx, Math.max(0.12 - hx, dx));
+  dy = Math.min(0.75 - hy, Math.max(0.05 - hy, dy));
+  const pct = (v: number) => (Math.abs(v) < 5e-5 ? 0 : v * 100).toFixed(2);
+  return {
+    transform: `translate(${pct(dx)}%, ${pct(dy)}%) scale(${s.toFixed(3)})`,
+    origin: `${(hx * 100).toFixed(2)}% ${(hy * 100).toFixed(2)}%`,
+  };
+}
+
+/** @deprecated kept for the tests of the first version; cutPlacement is what renders. */
+export function cutTransform(sel: ArtboardSelection, bbox?: [number, number, number, number] | null): string {
+  return cutPlacement(sel, bbox).transform;
 }
 
 /** The artboard's inner markup. The caller wraps it in a sized box and the CSS. */
@@ -112,14 +151,15 @@ export function artboardHtml(input: ArtboardInput): string {
     ? `<img class="card b" src="${escapeHtml(panels[1])}" alt=""><img class="card a" src="${escapeHtml(panels[0])}" alt="">`
     : panels.length === 1 ? `<img class="card solo" src="${escapeHtml(panels[0])}" alt="">` : '';
   const pos = markPosition(sel, input.cutBounds);
-  const mark = input.markSrc
-    ? `<img class="mark ${pos}" src="${escapeHtml(input.markSrc)}" alt="">`
-    : input.markName ? `<span class="mark name ${pos}">${escapeHtml(input.markName)}</span>` : '';
+  // A logo or nothing. A company with no logo on file shows no name either:
+  // a word set in the display face reads as a slogan, not a mark.
+  const mark = input.markSrc ? `<img class="mark ${pos}" src="${escapeHtml(input.markSrc)}" alt="">` : '';
+  const place = cutPlacement(sel, input.cutBounds);
   return `<div class="art">
   <img class="bgd" src="${escapeHtml(input.backgroundSrc)}" alt="">
   <div class="tint"></div>
   ${panelHtml}
-  ${input.cutSrc ? `<img class="cut" src="${escapeHtml(input.cutSrc)}" alt="" style="transform:${cutTransform(sel)}">` : ''}
+  ${input.cutSrc ? `<img class="cut" src="${escapeHtml(input.cutSrc)}" alt="" style="transform:${place.transform};transform-origin:${place.origin}">` : ''}
   <div class="scrim"></div>
   <div class="txt"><span class="lead">${escapeHtml(sel.lead)}</span><span class="emph">${escapeHtml(sel.emph)}</span></div>
   <span class="brand"><img src="${escapeHtml(input.logoSrc)}" alt=""></span>
