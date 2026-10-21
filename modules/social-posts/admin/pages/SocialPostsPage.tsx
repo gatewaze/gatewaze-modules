@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { Checkbox, Tabs } from '@/components/ui';
+import { Checkbox, WorkspaceLayout } from '@/components/ui';
 import { Page } from '@/components/shared/Page';
 import type { Platform } from '../../lib/formats';
 import type { PoolType } from '../../lib/pool-types';
@@ -92,51 +92,51 @@ export default function SocialPostsPage() {
 
   return (
     <Page title="Social Posts">
-      <div className="p-6 space-y-5">
-        <div>
-          <h1 className="text-xl font-semibold text-[var(--gray-12)]">Social Posts</h1>
-          <p className="text-sm text-[var(--gray-a10)] mt-1">
-            Write LinkedIn posts from curated content. Pick items, pick a format, generate, then edit and save the draft.
-          </p>
-        </div>
+      <WorkspaceLayout
+        title="Social Posts"
+        tabs={[
+          { id: 'write', label: 'Write' },
+          { id: 'drafts', label: 'Drafts', count: activeDrafts },
+        ]}
+        activeTabId={tab}
+        onTabChange={(t) => setTab(t === 'drafts' ? 'drafts' : 'write')}
+      >
+        <div className="space-y-5">
+          {tab === 'write' && (
+            <p className="text-sm text-[var(--gray-a10)]">
+              Write LinkedIn posts from curated content. Pick items, pick a format, generate, then edit and save the draft.
+            </p>
+          )}
 
-        <Tabs
-          value={tab}
-          onChange={(t) => setTab(t === 'drafts' ? 'drafts' : 'write')}
-          tabs={[
-            { id: 'write', label: 'Write' },
-            { id: 'drafts', label: 'Drafts', count: activeDrafts },
-          ]}
-        />
-
-        {tab === 'write' ? (
-          <div className="grid gap-5 lg:grid-cols-5">
-            <div className="lg:col-span-3">
-              <ContentPicker selected={selected} onToggle={toggle} />
+          {tab === 'write' ? (
+            <div className="grid gap-5 lg:grid-cols-5">
+              <div className="lg:col-span-3">
+                <ContentPicker selected={selected} onToggle={toggle} />
+              </div>
+              <div className="lg:col-span-2">
+                <Composer
+                  platform={PLATFORM}
+                  selected={selectedList}
+                  onRemove={toggle}
+                  state={composer}
+                  setState={setComposer}
+                  onSaved={reloadDrafts}
+                  onNew={startNew}
+                />
+              </div>
             </div>
-            <div className="lg:col-span-2">
-              <Composer
-                platform={PLATFORM}
-                selected={selectedList}
-                onRemove={toggle}
-                state={composer}
-                setState={setComposer}
-                onSaved={reloadDrafts}
-                onNew={startNew}
+          ) : (
+            <div className="space-y-3">
+              <Checkbox
+                label="Show archived"
+                checked={showArchived}
+                onChange={(e: React.ChangeEvent<HTMLInputElement>) => setShowArchived(e.target.checked)}
               />
+              <DraftsList drafts={drafts} error={draftsError} onOpen={openDraft} onChanged={draftChanged} />
             </div>
-          </div>
-        ) : (
-          <div className="space-y-3">
-            <Checkbox
-              label="Show archived"
-              checked={showArchived}
-              onChange={(e: React.ChangeEvent<HTMLInputElement>) => setShowArchived(e.target.checked)}
-            />
-            <DraftsList drafts={drafts} error={draftsError} onOpen={openDraft} onChanged={draftChanged} />
-          </div>
-        )}
-      </div>
+          )}
+        </div>
+      </WorkspaceLayout>
     </Page>
   );
 }

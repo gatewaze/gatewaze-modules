@@ -1,7 +1,7 @@
 import { Suspense, lazy, useCallback, useEffect, useMemo } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Page } from '@/components/shared/Page';
-import { Tabs } from '@/components/ui';
+import { WorkspaceLayout } from '@/components/ui';
 import { useModuleSlots, type ResolvedSlot } from '@/hooks/useModuleSlots';
 
 /**
@@ -97,31 +97,28 @@ export default function ContentShell() {
 
   return (
     <Page title="Content">
-      <div className="border-b border-[var(--gray-a4)]">
-        <Tabs
-          value={sectionId}
-          onChange={(id) => navigateToSection(id)}
-          tabs={SECTIONS.map(s => ({ id: s.id, label: s.label }))}
-        />
-      </div>
-
-      {subTabs.length === 0 ? (
-        <div className="p-8 text-sm text-[var(--gray-11)]">
-          No content modules contribute to <code>{sectionId}</code> yet.
-          Install or enable a module that registers a
-          <code> content-hub:{sectionId} </code> slot.
-        </div>
-      ) : (
-        <>
-          <div className="px-4 pt-2 border-b border-[var(--gray-a3)]">
-            <Tabs
-              value={tabId ?? subTabs[0].id}
-              onChange={navigateToSubTab}
-              tabs={subTabs.map(t => ({ id: t.id, label: t.label }))}
-            />
+      {/* Hero header with the sections as tabs and the active section's
+          slot contributions as sub-tabs, like Inbox and Newsletters. */}
+      <WorkspaceLayout
+        title="Content"
+        tabs={SECTIONS.map(s => ({ id: s.id, label: s.label }))}
+        activeTabId={sectionId}
+        onTabChange={navigateToSection}
+        subTabs={subTabs.map(t => ({ id: t.id, label: t.label }))}
+        activeSubTabId={tabId ?? subTabs[0]?.id ?? ''}
+        onSubTabChange={navigateToSubTab}
+      >
+        {subTabs.length === 0 ? (
+          <div className="text-sm text-[var(--gray-11)]">
+            No content modules contribute to <code>{sectionId}</code> yet.
+            Install or enable a module that registers a
+            <code> content-hub:{sectionId} </code> slot.
           </div>
-
-          <div className="content-hub-tab-content">
+        ) : (
+          // Contributed tabs pad themselves (p-6) because they also render
+          // outside this shell; cancel the layout's own content padding so
+          // they line up with the hero instead of sitting double-indented.
+          <div className="content-hub-tab-content -mx-6 -mt-8 -mb-6">
             {ActiveComponent ? (
               <Suspense
                 key={tabId}
@@ -133,8 +130,8 @@ export default function ContentShell() {
               <div className="p-8 text-sm text-[var(--gray-11)]">No tab selected.</div>
             )}
           </div>
-        </>
-      )}
+        )}
+      </WorkspaceLayout>
     </Page>
   );
 }
