@@ -136,7 +136,19 @@ export interface MintedFile {
   upload_url?: string;
   /** Headers the PUT must carry; on S3 the Content-Type is part of the signature. */
   upload_headers?: Record<string, string>;
+  /** Present when the file was minted for a command-line upload (S3 stores only). */
+  cli_upload_command?: string;
+  cli_upload_expires_in?: number;
   ticket?: string;
+}
+
+/**
+ * Close an upload that went up from the command line. The server HEADs the
+ * object and applies the same checks `complete` does, from the asset row.
+ */
+export async function checkUpload(assetId: string): Promise<{ status: string; asset_id: string; video_id: string; bytes?: number }> {
+  const res = await authedFetch(`${BASE}/uploads/${encodeURIComponent(assetId)}/check`, { method: 'POST', body: '{}' });
+  return jsonOrThrow(res);
 }
 
 // ── Calls ────────────────────────────────────────────────────────────────────
@@ -282,7 +294,7 @@ export async function mintUploads(args: {
   subjectType: SubjectType;
   subjectId: string;
   unitId: string;
-  files: Array<{ filename: string; mime_type: string; bytes: number; kind: AssetKind; title?: string }>;
+  files: Array<{ filename: string; mime_type: string; bytes: number; kind: AssetKind; title?: string; cli_upload?: boolean }>;
 }): Promise<MintedFile[]> {
   const res = await authedFetch(`${BASE}/uploads/mint`, {
     method: 'POST',

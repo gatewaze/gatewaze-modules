@@ -39,7 +39,10 @@ export function driveFolderId(value: unknown): string | null {
  * again once the first run has had time to start.
  */
 export function dedupeJobId(prefix: string, scope: string, nowMs = Date.now()): string {
-  return `${prefix}:${scope}:${Math.floor(nowMs / 600_000)}`;
+  // Hyphens, not colons: BullMQ 5.81 refuses a custom job id containing ':'
+  // (it is the key separator), and the refusal surfaced as an unhandled
+  // rejection and a 500 on every import button.
+  return `${prefix}-${scope.replace(/:/g, '-')}-${Math.floor(nowMs / 600_000)}`;
 }
 
 export function mountImportsRoutes(router: Router, deps: ImportsDeps): void {
@@ -100,8 +103,8 @@ export function mountImportsRoutes(router: Router, deps: ImportsDeps): void {
   router.get('/recent', async (_req: Request, res: Response) => {
     const { data, error } = await supabase
       .from('video_assets')
-      .select('id, video_id, kind, state, bytes, filename, source, storage_provider, error, created_at, updated_at')
-      .in('source', ['youtube_import', 'drive_import', 'bucket_import'])
+      .select('id, video_id, kind, state, bytes, filename, source, storage_provider, batch_id, error, created_at, updated_at')
+      .in('source', ['youtube_import', 'drive_import', 'bucket_import', 'batch_import', 'studio'])
       .order('created_at', { ascending: false })
       .limit(100);
     if (error) return res.status(500).json({ error: error.message });

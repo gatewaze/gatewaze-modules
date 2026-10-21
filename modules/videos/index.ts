@@ -21,7 +21,7 @@ const videosModule: GatewazeModule = {
   description:
     'Video masters, shorts and scheduled publication. Editors upload against a talk or episode; '
     + 'Gatewaze holds the file and publishes on a schedule.',
-  version: '1.11.0',
+  version: '1.12.0',
   features: ['videos', 'videos.manage', 'videos.edit'],
 
   dependencies: ['content-platform'],
@@ -63,6 +63,23 @@ const videosModule: GatewazeModule = {
     // 015 names a master adopted from an object that was put in the bucket
     // by something outside the module (a local yt-dlp run shipped up).
     'migrations/015_bucket_import_source.sql',
+    // 016 adds the studio pass: one row per video holding what the worker
+    // found in the master, the headline drafts, the editor's choices and
+    // what approval produced.
+    'migrations/016_studio.sql',
+    // 017 adds upload batches: a prefix in the master bucket plus an
+    // expiring, upload-only Backblaze key issued to one person, with a cron
+    // that adopts what lands there.
+    'migrations/017_upload_batches.sql',
+    // 018 keeps the uploaded object's path on the master that was copied
+    // from it, because the adopted master lives outside the batch prefix.
+    'migrations/018_batch_import_path.sql',
+    // 019 records key revocation so a failed delete is retried, and makes
+    // each uploaded object adopt exactly once.
+    'migrations/019_batch_revoke_and_dedupe.sql',
+    // 020 adds a company logo per talk (not per speaker) and the studio's
+    // own uploads: a speaker photo or a background image in place of a frame.
+    'migrations/020_talk_logos_and_uploads.sql',
   ],
 
   apiRoutes: async (app: unknown, ctx?: unknown) => {
@@ -72,6 +89,25 @@ const videosModule: GatewazeModule = {
   },
 
   adminRoutes: [
+    {
+      // The studio for one video: cut-outs, headline, trim, pre-roll, approve.
+      path: 'videos/studio/:videoId',
+      component: () => import('./admin/components/VideoStudio'),
+      requiredFeature: 'videos.edit',
+      guard: 'none',
+    },
+    {
+      path: 'videos/batches/:batchId',
+      component: () => import('./admin/components/VideoBatchDetail'),
+      requiredFeature: 'videos.manage',
+      guard: 'none',
+    },
+    {
+      path: 'videos/batches',
+      component: () => import('./admin/components/VideoBatches'),
+      requiredFeature: 'videos.manage',
+      guard: 'none',
+    },
     {
       // Before 'videos', so a future 'videos/:id' cannot swallow it.
       path: 'videos/unassigned',
@@ -130,6 +166,16 @@ const videosModule: GatewazeModule = {
       defaultLocation: 'sidebar',
       order: 67,
     },
+    {
+      path: '/videos/batches',
+      label: 'Upload batches',
+      // FolderArrowDownIcon.
+      icon: 'FolderArrowDown',
+      requiredFeature: 'videos.manage',
+      defaultSection: 'Content',
+      defaultLocation: 'sidebar',
+      order: 68,
+    },
   ],
 
   workers: [
@@ -163,6 +209,33 @@ const videosModule: GatewazeModule = {
       handler: './workers/adopt-from-bucket.ts',
       concurrency: 1,
     },
+    {
+      // Downloads a master, samples it, calls the vision model, cuts the
+      // speaker out. One at a time: each holds a master on disk and a
+      // Chromium is not involved here but ffmpeg is, on every frame.
+      name: 'videos:studio-analyse',
+      handler: './workers/studio-analyse.ts',
+      concurrency: 1,
+    },
+    {
+      // Renders the thumbnail in Chromium and, when asked, cuts and joins
+      // the master. One at a time for the same reason.
+      name: 'videos:studio-finalize',
+      handler: './workers/studio-finalize.ts',
+      concurrency: 1,
+    },
+    {
+      // Cuts an uploaded speaker photo out and adds it as a frame.
+      name: 'videos:studio-upload',
+      handler: './workers/studio-upload.ts',
+      concurrency: 1,
+    },
+    {
+      // Lists each open batch's prefix and adopts what landed. Rows only.
+      name: 'videos:sync-batches',
+      handler: './workers/sync-batches.ts',
+      concurrency: 1,
+    },
   ],
 
   crons: [
@@ -181,6 +254,15 @@ const videosModule: GatewazeModule = {
       queue: 'jobs',
       schedule: { pattern: '*/15 * * * *' },
       data: { kind: 'videos:reap-upload-sessions' },
+    },
+    {
+      // Every five minutes. A listing per open batch is one cheap call, and
+      // an editor watching the batch page should see a file within minutes
+      // of it landing. A no-op with no open batch.
+      name: 'videos:sync-batches',
+      queue: 'jobs',
+      schedule: { pattern: '*/5 * * * *' },
+      data: { kind: 'videos:sync-batches' },
     },
   ],
 
@@ -204,6 +286,36 @@ const videosModule: GatewazeModule = {
       description:
         'The run stops once it has pulled this much, so an import cannot quietly consume '
         + 'tens of gigabytes. Defaults to 30 GB, about one conference.',
+    },
+    studio_max_master_bytes: {
+      key: 'studio_max_master_bytes',
+      type: 'number',
+      required: false,
+      default: '8589934592',
+      label: 'Largest master the studio will analyse (bytes)',
+      description:
+        'The studio copies the master to the worker\'s disk to sample and cut it. Defaults to 8 GB; '
+        + 'a multi-hour livestream above this is refused with a message rather than filling the pod.',
+    },
+    batch_max_files: {
+      key: 'batch_max_files',
+      type: 'number',
+      required: false,
+      default: '200',
+      label: 'Most files one upload batch will adopt',
+      description:
+        'Every adopted file is a video row, a server-side copy and a studio pass with model calls. '
+        + 'A batch past this many is flagged and stops adopting; close it and open another.',
+    },
+    studio_sample_every_seconds: {
+      key: 'studio_sample_every_seconds',
+      type: 'number',
+      required: false,
+      default: '10',
+      label: 'Seconds between sampled frames',
+      description:
+        'How often the studio takes a frame to judge. Ten seconds is 100 frames for a 17-minute talk; '
+        + 'the interval widens on its own so a long video never samples more than 300.',
     },
     drive_import_run_cap_bytes: {
       key: 'drive_import_run_cap_bytes',
