@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { dragOffset, swipeVerdict, TAP_SLOP_PX } from '../event-pages/_components/_lib/swipe';
+import { dragOffset, GUTTER_PX, settleOffset, swipeVerdict, TAP_SLOP_PX } from '../event-pages/_components/_lib/swipe';
 
 const W = 400;
 
@@ -44,5 +44,35 @@ describe('how far the photograph follows', () => {
   it('has a tap slop small enough to be a tap', () => {
     expect(TAP_SLOP_PX).toBeLessThanOrEqual(12);
     expect(dragOffset(NaN, { atStart: false, atEnd: false })).toBe(0);
+  });
+});
+
+describe('settling onto the next photograph', () => {
+  // The neighbours sit one full width plus the gutter to either side.
+  // Travelling any other distance leaves the incoming photograph off
+  // centre, and the correction back to the middle is the "bounce" a
+  // swipe used to end with.
+  it('travels exactly to where the neighbour is', () => {
+    expect(settleOffset(-1, 800)).toBe(-(800 + GUTTER_PX));
+    expect(settleOffset(1, 800)).toBe(800 + GUTTER_PX);
+  });
+
+  it('is the width of the roll, not of the window', () => {
+    // A narrow track inside a wide window: the old code used the window
+    // and overshot by the difference.
+    expect(settleOffset(-1, 400)).toBe(-(400 + GUTTER_PX));
+    expect(settleOffset(-1, 400)).not.toBe(-1400);
+  });
+
+  it('refuses to move on a width it cannot believe', () => {
+    expect(settleOffset(-1, 0)).toBe(0);
+    expect(settleOffset(1, NaN)).toBe(0);
+    expect(settleOffset(1, -10)).toBe(0);
+  });
+
+  it('takes a gutter of its own, and nothing silly', () => {
+    expect(settleOffset(-1, 100, 0)).toBe(-100);
+    expect(settleOffset(-1, 100, -5)).toBe(-100);
+    expect(settleOffset(-1, 100, NaN)).toBe(-(100 + GUTTER_PX));
   });
 });

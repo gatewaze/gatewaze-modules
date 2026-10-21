@@ -59,6 +59,16 @@ function mockRes() {
   return res;
 }
 
+/**
+ * The photographs, whichever name they are asked for by.
+ *
+ * `event_media_gallery` (migration 028) is a view over `host_media` that
+ * adds captured_at and nothing else, so for the purposes of these stubs
+ * the two are one source of rows.
+ */
+const MEDIA_TABLES = ['host_media', 'event_media_gallery'];
+const isMedia = (table) => MEDIA_TABLES.includes(table);
+
 /** Chainable, thenable per-table query builder. Terminal behaviour:
  *  await builder → { data: listData }, .maybeSingle() → singleData. */
 function makeSupabase(config) {
@@ -122,7 +132,7 @@ function makeSupabase(config) {
       },
       or: () => b,
       contains: () => b,
-      order: () => b,
+      order: (column, opts) => { (state.ordered ??= []).push({ table, column, ...opts }); return b; },
       limit: () => b,
       update: (fields) => {
         (state.updated ??= []).push({ table, fields });
@@ -137,7 +147,7 @@ function makeSupabase(config) {
       maybeSingle: () => {
         if (table === 'events_media_upload_links') return Promise.resolve({ data: config.link ?? null, error: null });
         if (table === 'events') return Promise.resolve({ data: config.event ?? null, error: null });
-        if (table === 'host_media') {
+        if (isMedia(table)) {
           // A lookup by id answers from the listed rows where it can --
           // the gallery's "open on this photograph" reads one that way.
           const listed = b._idEq ? (config.mediaRows ?? []).find((r) => r.id === b._idEq) : null;
@@ -148,14 +158,14 @@ function makeSupabase(config) {
         return Promise.resolve({ data: null, error: null });
       },
       then: (resolve) => {
-        if (table === 'host_media' && b._head) {
+        if (isMedia(table) && b._head) {
           // The booth quota counts what it has made for one guest.
           if (b._boothCount) return resolve({ count: config.boothCount ?? 0, error: null });
           return resolve({ count: b._rows().length, error: null });
         }
         if (table === 'events_media_guest_claims') return resolve({ data: [...state.claims].map(([member_id, client_id]) => ({ member_id, client_id })), error: null });
         if (config.tables && table in config.tables) return resolve(config.tables[table]);
-        if (table !== 'host_media') return resolve({ data: [], error: null });
+        if (!isMedia(table)) return resolve({ data: [], error: null });
         return resolve({ data: config.mediaRows ?? [], error: config.mediaListError ?? null });
       },
       insert: (row) => {
@@ -1221,7 +1231,7 @@ describe('one phone per name', () => {
     let filter = null;
     const { deps, supabase } = makeDeps(cfg({ claims: { [DAN]: CLIENT_ID }, mediaRows: [] }));
     const realFrom = supabase.from;
-    supabase.from = (t) => { const b = realFrom(t); if (t === 'host_media') { const c = b.contains; b.contains = (col, v) => { filter = v; return c(col, v); }; } return b; };
+    supabase.from = (t) => { const b = realFrom(t); if (isMedia(t)) { const c = b.contains; b.contains = (col, v) => { filter = v; return c(col, v); }; } return b; };
     const res = mockRes();
     await createGuestRoutes(deps).listMine(req({ body: { client_id: CLIENT_ID, member_id: DAN } }), res);
     expect(res.statusCode).toBe(200);
@@ -1247,13 +1257,13 @@ describe('one phone per name', () => {
 describe('background plates are checked for people', () => {
   const IMG = { ok: true, image: new Uint8Array([9]), contentType: 'image/jpeg' };
   const settle = () => new Promise((r) => setTimeout(r, 30));
-  const complete = async () => {
+  const complete = async (ticket = {}) => {
     const { deps, supabase } = makeDeps({ link: ACTIVE_LINK, event: EVENT_ROW, existingMedia: null });
     const updates = [];
     const realFrom = supabase.from;
     supabase.from = (t) => { const b = realFrom(t); const u = b.update; b.update = (f) => { if (f.variants) updates.push(f.variants); return u(f); }; return b; };
     stubHead({ ok: true, headers: { get: (k) => ({ 'content-length': '1000', 'content-type': 'image/jpeg' })[k] ?? null } });
-    await createGuestRoutes(deps).completeUploads(req({ body: { tickets: [ticketFor()] } }), mockRes());
+    await createGuestRoutes(deps).completeUploads(req({ body: { tickets: [ticketFor(ticket)] } }), mockRes());
     await settle();
     return { updates, supabase };
   };
@@ -1262,7 +1272,10 @@ describe('background plates are checked for people', () => {
   beforeEach(() => {
     process.env.BOOTH_PROVIDER = 'fal';
     process.env.FAL_API_KEY = 'test-placeholder';
-    provider.runPlate.mockReset();
+    const off = () => Promise.resolve({ ok: false, error: 'not_configured' });
+    provider.runPlate.mockReset().mockImplementation(off);
+    provider.runDepth.mockReset().mockImplementation(off);
+    provider.runCutout.mockReset().mockImplementation(off);
     provider.plateHasPeople.mockReset();
   });
   afterEach(() => {
@@ -1301,6 +1314,31 @@ describe('background plates are checked for people', () => {
     const { updates } = await complete();
     expect(provider.runPlate).toHaveBeenCalledTimes(1);
     expect(updates.at(-1).plate).toMatch(/variants\/plate\.jpg$/);
+  });
+
+  // Layer generation holds whole decoded images in a pod with 512MB, and
+  // a photographer delivers thousands in one sitting -- which OOMKilled
+  // the api twice and took the site down (2026-10-17). Their photographs
+  // are never shown with the parallax effect these layers are for, so
+  // they must not be generated at all.
+  it('generates no layers at all for a photographer\'s delivery', async () => {
+    provider.runPlate.mockResolvedValue(IMG);
+    provider.plateHasPeople.mockResolvedValue(false);
+    provider.runDepth.mockResolvedValue(IMG);
+    provider.runCutout.mockResolvedValue(IMG);
+    const { updates } = await complete({ photographer: true });
+    expect(provider.runPlate).not.toHaveBeenCalled();
+    expect(provider.runDepth).not.toHaveBeenCalled();
+    expect(provider.runCutout).not.toHaveBeenCalled();
+    expect(updates).toHaveLength(0);
+  });
+
+  it('still generates them for a guest\'s upload', async () => {
+    provider.runPlate.mockResolvedValue(IMG);
+    provider.plateHasPeople.mockResolvedValue(false);
+    const { updates } = await complete();
+    expect(provider.runPlate).toHaveBeenCalledTimes(1);
+    expect(updates.length).toBeGreaterThan(0);
   });
 });
 
@@ -1451,11 +1489,25 @@ describe('eventGallery', () => {
     host_media_album_items: { data: [], error: null },
   };
   const gallery = async (query = {}, over = {}) => {
-    const { deps } = makeDeps({ event: EVENT_ROW, mediaRows: ROWS, tables: TABLES, ...over });
+    const { deps, supabase } = makeDeps({ event: EVENT_ROW, mediaRows: ROWS, tables: TABLES, ...over });
     const res = mockRes();
     await createGuestRoutes(deps).eventGallery({ params: { identifier: 'dan-sarah' }, query, ip: '203.0.113.9', headers: {} }, res);
+    res.supabase = supabase;
     return res;
   };
+
+  // A photographer delivers weeks after the event in one sitting, so
+  // arrival order says nothing about the day. The gallery reads the view
+  // that carries captured_at -- taken time, else arrival (migration 028).
+  it('asks for the photographs in the order they were taken', async () => {
+    const res = await gallery();
+    const ordered = (res.supabase.state.ordered ?? []).filter((o) => o.table === 'event_media_gallery');
+    expect(ordered.length).toBeGreaterThan(0);
+    expect(ordered[0].column).toBe('captured_at');
+    expect(ordered[0].ascending).toBe(false);
+    // Never by arrival, which is what it used to do.
+    expect(ordered.map((o) => o.column)).not.toContain('created_at');
+  });
 
   it('shows the albums with something in them, and the photos', async () => {
     const res = await gallery();
@@ -1566,6 +1618,75 @@ describe('eventGallery', () => {
     const res = await gallery({}, { tables: { ...TABLES, event_media_album_settings: { data: [], error: null } } });
     expect(res.body.albums).toHaveLength(2);
     expect(res.body.total).toBe(3);
+  });
+
+  // Which end an album starts at (migration 029). Newest first is right
+  // while an event is on -- a guest opens the gallery to see what has
+  // just landed -- and wrong for a professional's delivery, which is a
+  // finished set that reads forwards. Reported 2026-10-17: a wedding
+  // read backwards, last dance first.
+  describe('which end the album starts at', () => {
+    const sortedBy = (res) => (res.supabase.state.ordered ?? [])
+      .filter((o) => o.table === 'event_media_gallery' && o.column === 'captured_at')[0];
+
+    it('is newest first by default', async () => {
+      const res = await gallery({ album: 'the-day' });
+      expect(sortedBy(res).ascending).toBe(false);
+    });
+
+    it('reads forwards where the album says so', async () => {
+      const oldest = {
+        ...TABLES,
+        event_media_album_settings: { data: [{ album_id: ALBUM.day, show_on_portal: true, sort: 'oldest' }], error: null },
+      };
+      const res = await gallery({ album: 'the-day' }, { tables: oldest });
+      expect(sortedBy(res).ascending).toBe(true);
+    });
+
+    it('lets the viewer turn it round either way', async () => {
+      const oldest = {
+        ...TABLES,
+        event_media_album_settings: { data: [{ album_id: ALBUM.day, show_on_portal: true, sort: 'oldest' }], error: null },
+      };
+      // The viewer's choice beats the album's default, in both directions.
+      expect(sortedBy(await gallery({ album: 'the-day', sort: 'newest' }, { tables: oldest })).ascending).toBe(false);
+      expect(sortedBy(await gallery({ album: 'the-day', sort: 'oldest' })).ascending).toBe(true);
+    });
+
+    it('takes only the two words it knows', async () => {
+      // Anything else falls back to the album's default rather than
+      // reaching the query.
+      for (const sort of ['', 'sideways', 'captured_at.asc', '1', 'OLDEST']) {
+        expect(sortedBy(await gallery({ album: 'the-day', sort })).ascending).toBe(false);
+      }
+    });
+
+    it('ties break the same way it sorts', async () => {
+      // Three cameras shot this wedding, so photographs sharing a second
+      // are routine; a tiebreak pointing the other way could repeat one
+      // across a page boundary.
+      const res = await gallery({ album: 'the-day', sort: 'oldest' });
+      const keys = (res.supabase.state.ordered ?? [])
+        .filter((o) => o.table === 'event_media_gallery');
+      expect(keys.map((k) => k.column)).toEqual(['captured_at', 'id']);
+      expect(keys.every((k) => k.ascending === true)).toBe(true);
+    });
+
+    it('stays newest first when every album is shown at once', async () => {
+      // No one album to ask, and a mixed feed is a feed of what has just
+      // arrived.
+      const oldest = {
+        ...TABLES,
+        event_media_album_settings: { data: [{ album_id: ALBUM.day, show_on_portal: true, sort: 'oldest' }], error: null },
+      };
+      const res = await gallery({}, { tables: oldest });
+      expect(sortedBy(res).ascending).toBe(false);
+    });
+
+    it('says which way round it answered', async () => {
+      expect((await gallery({ album: 'the-day' })).body.sort).toBe('newest');
+      expect((await gallery({ album: 'the-day', sort: 'oldest' })).body.sort).toBe('oldest');
+    });
   });
 
   // Enhancement is per album: an album with it on shows the enhanced
@@ -1966,6 +2087,14 @@ describe('the booth closes, and a guest has a share', () => {
 // The professional photographs: thousands of them, weeks later, from one
 // person. Not guest uploads, and not filed by the hour they were taken.
 describe('a photographer\'s link', () => {
+  // A real guest list, so the photographer is tested against the case
+  // that actually broke rather than the one that happened to pass.
+  const GUEST_LIST = {
+    data: [
+      { invite_party_members: { id: '11111111-1111-4111-8111-111111111111', first_name: 'Dan', last_name: 'Baker' } },
+    ],
+    error: null,
+  };
   const PRO_LINK = {
     ...ACTIVE_LINK, role: 'photographer', credit_name: 'Hartley & Rose Photography',
     require_name: false, max_photo_bytes: 100 * 1024 * 1024,
@@ -1977,6 +2106,47 @@ describe('a photographer\'s link', () => {
     return { res, supabase };
   };
   const file = (over = {}) => ({ filename: 'DSC_4821.jpg', mime_type: 'image/jpeg', bytes: 12 * 1024 * 1024, ...over });
+
+  // The bug this missed, live on 2026-10-17: every test here stubbed an
+  // event with NO guest list, which is the one case where identify()
+  // lets an unnamed caller through. Every wedding worth photographing
+  // has a guest list, and on one the photographer's own link answered
+  // every file with "please choose your name from the guest list".
+  it('uploads on an event that HAS a guest list, without being on it', async () => {
+    const { deps } = makeDeps({
+      link: PRO_LINK,
+      event: EVENT_ROW,
+      tables: {
+        invite_party_member_events: GUEST_LIST,
+        events_media_guest_blocks: { data: [], error: null },
+      },
+    });
+    const res = mockRes();
+    await createGuestRoutes(deps).mintUploads(
+      req({ body: { client_id: CLIENT_ID, files: [file()] } }), res,
+    );
+    expect(res.statusCode).toBe(200);
+    const read = verifyTicket(res.body.items[0].ticket, Math.floor(Date.now() / 1000), SECRET);
+    expect(read.ok && read.payload.guest_name).toBe('Hartley & Rose Photography');
+  });
+
+  // And a guest on the same event still has to say who they are.
+  it('still asks a guest for their name on that same event', async () => {
+    const { deps } = makeDeps({
+      link: ACTIVE_LINK,
+      event: EVENT_ROW,
+      tables: {
+        invite_party_member_events: GUEST_LIST,
+        events_media_guest_blocks: { data: [], error: null },
+      },
+    });
+    const res = mockRes();
+    await createGuestRoutes(deps).mintUploads(
+      req({ body: { client_id: CLIENT_ID, files: [file()] } }), res,
+    );
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error).toBe('guest_required');
+  });
 
   it('credits the photographer without anybody typing a name', async () => {
     const { res } = await mintThrough(PRO_LINK, [file()]);

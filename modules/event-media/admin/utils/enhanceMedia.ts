@@ -47,6 +47,8 @@ interface Verdict {
   reason?: string;
   source?: string;
   ops?: EnhanceOps;
+  /** Where the faces are, when the album has been scanned. */
+  faces?: Array<{ x: number; y: number; w: number; h: number; score: number }>;
 }
 
 async function authedFetch(path: string, init?: RequestInit): Promise<Response> {
@@ -76,6 +78,7 @@ interface Lens { depth: string; cutout: string }
 async function improve(
   source: string, ops: EnhanceOps, frameMode: FrameMode = 'as-shot',
   lens: Lens | null = null, aperture: Aperture = 'gentle',
+  faces: ReadonlyArray<{ x: number; y: number; w: number; h: number; score: number }> = [],
 ): Promise<Blob> {
   const img = await load(source);
   const scale = Math.min(1, MAX_EDGE / Math.max(img.naturalWidth, img.naturalHeight));
@@ -93,7 +96,7 @@ async function improve(
   // needs a model and a relight pass, so on this path it crops instead.
   if (frameMode !== 'as-shot') {
     const want = shapeFor(frame.w, frame.h);
-    if (want) frame = cropped(frame, want);
+    if (want) frame = cropped(frame, want, faces);
   }
   // The model judges what kind of correction a photograph wants and is a
   // poor judge of how much -- it answered "a touch of sharpening" to
@@ -199,7 +202,7 @@ export async function enhanceMedia(
           const m = got?.results?.[0];
           if (m?.status === 'ready' && m.depth && m.cutout) lens = { depth: m.depth, cutout: m.cutout };
         }
-        const blob = await improve(r.source, r.ops, frameMode, lens, focus === 'off' ? 'gentle' : focus);
+        const blob = await improve(r.source, r.ops, frameMode, lens, focus === 'off' ? 'gentle' : focus, r.faces ?? []);
         // Beside the photograph, under a new name each time: a CDN caches
         // by name and would go on serving the copy this replaces.
         const dir = new URL(r.source).pathname.replace(/^.*\/public\/[^/]+\//, '');

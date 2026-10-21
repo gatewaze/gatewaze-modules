@@ -32,6 +32,7 @@ import {
 import { Button, Card, ConfirmModal } from '@/components/ui';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { supabase } from '@/lib/supabase';
+import { detectFaces, type FaceProgress } from './utils/detectFaces';
 import {
   bulkPatchHostMedia,
   bulkDeleteHostMedia,
@@ -129,6 +130,13 @@ export function EventMediaTab({ eventId }: EventMediaTabProps) {
   const [showTagSponsors, setShowTagSponsors] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
+  /**
+   * Finding the faces, so a reframe stops cutting heads off and a cover
+   * can be chosen for having people in it. Boxes only -- nothing here
+   * identifies anybody (lib/faces.ts).
+   */
+  const [faceRun, setFaceRun] = useState<FaceProgress | null>(null);
+  const faceStop = useRef(false);
   // While the admin's own upload runs, its rows arrive over realtime too;
   // add them quietly instead of toasting once per file.
   const quietInserts = useRef(false);
@@ -144,6 +152,29 @@ export function EventMediaTab({ eventId }: EventMediaTabProps) {
   const reloadTags = useCallback(async (sponsorList: EventSponsorOption[]) => {
     setSponsorTags(await loadSponsorTags(sponsorList.map((s) => s.id)));
   }, []);
+
+  /**
+   * Walk the event's unscanned photographs and record where the faces
+   * are. The server decides what is left, so this can be run again as
+   * more photographs arrive without redoing the ones already done, and
+   * stopping costs only what was in flight.
+   */
+  const runFaceScan = useCallback(async () => {
+    faceStop.current = false;
+    setFaceRun({ done: 0, remaining: 0, faces: 0, failed: 0, medianMs: null });
+    try {
+      const done = await detectFaces(eventId, setFaceRun, () => !faceStop.current);
+      toast.success(
+        `${done.faces} faces in ${done.done} photos`
+        + (done.medianMs ? ` · ${done.medianMs}ms each` : '')
+        + (done.failed ? ` · ${done.failed} could not be read` : ''),
+      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'The face scan stopped');
+    } finally {
+      setFaceRun(null);
+    }
+  }, [eventId]);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
@@ -542,6 +573,17 @@ export function EventMediaTab({ eventId }: EventMediaTabProps) {
           <div className="flex flex-wrap items-center gap-2">
             <Button onClick={() => setShowUpload(true)}><PlusIcon className="h-4 w-4" /> Upload media</Button>
             <Button variant="outline" onClick={() => setShowAlbums(true)}><FolderIcon className="h-4 w-4" /> Manage albums</Button>
+            {faceRun ? (
+              <Button variant="outline" onClick={() => { faceStop.current = true; }}>
+                Stop · {faceRun.done} done, {faceRun.faces} faces
+                {faceRun.remaining ? `, ${faceRun.remaining} left` : ''}
+                {faceRun.medianMs ? ` · ${faceRun.medianMs}ms each` : ''}
+              </Button>
+            ) : (
+              <Button variant="outline" onClick={() => void runFaceScan()} title="Find the faces, so cropping keeps the heads. Rectangles only — nothing is identified.">
+                Find faces
+              </Button>
+            )}
             <span className="flex-1" />
             <div className="relative">
               <MagnifyingGlassIcon className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-[var(--gray-a9)]" />

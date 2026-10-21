@@ -143,7 +143,7 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
   // Browser-facing image host, also resolved once. A malformed value
   // fails closed to Supabase rather than pointing every photo at a host
   // that does not exist.
-  const { cdnConfigFromEnv } = await import('../lib/cdn.js');
+  const { cdnConfigFromEnv, browserSizedUrl } = await import('../lib/cdn.js');
   const cdn = cdnConfigFromEnv(process.env);
   if (process.env.BUNNY_CDN_ENABLED === 'true' && !cdn.zone) {
     logger.warn('BUNNY_CDN_ENABLED is set but BUNNY_PULLZONE_URL is not a bare https origin — serving from Supabase');
@@ -279,6 +279,16 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
     publicUrl: (path) => `${publicSupabaseUrl}/storage/v1/object/public/${STORAGE_BUCKET}/${path}`,
     runDepth,
     runCutout,
+    logger,
+  }));
+
+  // Where the faces are, for framing and covers. Boxes only -- the
+  // detector runs in the organiser's browser and this takes numbers.
+  const { createFaceDetect, mountFaceDetect } = await import('./face-detect.js');
+  mountFaceDetect(adminRouter, createFaceDetect({
+    canAdminEvent,
+    serviceClient: serviceSupabase,
+    sizedUrl: (path, width) => browserSizedUrl(cdn, publicSupabaseUrl, STORAGE_BUCKET, path, width),
     logger,
   }));
 
