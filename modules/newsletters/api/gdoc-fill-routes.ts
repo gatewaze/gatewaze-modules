@@ -169,6 +169,22 @@ export async function fetchGoogleDocHtml(docId: string): Promise<string> {
 // Model call
 // ---------------------------------------------------------------------------
 
+/**
+ * Copying a draft into block fields is mechanical, so thinking only adds time
+ * and output tokens (on claude-sonnet-5 it was over half of each reply).
+ * Models that accept it get thinking switched off; the rest, whose thinking
+ * cannot be disabled, get the lowest effort.
+ */
+export function reasoningOptions(model: string): Record<string, unknown> {
+  if (/^claude-(sonnet-5|opus-5|opus-4-[78])$/.test(model)) {
+    return { thinking: { type: 'disabled' } };
+  }
+  if (/^claude-(opus-5-5|sonnet-5-5|haiku-5-5|fable-5)/.test(model)) {
+    return { output_config: { effort: 'low' } };
+  }
+  return {};
+}
+
 async function callModel(prompt: string, userId: string): Promise<{ text: string; usage: { input: number; output: number }; model: string }> {
   const { data: uc } = await sb().from('ai_use_cases').select('default_model, max_output_tokens').eq('id', USE_CASE).maybeSingle();
   const model = (uc as { default_model?: string } | null)?.default_model || DEFAULT_MODEL;
@@ -199,7 +215,7 @@ async function callModel(prompt: string, userId: string): Promise<{ text: string
   const r = await fetch('https://api.anthropic.com/v1/messages', {
     method: 'POST',
     headers,
-    body: JSON.stringify({ model, max_tokens: maxTokens, messages: [{ role: 'user', content: prompt }] }),
+    body: JSON.stringify({ model, max_tokens: maxTokens, ...reasoningOptions(model), messages: [{ role: 'user', content: prompt }] }),
     signal: AbortSignal.timeout(MODEL_TIMEOUT_MS),
   });
   if (!r.ok) {
