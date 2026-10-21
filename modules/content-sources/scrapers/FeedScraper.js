@@ -16,7 +16,14 @@
  *      Guard: when NO source was alive and at least one failed, the run
  *      fails ("network dead, not a quiet week") and writes no posts.
  *   2. Body backlog: posts with no body yet get their article page fetched,
- *      the body extracted + sanitised, og:description as excerpt fallback.
+ *      the body extracted + sanitised, og:description as excerpt fallback,
+ *      og:image / twitter:image as the featured image when the feed gave none.
+ *
+ * Featured images go in blog_posts.featured_image (the column the blog
+ * module's admin, portal and inbox preview read). Feed entries supply one
+ * from media:content / media:thumbnail / an image enclosure; pages from
+ * og:image / twitter:image. Only an absolute https URL that passes
+ * policeUrl is stored. We never fetch the image.
  *
  * Config (scrapers.config jsonb, all optional):
  *   concurrency (16), per_host (2), feed_timeout_ms (20000), page_timeout_ms (8000),
@@ -35,7 +42,7 @@ import { registrableDomain } from '../lib/normalize-url.js';
 import { parseFeed, looksLikeFeed } from '../lib/feed-parser.js';
 import { normalizeUrl, canonicalForStorage, hostOf, slugForPost, shortHash } from '../lib/normalize-url.js';
 import { excerptForStorage } from '../lib/blurb.js';
-import { pageTitle, pageDescription, publishedDate, canonicalLink, articleBody, sanitizeBody, parseSitemap } from '../lib/html-meta.js';
+import { pageTitle, pageDescription, pageImage, imageUrlForStorage, publishedDate, canonicalLink, articleBody, sanitizeBody, parseSitemap } from '../lib/html-meta.js';
 
 // blog_posts.author_id is NOT NULL with no FK; the blog scrapers use this
 // namespaced system uuid and the portal never displays it.
@@ -311,6 +318,7 @@ export class FeedScraper {
           publishedAt: pub ?? c.lastmod,
           updatedAt: c.lastmod,
           summary: pageDescription(page.text) ?? '',
+          image: pageImage(page.text, c.loc),
           _pageHtml: page.text, // reuse in the body phase for this run only
         });
       } catch { /* one page failing is not a source failure */ }
@@ -364,7 +372,7 @@ export class FeedScraper {
     for (;;) {
       const { data, error } = await sb
         .from('blog_posts')
-        .select('id, title, canonical_url, canonical_url_norm, published_at, discovery_source_id, status, excerpt')
+        .select('id, title, canonical_url, canonical_url_norm, published_at, discovery_source_id, status, excerpt, featured_image')
         .eq('is_external', true)
         .or(`published_at.gte.${since},published_at.is.null`)
         .order('created_at', { ascending: false })
@@ -393,7 +401,7 @@ export class FeedScraper {
       // Pass 1: same normalised URL.
       let existing = this._index.byUrl.get(norm) ?? null;
       if (!existing) {
-        const { data } = await sb.from('blog_posts').select('id, title, canonical_url, canonical_url_norm, published_at, discovery_source_id, status, excerpt').eq('canonical_url_norm', norm).maybeSingle();
+        const { data } = await sb.from('blog_posts').select('id, title, canonical_url, canonical_url_norm, published_at, discovery_source_id, status, excerpt, featured_image').eq('canonical_url_norm', norm).maybeSingle();
         existing = data ?? null;
       }
       if (existing) {
@@ -414,6 +422,10 @@ export class FeedScraper {
           updated_at: new Date().toISOString(),
         };
         if (!existing.excerpt && entry.summary) patch.excerpt = excerptForStorage(entry.summary);
+        if (!existing.featured_image) {
+          const img = imageUrlForStorage(entry.image, canonical);
+          if (img) patch.featured_image = img;
+        }
         if (!existing.published_at && entry.publishedAt) patch.published_at = entry.publishedAt;
         const { error } = await sb.from('blog_posts').update(patch).eq('id', existing.id);
         if (error) throw new Error(error.message);
@@ -451,6 +463,7 @@ export class FeedScraper {
         discovery_source_id: source.id,
         meta_title: entry.title.slice(0, 255),
         meta_description: entry.summary ? excerptForStorage(entry.summary, 300) : null,
+        featured_image: imageUrlForStorage(entry.image, canonical),
       };
       let inserted = await sb.from('blog_posts').insert(row).select('id').maybeSingle();
       if (inserted.error && inserted.error.code === '23505') {
@@ -467,7 +480,7 @@ export class FeedScraper {
       const postId = inserted.data?.id;
       this.stats.inserted++;
       this.stats.processed++;
-      this._index.byUrl.set(norm, { id: postId, discovery_source_id: source.id, status: 'pending_review', published_at: row.published_at, content: null, excerpt: row.excerpt });
+      this._index.byUrl.set(norm, { id: postId, discovery_source_id: source.id, status: 'pending_review', published_at: row.published_at, content: null, excerpt: row.excerpt, featured_image: row.featured_image });
       if (tk) {
         if (!this._index.byTitle.has(tk)) this._index.byTitle.set(tk, []);
         this._index.byTitle.get(tk).push({ day: d, id: postId, source: source.id });
@@ -501,7 +514,7 @@ export class FeedScraper {
   async fetchBodies(sb) {
     const { data: posts, error } = await sb
       .from('blog_posts')
-      .select('id, canonical_url, excerpt, discovery_source_id, body_fetch_attempts, discovery_sources!inner(egress)')
+      .select('id, canonical_url, excerpt, featured_image, discovery_source_id, body_fetch_attempts, discovery_sources!inner(egress)')
       .eq('is_external', true)
       .not('discovery_source_id', 'is', null)
       .is('content', null)
@@ -527,6 +540,10 @@ export class FeedScraper {
         try {
           const html = this._pageCache?.[p.id] ?? (await fetchText(p.canonical_url, { maxBytes: PAGE_BYTES, timeoutMs: this.opts.pageTimeoutMs, proxyUrl })).text;
           if (!html) throw new Error('empty page');
+          if (!p.featured_image) {
+            const img = pageImage(html, p.canonical_url);
+            if (img) patch.featured_image = img;
+          }
           const body = articleBody(html);
           const clean = body ? await sanitizeBody(body) : '';
           if (clean === null) {
