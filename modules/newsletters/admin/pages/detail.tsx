@@ -8,6 +8,7 @@ import {
   DocumentTextIcon,
   ChartBarIcon,
   ChatBubbleLeftRightIcon,
+  CheckBadgeIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 import { Page } from '@/components/shared/Page';
@@ -24,6 +25,7 @@ import { ViewOnlineSettings } from '../components/ViewOnlineSettings';
 import { NewsletterStatsTab } from '../components/NewsletterStatsTab';
 import { NewsletterRepliesTab } from '../components/NewsletterRepliesTab';
 import { EditorTab } from './EditorTab';
+import { ApprovalSettings } from '../components/ApprovalSettings';
 
 interface Newsletter {
   id: string;
@@ -42,7 +44,7 @@ interface Newsletter {
   edition_count?: number;
 }
 
-type NewsletterTab = 'details' | 'template' | 'editions' | 'replies' | 'stats';
+type NewsletterTab = 'details' | 'template' | 'approval' | 'editions' | 'replies' | 'stats';
 
 export default function NewsletterDetailPage() {
   const { slug, tab: tabFromUrl } = useParams<{ slug: string; tab?: string }>();
@@ -60,7 +62,7 @@ export default function NewsletterDetailPage() {
   // URL falls back to the default tab because those ids aren't valid for them.
   const { isSuperAdmin } = useAdminScope();
   const validTabs: NewsletterTab[] = [
-    ...(isSuperAdmin ? ['details' as NewsletterTab, 'template' as NewsletterTab] : []),
+    ...(isSuperAdmin ? ['details' as NewsletterTab, 'template' as NewsletterTab, 'approval' as NewsletterTab] : []),
     'editions',
     ...(hasBulkEmailing ? ['replies' as NewsletterTab, 'stats' as NewsletterTab] : []),
   ];
@@ -159,6 +161,8 @@ export default function NewsletterDetailPage() {
     ...(isSuperAdmin ? [
       { id: 'details', label: 'Settings', icon: <Cog6ToothIcon className={ic} /> },
       { id: 'template', label: 'Template', icon: <RectangleGroupIcon className={ic} /> },
+      // Who must approve an edition before it is sent (migration 096).
+      { id: 'approval', label: 'Approval', icon: <CheckBadgeIcon className={ic} /> },
     ] : []),
     { id: 'editions', label: 'Editions', icon: <DocumentTextIcon className={ic} /> },
     ...(hasBulkEmailing ? [
@@ -230,6 +234,12 @@ export default function NewsletterDetailPage() {
       {activeTab === 'template' && isSuperAdmin && (
         <div className="py-2">
           <TemplateTabContent newsletterId={newsletter.id} newsletterSlug={newsletter.slug} />
+        </div>
+      )}
+
+      {activeTab === 'approval' && isSuperAdmin && (
+        <div className="py-2">
+          <ApprovalSettings collectionId={newsletter.id} canEdit={isSuperAdmin} />
         </div>
       )}
 

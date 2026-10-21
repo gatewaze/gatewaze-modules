@@ -80,8 +80,22 @@ export function clearDraft(editionId: string): void {
 /** Stable stringify of a payload for cheap equality (drift = unsaved changes). */
 export function draftFingerprint(payload: EditionDraftPayload): string {
   try {
-    return JSON.stringify(payload);
+    return stableStringify(payload);
   } catch {
     return '';
   }
+}
+
+/**
+ * JSON with object keys sorted, so the same content always gives the same
+ * string. Postgres jsonb returns keys in its own order and the Puck canvas
+ * re-emits them in another, so a plain JSON.stringify called an untouched
+ * edition "changed": a false "unsaved changes" banner after a reload, and a
+ * dirty flag after merely clicking a block.
+ */
+function stableStringify(v: unknown): string {
+  if (v === null || typeof v !== 'object') return JSON.stringify(v) ?? 'null';
+  if (Array.isArray(v)) return `[${v.map((x) => (x === undefined ? 'null' : stableStringify(x))).join(',')}]`;
+  const o = v as Record<string, unknown>;
+  return `{${Object.keys(o).filter((k) => o[k] !== undefined).sort().map((k) => `${JSON.stringify(k)}:${stableStringify(o[k])}`).join(',')}}`;
 }

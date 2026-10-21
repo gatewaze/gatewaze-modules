@@ -21,7 +21,7 @@ const sitesModule: GatewazeModule = {
   name: 'Sites',
   description:
     'Multi-site web builder. Pages, publishing (portal/k8s/external publishers), custom domains, per-site media library, draft preview. Consumes @gatewaze-modules/templates.',
-  version: '0.1.1',
+  version: '0.1.2',
 
   features: [
     'sites',
