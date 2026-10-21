@@ -355,8 +355,13 @@ export async function enqueueRun(
   addJob: (type: string, data: Record<string, unknown>) => Promise<{ id: string | number | undefined }>,
   opts: { sourceIds?: string[]; createdBy: string },
 ) {
-  const { data: scraper, error } = await sb.from('scrapers').select('id, name, scraper_type, event_type').eq('scraper_type', 'FeedScraper').maybeSingle();
+  // There can be several FeedScraper rows: the seeded full sweep plus focused
+  // ones whose config names a subset of sources. Admin runs go through the
+  // full-sweep row (no config.source_ids), the oldest if there are several.
+  const { data: rows, error } = await sb.from('scrapers').select('id, name, scraper_type, event_type, config').eq('scraper_type', 'FeedScraper').order('id');
   if (error) throw new SourceError(500, 'QUERY_ERROR', error.message);
+  const list = (rows ?? []) as Array<{ id: number; name: string; scraper_type: string; event_type: string; config: { source_ids?: unknown } | null }>;
+  const scraper = list.find((r) => !(Array.isArray(r.config?.source_ids) && r.config!.source_ids.length)) ?? list[0] ?? null;
   if (!scraper) throw new SourceError(409, 'SCRAPER_MISSING', 'The "Discovery feeds" scraper row is missing; re-run the module migrations');
   const ids = (opts.sourceIds ?? []).filter((s) => /^[0-9a-f-]{36}$/i.test(s));
   const { data: jobs, error: jobErr } = await sb.rpc('scrapers_create_job', {
