@@ -173,7 +173,7 @@ INSTRUCTIONS
 7. If a section fits none of the existing blocks, either propose one of the types that is not in the edition yet (with target_block_id null) or list it in "unmapped".
 8. If the draft names a subject line or preheader for the email, return them; otherwise return null.
 
-Return ONLY valid JSON, with no prose before or after it:
+Return ONLY valid JSON, with no prose before or after it and no code fence. Write it compactly, without indentation or line breaks between fields:
 {
   "subject": "string or null",
   "preheader": "string or null",
