@@ -36,6 +36,93 @@ the thumbnail pipeline reads every master once. Backblaze B2 reads are free up
 to three times the stored amount a month, and storage is about a third of the
 price.
 
+## The studio
+
+After a master is uploaded, "Open in studio" on the video (or
+`/videos/studio/<video id>`) runs one analysis pass over it and then lets the
+editor finish the video by hand:
+
+1. The worker (`videos:studio-analyse`) copies the master to its disk, samples
+   a frame every 10 seconds (widening the interval so a long video never takes
+   more than 300), scores a dozen frames with a vision model, cuts the speaker
+   out of the best ones with birefnet and EVF-SAM, verifies up to two slide
+   panels at full resolution, builds a filmstrip, and drafts three headlines
+   from the agenda text. The rules it applies are the ones found on the
+   AGNTCon EU set: a cut-out must be a close shot (the figure at least half
+   the frame tall), with no projector glare on the face and no bright screen
+   behind the head; a panel must be a legible, interesting slide with nobody
+   in it; a headline may not contain a number the abstract does not.
+2. The editor picks a speaker frame, a headline (or types one), the speaker's
+   size and position, which background panels show, where the video starts
+   and ends, and whether the talk card goes in front. Size and position are
+   anchored on the face, so the head stays in the picture whatever is set.
+   Up to three slides from the video are offered as background panels; two
+   can show at once. An image can be uploaded as a background instead, and
+   a photo of the speaker can be uploaded in place of a frame: the worker
+   cuts it out the same way (a PNG with transparency is used as it is).
+   The company logo comes from a logo uploaded for the talk, else from the
+   company on the speaker's programme record; with neither there is no mark
+   and the company name is not set in its place. A logo belongs to the talk
+   (`video_talk_logos`, keyed by the agenda entry or episode), not to the
+   person, because the same speaker talks for different companies, and a
+   later upload for the same talk replaces it.
+3. Approve (`videos:studio-finalize`) renders the thumbnail at 1280x720 in
+   Chromium from the same markup the page showed, sets it on the video, and,
+   when a trim or the card was asked for, writes a new master: the trim is a
+   stream copy from the original, the card is encoded to the master's own
+   parameters and joined by stream copy, and the join is re-encoded only if
+   that does not verify. The previous master's row is marked superseded; its
+   object stays.
+
+It needs `FAL_API_KEY` on the API and the worker, and the worker needs
+`ffmpeg-static` and `puppeteer-core` (declared in this module's package.json,
+so the image bake and the dev container's start-up install both pick them up)
+plus the pinned system Chromium. The brand art, the fonts and the music sting
+live in `templates/`; swap the files there for another brand. Working images
+(cut-outs, slide panels, the filmstrip, the thumbnail) go to the public
+`media` bucket under `video-studio/<video>/<studio>/`, the same bucket every
+thumbnail is served from; they are replaced on a re-run. Sampled frames and
+the talk's abstract are sent to Fal, and through it to Google's Gemini, to be
+scored and drafted. The recording itself never leaves the worker.
+
+Two settings: `studio_max_master_bytes` (8 GB by default; a bigger master is
+refused rather than filling the pod) and `studio_sample_every_seconds`.
+
+## Upload batches
+
+For a whole folder of masters, "Upload batches" issues one person a folder
+in the master bucket (`batches/<id>/`) and a Backblaze application key that
+can only write and list under that folder, for a chosen number of days (7 by
+default, 30 at most). No read, no delete, no share. The page shows the
+connection bundle once: a Cyberduck link that opens connected to the folder,
+an rclone config and command for an AV team, and the plain fields. The key
+is never stored; the row keeps its id only.
+
+Every five minutes (or on "Check the folder now") the worker lists each open
+batch's folder and adopts every finished upload: a video row titled from the
+file name, attached to the batch's event and, when a session title matches,
+to that talk; a server-side copy of the object under `batch-import/`,
+recorded as a ready master carrying the batch id, the source path and the
+source ETag; and a studio pass queued. The copy is deliberate: Backblaze
+treats an S3 delete as a hide and `writeFiles` allows it, so the uploader can
+hide their own uploads but never touch an adopted master. A later upload
+under the same name is flagged on the batch page, not adopted, and the bucket
+keeps hidden and replaced versions under `batches/` for 30 days. "Mark
+complete" deletes the key; an expired key closes the batch on the next tick.
+
+It needs `VIDEO_B2_KEY_ID` and `VIDEO_B2_KEY` on the API and worker: an
+account-level Backblaze key with `listKeys`, `writeKeys`, `deleteKeys` and
+`listBuckets`, used for nothing but minting and deleting batch keys. Name
+the files after the talks for the agenda match to work.
+
+## Uploading from the command line
+
+For a file too large to push through a browser tab, tick "Upload from the
+command line" on the upload step. The mint then returns, per file, a curl
+line with a presigned PUT good for 12 hours (S3 stores only). Run it from the
+folder that holds the file, then press Check: the server HEADs the object and
+applies the same size and content-type checks the browser path does.
+
 ## Getting masters for talks that only exist on YouTube
 
 YouTube serves nothing above 360p without a browser session, so the right way
