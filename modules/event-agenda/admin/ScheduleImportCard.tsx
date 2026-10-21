@@ -220,12 +220,12 @@ export function ScheduleImportCard({ eventUuid, onImported }: Props) {
       {editingSource && (
         <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
           <label className="block text-xs text-gray-600 dark:text-gray-400 mb-1">
-            Schedule URL — the event’s sched.com page, or the Linux Foundation page that embeds it
+            Schedule URL — the event’s sched.com or sessionize.com page, or the Linux Foundation page that embeds it
           </label>
           <div className="flex gap-2">
             <Input
               value={sourceInput}
-              placeholder="https://myevent.sched.com/"
+              placeholder="https://myevent.sched.com/ or https://myevent.sessionize.com/"
               onChange={(e: React.ChangeEvent<HTMLInputElement>) => setSourceInput(e.target.value)}
             />
             <Button onClick={() => void handleSaveSource()} disabled={busy}>Save</Button>
