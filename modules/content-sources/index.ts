@@ -23,7 +23,7 @@ const contentDiscoveryModule: GatewazeModule = {
   name: 'Content Discovery',
   description:
     'Registry of blog feeds and scrape targets with a generic feed scraper. New posts land in the Content Inbox as pending review; sources are managed in Content → Sources, the public API and MCP.',
-  version: '1.0.0',
+  version: '1.1.0',
 
   features: [
     'content-sources',         // read the registry; the Sources tab
@@ -39,6 +39,7 @@ const contentDiscoveryModule: GatewazeModule = {
     'migrations/001_discovery_sources.sql',
     'migrations/002_blog_posts_discovery_columns.sql',
     'migrations/003_seed_scraper_row.sql',
+    'migrations/004_refetch_bad_bodies.sql',
   ],
 
   apiRoutes: async (app: unknown, context?: ModuleContext) => {

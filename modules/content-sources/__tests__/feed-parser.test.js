@@ -84,3 +84,29 @@ test('decodeXmlText + parseDate', () => {
   assert.equal(decodeXmlText('&#99999999;'), '&#99999999;'); // out of range stays literal
   assert.equal(parseDate('garbage'), null);
 });
+
+test('entry images: media:content (image), media:thumbnail, image enclosures, Atom enclosure links', () => {
+  const rss = `<?xml version="1.0"?><rss version="2.0" xmlns:media="http://search.yahoo.com/mrss/"><channel><title>T</title>
+  <item><title>A</title><link>https://x.org/a</link><media:content url="https://x.org/video.mp4" medium="video"/><media:content url="https://x.org/a.png" medium="image"/></item>
+  <item><title>B</title><link>https://x.org/b</link><media:thumbnail url="https://x.org/b-thumb.jpg" width="300"/></item>
+  <item><title>C</title><link>https://x.org/c</link><enclosure url="https://blog.cloudflare.com/_emdash/api/media/file/01M5.png" type="image/png" length="0"/></item>
+  <item><title>D</title><link>https://x.org/d</link><enclosure url="https://x.org/ep.mp3" type="audio/mpeg" length="1"/></item>
+  <item><title>E</title><link>https://x.org/e</link><media:content url="/rel/e.jpg"/></item>
+  <item><title>F</title><link>https://x.org/f</link></item>
+  </channel></rss>`;
+  const f = parseFeed(rss, 'https://x.org/feed/');
+  assert.deepEqual(f.entries.map((e) => e.image), [
+    'https://x.org/a.png',
+    'https://x.org/b-thumb.jpg',
+    'https://blog.cloudflare.com/_emdash/api/media/file/01M5.png',
+    null,
+    'https://x.org/rel/e.jpg',
+    null,
+  ]);
+  const atom = `<feed xmlns="http://www.w3.org/2005/Atom"><title>A</title>
+  <entry><title>One</title><link rel="alternate" href="https://y.org/1"/><link rel="enclosure" type="image/jpeg" href="https://y.org/1.jpg"/><id>1</id></entry></feed>`;
+  assert.equal(parseFeed(atom, 'https://y.org/atom.xml').entries[0].image, 'https://y.org/1.jpg');
+  // The parser hands the URL on as given; the scraper polices it before storing.
+  const http = `<rss><channel><item><title>H</title><link>https://z.org/h</link><media:thumbnail url="http://z.org/h.png"/></item></channel></rss>`;
+  assert.equal(parseFeed(http).entries[0].image, 'http://z.org/h.png');
+});

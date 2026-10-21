@@ -126,6 +126,39 @@ function linkTags(xml) {
   return out;
 }
 
+/**
+ * The entry's image, from the open tags feeds use for one: a media:content
+ * that is an image (medium="image", an image/* type, or neither given), then
+ * media:thumbnail, then an <enclosure> (or Atom rel="enclosure" link) with an
+ * image/* type. One linear scan; the attribute body excludes '<'. Returns
+ * the absolute URL as given (http or https); the caller polices it.
+ */
+function entryImage(item, baseUrl, atomLinks = null) {
+  const re = /<(media:content|media:thumbnail|enclosure)(?=[\s/>])([^<>]*)>/gi;
+  let content = null;
+  let thumb = null;
+  let enclosure = null;
+  let m;
+  while ((m = re.exec(item)) !== null) {
+    const name = m[1].toLowerCase();
+    const a = attrsOf(m[2] || '');
+    const type = (a.type ?? '').toLowerCase();
+    const medium = (a.medium ?? '').toLowerCase();
+    if (name === 'media:content' && !content && a.url) {
+      if (medium === 'image' || type.startsWith('image/') || (!medium && !type)) content = a.url;
+    } else if (name === 'media:thumbnail' && !thumb && a.url) {
+      thumb = a.url;
+    } else if (name === 'enclosure' && !enclosure && a.url && type.startsWith('image/')) {
+      enclosure = a.url;
+    }
+  }
+  if (!enclosure && atomLinks) {
+    const l = atomLinks.find((x) => (x.rel ?? '').toLowerCase() === 'enclosure' && (x.type ?? '').toLowerCase().startsWith('image/') && x.href);
+    if (l) enclosure = l.href;
+  }
+  return absolute(content ?? thumb ?? enclosure, baseUrl);
+}
+
 /** RFC 822 / ISO 8601 → ISO string, or null rather than an invented date. */
 export function parseDate(value) {
   if (!value) return null;
@@ -150,6 +183,8 @@ function absolute(href, base) {
  * @property {string|null} publishedAt
  * @property {string|null} updatedAt
  * @property {string} summary  plain text, untruncated
+ * @property {string|null} image  absolute URL of the entry's image (media:content,
+ *   media:thumbnail, an image enclosure), UNVALIDATED: the caller polices it
  */
 
 /**
@@ -197,8 +232,9 @@ export function parseFeed(xml, baseUrl) {
 function parseEntry(item, kind, baseUrl) {
   const title = tagText(item, 'title') ?? '';
   let link = null;
+  let links = null;
   if (kind === 'atom') {
-    const links = linkTags(item);
+    links = linkTags(item);
     const alt = links.find((l) => (l.rel ?? 'alternate') === 'alternate' && l.href) ?? links.find((l) => l.href);
     link = absolute(alt?.href, baseUrl);
   } else {
@@ -232,6 +268,7 @@ function parseEntry(item, kind, baseUrl) {
     publishedAt: published,
     updatedAt: updated,
     summary: stripHtml(summaryRaw),
+    image: entryImage(item, baseUrl, links),
   };
 }
 

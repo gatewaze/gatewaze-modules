@@ -181,3 +181,40 @@ test('sitemap keeps only same-domain URLs under the prefix, in window, newest fi
   // Same registrable domain, different subdomain, is kept.
   assert.equal(sitemapCandidates([{ loc: 'https://blog.example.org/p/x', lastmod: '2026-10-18T00:00:00Z' }], { sitemapUrl: 'https://www.example.org/sitemap.xml', prefix: 'https://blog.example.org/p/', cutoff: '2026-10-01T00:00:00Z', cap: 60 }).length, 1);
 });
+
+test('featured image: a feed entry image is stored in featured_image on insert, https only', async () => {
+  const sb = fakeSupabase((e) => (e.op === 'insert' ? { data: { id: 'new-1' }, error: null } : { data: null, error: null }));
+  const s = scraperWith(sb);
+  await s.upsertEntry(sb, SRC, { ...ENTRY, image: 'https://a.example.org/img/hero.png' }, '2026-10-01T00:00:00.000Z');
+  await s.upsertEntry(sb, SRC, { ...ENTRY, title: 'Two', link: 'https://a.example.org/blog/two', image: 'http://a.example.org/img/two.png' }, '2026-10-01T00:00:00.000Z');
+  await s.upsertEntry(sb, SRC, { ...ENTRY, title: 'Three', link: 'https://a.example.org/blog/three', image: 'javascript:alert(1)' }, '2026-10-01T00:00:00.000Z');
+  const [a, b, c] = sb.writes('blog_posts').filter((w) => w.op === 'insert');
+  assert.equal(a.payload.featured_image, 'https://a.example.org/img/hero.png');
+  assert.equal(b.payload.featured_image, null);
+  assert.equal(c.payload.featured_image, null);
+});
+
+test('featured image: a pending row gets one only when it has none', async () => {
+  for (const [had, expected] of [[null, 'https://a.example.org/new.png'], ['https://a.example.org/old.png', undefined]]) {
+    const sb = fakeSupabase();
+    const s = scraperWith(sb, [{ id: 'p1', canonical_url_norm: normalizeUrl(ENTRY.link), discovery_source_id: SRC.id, status: 'pending_review', featured_image: had }]);
+    await s.upsertEntry(sb, SRC, { ...ENTRY, image: 'https://a.example.org/new.png' }, '2026-10-01T00:00:00.000Z');
+    const [upd] = sb.writes('blog_posts');
+    assert.equal(upd.payload.featured_image, expected);
+  }
+});
+
+test('body backlog: og:image becomes the featured image when the post has none; an existing one is kept', async () => {
+  const page = `<html><head><meta property="og:image" content="https://a.example.org/og.png"></head><body><div class="entry-content"><p>${'Body text here. '.repeat(20)}</p></div></body></html>`;
+  const posts = [
+    { id: 'p1', canonical_url: 'https://a.example.org/blog/one', excerpt: 'x', featured_image: null, discovery_source_id: SRC.id, body_fetch_attempts: 0, discovery_sources: { egress: 'direct' } },
+    { id: 'p2', canonical_url: 'https://b.example.org/blog/two', excerpt: 'x', featured_image: 'https://b.example.org/kept.png', discovery_source_id: SRC.id, body_fetch_attempts: 0, discovery_sources: { egress: 'direct' } },
+  ];
+  const sb = fakeSupabase((e) => (e.table === 'blog_posts' && e.op === 'select' ? { data: posts, error: null } : { data: null, error: null }));
+  const s = scraperWith(sb);
+  s._pageCache = { p1: page, p2: page };
+  await s.fetchBodies(sb);
+  const upd = Object.fromEntries(sb.writes('blog_posts').map((w) => [w.calls.find((c) => c[0] === 'eq')[2], w.payload]));
+  assert.equal(upd.p1.featured_image, 'https://a.example.org/og.png');
+  assert.equal(upd.p2.featured_image, undefined);
+});
