@@ -52,7 +52,8 @@ function apiUrl(path: string): string {
   return base.endsWith('/api') ? `${base}${path.replace(/^\/api/, '')}` : `${base}${path}`;
 }
 
-async function jfetch<T>(path: string, init?: RequestInit): Promise<T> {
+/** Shared by the approval and Google Doc fill clients (approvalService.ts). */
+export async function jfetch<T>(path: string, init?: RequestInit): Promise<T> {
   const { data: { session } } = await supabase.auth.getSession();
   const r = await fetch(apiUrl(path), {
     ...init,
@@ -94,6 +95,11 @@ export function sendGateMessage(code: string, blockName?: string | null): string
     case 'NO_RESEARCH_RUN': return `Research has not run yet for ${block}. Run it from the block's Research panel (this works on a published edition too), or remove the block.`;
     case 'RESEARCH_IN_PROGRESS': return `Research is still running for ${block}. Wait for it to finish (or cancel it) before sending.`;
     case 'COST_CAP_BREACH': return `Research failed on its cost cap for ${block}; raise the cap and re-run, or remove the block.`;
+    // Approval gate (migration 096).
+    case 'APPROVAL_REQUIRED': return 'This newsletter needs approval before it is sent. Request approval below.';
+    case 'APPROVAL_PENDING': return 'Waiting for approval. The send unlocks once an approver approves this edition.';
+    case 'APPROVAL_CHANGES_REQUESTED': return 'The approver asked for changes. Make them, then request approval again.';
+    case 'APPROVAL_STALE': return 'The content changed after it was approved. Request approval again before sending.';
     default: return `This edition cannot be sent yet (${code}).`;
   }
 }
