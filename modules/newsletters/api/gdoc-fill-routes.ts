@@ -32,6 +32,9 @@ import {
   cleanDocHtml,
   buildFillPrompt,
   validateProposal,
+  splitDocSections,
+  mergeProposals,
+  type FillProposal,
   type FillTargetBlock,
   type FillLibraryBlock,
 } from '../lib/gdoc-fill.js';
@@ -49,6 +52,12 @@ const MODEL_TIMEOUT_MS = 240_000;
 // Concurrent runs: each holds a model call open for up to MODEL_TIMEOUT_MS.
 const MAX_RUNNING_PER_USER = 2;
 const MAX_RUNNING_TOTAL = 8;
+// A long draft is mapped in parts of about this many characters of cleaned
+// HTML, PART_CONCURRENCY at a time. A part whose reply still runs out of
+// room is halved and retried, at most MAX_SPLIT_DEPTH times.
+const PART_CHARS = 9_000;
+const PART_CONCURRENCY = 4;
+const MAX_SPLIT_DEPTH = 2;
 let lastHousekeeping = 0;
 
 let _sb: SupabaseClient | null = null;
@@ -203,7 +212,7 @@ async function callModel(prompt: string, userId: string): Promise<{ text: string
   }
   const json = (await r.json()) as { content?: Array<{ type: string; text?: string }>; usage?: { input_tokens?: number; output_tokens?: number }; stop_reason?: string };
   if (json.stop_reason === 'max_tokens') {
-    throw new UserFacingError('The document is too long to map in one go. Split it, or paste a shorter part.', 422, 'too_long');
+    throw new UserFacingError('A section of the document is too long to map. Split it into smaller sections, or paste a shorter part.', 422, 'too_long');
   }
   const text = (json.content ?? []).filter((c) => c.type === 'text').map((c) => c.text ?? '').join('');
   return { text, usage: { input: json.usage?.input_tokens ?? 0, output: json.usage?.output_tokens ?? 0 }, model };
@@ -265,16 +274,45 @@ async function runJob(jobId: string, editionId: string, userId: string, input: {
       throw new UserFacingError('This newsletter has no template blocks to fill.', 422, 'no_blocks');
     }
     const started = Date.now();
-    const { text, usage, model } = await callModel(buildFillPrompt({ docHtml, blocks, library }), userId);
-    let proposal;
-    try {
-      proposal = validateProposal(text, blocks, library);
-    } catch {
-      throw new UserFacingError('The AI reply could not be read. Try again.', 502, 'bad_ai_reply');
-    }
+    const usage = { input: 0, output: 0 };
+    let model = '';
+    // Map one part; a reply that runs out of room is halved and retried.
+    const mapPart = async (html: string, part: { index: number; total: number }, depth: number): Promise<FillProposal[]> => {
+      try {
+        const r = await callModel(buildFillPrompt({ docHtml: html, blocks, library, part }), userId);
+        usage.input += r.usage.input;
+        usage.output += r.usage.output;
+        model = r.model;
+        try {
+          return [validateProposal(r.text, blocks, library)];
+        } catch {
+          throw new UserFacingError('The AI reply could not be read. Try again.', 502, 'bad_ai_reply');
+        }
+      } catch (err) {
+        if (err instanceof UserFacingError && err.code === 'too_long' && depth < MAX_SPLIT_DEPTH) {
+          const halves = splitDocSections(html, Math.ceil(html.length / 2) + 200);
+          if (halves.length > 1) {
+            const out: FillProposal[] = [];
+            for (const h of halves) out.push(...(await mapPart(h, part, depth + 1)));
+            return out;
+          }
+        }
+        throw err;
+      }
+    };
+    const parts = splitDocSections(docHtml, PART_CHARS);
+    const results: FillProposal[][] = new Array(parts.length);
+    let next = 0;
+    await Promise.all(Array.from({ length: Math.min(PART_CONCURRENCY, parts.length) }, async () => {
+      while (next < parts.length) {
+        const i = next++;
+        results[i] = await mapPart(parts[i], { index: i + 1, total: parts.length }, 0);
+      }
+    }));
+    const proposal = mergeProposals(results.flat());
     // eslint-disable-next-line no-console
-    console.log(`[newsletters] gdoc-fill job=${jobId} edition=${editionId} blocks=${proposal.blocks.length} unmapped=${proposal.unmapped.length} model=${model} tokens=${usage.input}/${usage.output} ms=${Date.now() - started}`);
-    await finish({ status: 'complete', proposal, usage: { ...usage, model } });
+    console.log(`[newsletters] gdoc-fill job=${jobId} edition=${editionId} parts=${parts.length} blocks=${proposal.blocks.length} unmapped=${proposal.unmapped.length} model=${model} tokens=${usage.input}/${usage.output} ms=${Date.now() - started}`);
+    await finish({ status: 'complete', proposal, usage: { ...usage, model, parts: parts.length } });
   } catch (err) {
     const timedOut = (err as Error)?.name === 'TimeoutError' || (err as Error)?.name === 'AbortError';
     const known = err instanceof UserFacingError;
