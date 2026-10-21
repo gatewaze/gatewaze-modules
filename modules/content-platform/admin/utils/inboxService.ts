@@ -67,6 +67,13 @@ export interface ExplainResponse {
   state_history: Array<{ from_state: string | null; to_state: string; actor: string; reason: string | null; occurred_at: string }>;
 }
 
+/** What the drawer shows to let a reviewer see the item itself. Any field may be null. */
+export interface InboxDetail {
+  url: string | null;
+  image_url: string | null;
+  body_html: string | null;
+}
+
 const base = () => getApiBaseUrl();
 
 async function jfetch<T>(input: string, init?: RequestInit): Promise<T> {
@@ -124,6 +131,12 @@ export const inboxService = {
       method: 'POST',
       body: JSON.stringify({ action, selection: { mode: 'ids', items }, params }),
     });
+    return r.data;
+  },
+  async detail(content_type: string, content_id: string) {
+    const r = await jfetch<{ data: InboxDetail | null }>(
+      `/admin/inbox/detail/${encodeURIComponent(content_type)}/${encodeURIComponent(content_id)}`,
+    );
     return r.data;
   },
   async explain(triage_item_id: string) {
