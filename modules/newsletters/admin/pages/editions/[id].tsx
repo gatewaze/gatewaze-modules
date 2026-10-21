@@ -9,6 +9,7 @@ import {
   DocumentTextIcon,
   ChatBubbleLeftRightIcon,
   ChartBarIcon,
+  CheckBadgeIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 import { Page } from '@/components/shared/Page';
@@ -31,6 +32,10 @@ import {
 import { researchBindingOf, withBindingHashes } from '../../lib/research-block';
 import { applyResearchReplacements, diffResearchOnly, type SnapshotBlock } from '../../lib/research-conflict';
 import { ResearchPanel } from '../../components/ResearchPanel';
+import { GDocFillDialog, GDocFillButton } from '../../components/GDocFillDialog';
+import { applyGdocMerge, type GdocChange, type GdocChoice } from '../../lib/gdoc-merge';
+import { EditionApprovalShell } from '../../components/EditionApprovalShell';
+import { useAdminScope } from '@/hooks/usePermissions';
 import { researchService } from '../../utils/researchService';
 import { exportEditionHtml } from '../../components/puck/email-blocks/export-edition-html';
 import { getViewOnlineUrl } from '../../utils/view-online-url';
@@ -180,12 +185,23 @@ interface CollectionInfo {
 
 type EditionTab = 'details' | 'editor' | 'sending';
 
-export default function EditionEditorPage() {
+/**
+ * `approvalMode`: the approver's view (route newsletters/approve/:id). The same
+ * loading, saving and conflict handling as the editor, rendered as a
+ * full-screen canvas + fields with Approve / Ask for changes, and no way into
+ * the rest of the editor.
+ */
+export default function EditionEditorPage({ approvalMode = false }: { approvalMode?: boolean } = {}) {
   const { id, tab: tabFromUrl, slug: newsletterSlug } = useParams<{ id: string; tab?: string; slug?: string }>();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const isNew = id === 'new';
   const hasBulkEmailing = useHasModule('bulk-emailing');
+  const { isSuperAdmin } = useAdminScope();
+  // Bumped to remount the canvas after content is replaced from outside it
+  // (Google Doc fill): Puck reads `data` only when it mounts.
+  const [canvasKey, setCanvasKey] = useState(0);
+  const [gdocOpen, setGdocOpen] = useState(false);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -288,7 +304,7 @@ export default function EditionEditorPage() {
 
   const validTabs: EditionTab[] = ['editor', 'details', ...(hasBulkEmailing ? ['sending' as EditionTab] : [])];
   const defaultTab: EditionTab = 'editor';
-  const activeTab: EditionTab = validTabs.includes(tabFromUrl as EditionTab) ? (tabFromUrl as EditionTab) : defaultTab;
+  const activeTab: EditionTab = approvalMode ? 'editor' : validTabs.includes(tabFromUrl as EditionTab) ? (tabFromUrl as EditionTab) : defaultTab;
 
   const handleTabChange = (tab: string) => {
     const basePath = newsletterSlug ? `/newsletters/${newsletterSlug}/editions` : '/newsletters/editor';
@@ -726,7 +742,14 @@ export default function EditionEditorPage() {
     const fp = draftFingerprint(toDraftPayload(edition));
     if (fp === loadedSnapshotRef.current) return;
     const editionId = edition.id;
-    const t = setTimeout(() => writeDraft(editionId, toDraftPayload(edition), Date.now()), 800);
+    // Re-check when the timer fires: a save that finished inside the 800ms
+    // (the Google Doc fill saves straight away) has already cleared the draft
+    // and moved the clean baseline, so writing now would leave a stale draft
+    // and a false "unsaved changes" banner on the next load.
+    const t = setTimeout(() => {
+      if (draftFingerprint(toDraftPayload(edition)) === loadedSnapshotRef.current) return;
+      writeDraft(editionId, toDraftPayload(edition), Date.now());
+    }, 800);
     return () => clearTimeout(t);
   }, [edition, pendingDraft]);
 
@@ -874,7 +897,12 @@ export default function EditionEditorPage() {
     if (!options?.silent) toast.success('Edition saved');
   };
 
-  const handleSave = async (options?: { silent?: boolean }) => {
+  // `options.edition` saves that state instead of the rendered one, for a
+  // caller that has just computed the next edition (Google Doc fill) and
+  // cannot wait for a re-render.
+  const handleSave = async (options?: { silent?: boolean; edition?: NewsletterEdition }) => {
+    // editionRef.current is the latest rendered state (set on every render).
+    const edition = options?.edition ?? editionRef.current;
     if (!edition) return;
     setSaving(true);
     try {
@@ -1014,12 +1042,146 @@ export default function EditionEditorPage() {
     navigate('/login');
   };
 
+  /**
+   * Apply the author's choices from the Google Doc fill dialog, then save.
+   * Unsaved edits are saved first so research edit layers (written by their
+   * own versioned RPC, like the Research panel's) land on blocks that exist
+   * and on the current version. Everything else goes through the normal save.
+   */
+  const applyGdocFill = async (changes: GdocChange[], choices: Record<string, GdocChoice>) => {
+    if (!editionRef.current || editionRef.current.id === 'new') throw new Error('Save the edition first.');
+    if (draftFingerprint(toDraftPayload(editionRef.current)) !== loadedSnapshotRef.current) {
+      await handleSave({ silent: true });
+      if (draftFingerprint(toDraftPayload(editionRef.current)) !== loadedSnapshotRef.current) {
+        throw new Error('Your unsaved changes could not be saved. Save the edition, then try again.');
+      }
+    }
+    const base = editionRef.current;
+    const result = applyGdocMerge(base, changes, choices, blockTemplates as unknown as BlockTemplate[], freshUuid);
+    let next = result.edition;
+    for (const { blockId, edits } of result.researchEdits) {
+      const { data, error } = await supabase.rpc('newsletters_research_edits_write', {
+        p_block_id: blockId,
+        p_edits: edits,
+        p_expected_version: editionVersionRef.current,
+      });
+      if (error) {
+        if (error.code === '55006' || /version_conflict/i.test(error.message || '')) {
+          throw new Error('This edition was changed elsewhere. Reload it, then fill from the document again.');
+        }
+        throw error;
+      }
+      editionVersionRef.current = typeof data === 'number' ? data : editionVersionRef.current + 1;
+      serverBlocksRef.current = serverBlocksRef.current.map((b) => (b.id === blockId ? { ...b, content: { ...b.content, research_edits: edits } } : b));
+      next = { ...next, blocks: next.blocks.map((b) => (b.id === blockId ? { ...b, content: { ...b.content, research_edits: edits } } : b)) };
+    }
+    setEdition(next);
+    editionRef.current = next;
+    setCanvasKey((k) => k + 1);
+    await handleSave({ edition: next, silent: true });
+    if (draftFingerprint(toDraftPayload(next)) !== loadedSnapshotRef.current) {
+      throw new Error('The content was applied but not saved. Save the edition to keep it.');
+    }
+    toast.success(`Filled ${result.applied} part${result.applied === 1 ? '' : 's'} of the edition from the document and saved.${result.skipped.length ? ` Not applied: ${result.skipped.join(', ')}.` : ''}`);
+  };
+
   if (loading) {
     return <Page title="Loading..."><div className="flex items-center justify-center h-64"><LoadingSpinner /></div></Page>;
   }
 
   if (!edition) {
     return <Page title="Not Found"><div className="p-6 text-center text-[var(--gray-9)]">Edition not found</div></Page>;
+  }
+
+  // Presence / signed-out / unsaved-draft banners: shown by the editor and
+  // by the approval view alike.
+  const notices = (
+    <>
+        {presencePeers.length > 0 && (
+          <div
+            style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              padding: '6px 14px', fontSize: 13,
+              background: '#FEF3C7', color: '#92400E', borderBottom: '1px solid #FDE68A',
+            }}
+          >
+            <span aria-hidden>👀</span>
+            <span>
+              {presencePeers.length === 1
+                ? `${presencePeers[0].name} is also editing this edition`
+                : `${presencePeers.length} other people are also editing this edition`}
+              {' — your changes are protected, but coordinate to avoid conflicting saves.'}
+            </span>
+          </div>
+        )}
+        {sessionExpired && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '10px 14px', fontSize: 13, background: '#FEE2E2', color: '#991B1B', borderBottom: '1px solid #FCA5A5' }}>
+            <span aria-hidden>⚠️</span>
+            <span style={{ fontWeight: 600 }}>You&rsquo;ve been signed out.</span>
+            <span>Your recent changes are saved on this device and will be restored after you sign in again — they were <strong>not</strong> saved to the server.</span>
+            <button onClick={handleReLogin} style={{ marginLeft: 'auto', padding: '4px 12px', background: '#991B1B', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, cursor: 'pointer' }}>
+              Sign in again
+            </button>
+          </div>
+        )}
+        {pendingDraft && !sessionExpired && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '10px 14px', fontSize: 13, background: '#FEF3C7', color: '#92400E', borderBottom: '1px solid #FDE68A' }}>
+            <span aria-hidden>💾</span>
+            <span>Unsaved changes from {new Date(pendingDraft.savedAt).toLocaleString()} were found on this device (they never reached the server).</span>
+            <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+              <button onClick={restoreDraft} style={{ padding: '4px 12px', background: '#92400E', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, cursor: 'pointer' }}>Restore</button>
+              <button onClick={discardDraft} style={{ padding: '4px 12px', background: 'transparent', color: '#92400E', border: '1px solid #92400E', borderRadius: 6, fontSize: 13, cursor: 'pointer' }}>Discard</button>
+            </span>
+          </div>
+        )}
+    </>
+  );
+
+  if (approvalMode) {
+    // Save pending edits; true when the server now holds what is on screen.
+    const ensureSaved = async (): Promise<boolean> => {
+      const cur = editionRef.current;
+      if (!cur) return false;
+      if (draftFingerprint(toDraftPayload(cur)) !== loadedSnapshotRef.current) {
+        await handleSave({ silent: true });
+      }
+      return !!editionRef.current && draftFingerprint(toDraftPayload(editionRef.current)) === loadedSnapshotRef.current;
+    };
+    return (
+      <EditionApprovalShell
+        editionId={edition.id}
+        subject={edition.subject || ''}
+        editionDate={edition.edition_date}
+        newsletterName={collection?.name ?? null}
+        saving={saving}
+        // The baseline is recorded by an effect after the first render; until
+        // then (empty) nothing can have been edited.
+        dirty={loadedSnapshotRef.current !== '' && draftFingerprint(toDraftPayload(edition)) !== loadedSnapshotRef.current}
+        onSave={async () => { await handleSave(); }}
+        ensureSaved={ensureSaved}
+        getVersion={() => editionVersionRef.current}
+        notices={notices}
+      >
+        <NewsletterCanvasEditor
+          edition={edition}
+          blockTemplates={blockTemplates}
+          brickTemplates={brickTemplates}
+          collectionMetadata={collectionMetadata}
+          wrapperTemplate={collection?.wrapperTemplate ?? null}
+          viewOnlineUrl={getViewOnlineUrl(
+            collection,
+            { edition_date: edition.edition_date, subject: edition.subject, title: edition.title },
+          )}
+          {...(collectionId ? { collectionId } : {})}
+          {...(enabledRegistryComponentIds ? { enabledRegistryComponentIds } : {})}
+          reviewMode
+          hideDefaultActions
+          onChange={setEdition}
+          onSave={handleSave}
+          isSaving={saving}
+        />
+      </EditionApprovalShell>
+    );
   }
 
   const status = (edition as any).status || 'draft';
@@ -1038,6 +1200,7 @@ export default function EditionEditorPage() {
   const newsletterTabs: Tab[] = [
     { id: 'details', label: 'Settings', icon: <Cog6ToothIcon className={ic} /> },
     { id: 'template', label: 'Template', icon: <RectangleGroupIcon className={ic} /> },
+    ...(isSuperAdmin ? [{ id: 'approval', label: 'Approval', icon: <CheckBadgeIcon className={ic} /> }] : []),
     { id: 'editions', label: 'Editions', icon: <DocumentTextIcon className={ic} /> },
     ...(hasBulkEmailing
       ? [
@@ -1072,43 +1235,7 @@ export default function EditionEditorPage() {
         activeSubTabId={activeTab}
         onSubTabChange={handleTabChange}
       >
-      {presencePeers.length > 0 && (
-        <div
-          style={{
-            display: 'flex', alignItems: 'center', gap: 8,
-            padding: '6px 14px', fontSize: 13,
-            background: '#FEF3C7', color: '#92400E', borderBottom: '1px solid #FDE68A',
-          }}
-        >
-          <span aria-hidden>👀</span>
-          <span>
-            {presencePeers.length === 1
-              ? `${presencePeers[0].name} is also editing this edition`
-              : `${presencePeers.length} other people are also editing this edition`}
-            {' — your changes are protected, but coordinate to avoid conflicting saves.'}
-          </span>
-        </div>
-      )}
-      {sessionExpired && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '10px 14px', fontSize: 13, background: '#FEE2E2', color: '#991B1B', borderBottom: '1px solid #FCA5A5' }}>
-          <span aria-hidden>⚠️</span>
-          <span style={{ fontWeight: 600 }}>You&rsquo;ve been signed out.</span>
-          <span>Your recent changes are saved on this device and will be restored after you sign in again — they were <strong>not</strong> saved to the server.</span>
-          <button onClick={handleReLogin} style={{ marginLeft: 'auto', padding: '4px 12px', background: '#991B1B', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, cursor: 'pointer' }}>
-            Sign in again
-          </button>
-        </div>
-      )}
-      {pendingDraft && !sessionExpired && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '10px 14px', fontSize: 13, background: '#FEF3C7', color: '#92400E', borderBottom: '1px solid #FDE68A' }}>
-          <span aria-hidden>💾</span>
-          <span>Unsaved changes from {new Date(pendingDraft.savedAt).toLocaleString()} were found on this device (they never reached the server).</span>
-          <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-            <button onClick={restoreDraft} style={{ padding: '4px 12px', background: '#92400E', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, cursor: 'pointer' }}>Restore</button>
-            <button onClick={discardDraft} style={{ padding: '4px 12px', background: 'transparent', color: '#92400E', border: '1px solid #92400E', borderRadius: 6, fontSize: 13, cursor: 'pointer' }}>Discard</button>
-          </span>
-        </div>
-      )}
+      {notices}
       {/* Tab Content */}
       {activeTab === 'editor' && (
         <div
@@ -1139,6 +1266,7 @@ export default function EditionEditorPage() {
           }}
         >
           <NewsletterCanvasEditor
+            key={canvasKey}
             edition={edition}
             blockTemplates={blockTemplates}
             brickTemplates={brickTemplates}
@@ -1161,6 +1289,7 @@ export default function EditionEditorPage() {
             // Research blocks get the Research panel beneath their Puck
             // fields (spec §5.2, §5.4); every other block renders nothing extra.
             blockSidebarExtra={renderBlockSidebarExtra}
+            toolbarActions={<GDocFillButton onClick={() => setGdocOpen(true)} disabled={edition.id === 'new' || saving} />}
             onChange={setEdition}
             onSave={handleSave}
             onStatusChange={async (newStatus) => {
@@ -1311,6 +1440,7 @@ export default function EditionEditorPage() {
             editionStatus={(edition as { status?: string }).status}
             // For the send gate's message: block id → the block's label.
             blockNames={blockNames}
+            beforeApprovalRequest={async () => { await handleSave({ silent: true }); }}
             getRenderedHtml={edition
               ? async () => {
                   // Build per-block render metadata: react-email blocks
@@ -1366,6 +1496,13 @@ export default function EditionEditorPage() {
           />
         </div>
       )}
+      <GDocFillDialog
+        isOpen={gdocOpen}
+        onClose={() => setGdocOpen(false)}
+        edition={edition}
+        blockTemplates={blockTemplates as unknown as BlockTemplate[]}
+        onApply={applyGdocFill}
+      />
       </WorkspaceLayout>
     </Page>
   );

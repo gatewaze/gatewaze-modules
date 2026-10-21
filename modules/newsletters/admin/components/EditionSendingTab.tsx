@@ -4,6 +4,7 @@ import { SendingPanel } from '@/components/sending';
 import type { SendingAdapter, SendComposerConfig } from '@/components/sending';
 import { getViewOnlineUrl } from '../utils/view-online-url';
 import { parseSendGateError, sendGateMessage, type SendGate } from '../utils/researchService';
+import { ApprovalPanel } from './ApprovalPanel';
 
 interface CollectionInfo {
   id?: string;
@@ -30,6 +31,8 @@ interface EditionSendingTabProps {
   getRenderedHtml?: () => Promise<string>;
   /** Block id → label, so the research send gate can name the offending block. */
   blockNames?: Record<string, string>;
+  /** Save the edition before approval is requested, so the request covers the latest content. */
+  beforeApprovalRequest?: () => Promise<void>;
 }
 
 /**
@@ -60,7 +63,7 @@ async function checkSendGate(editionId: string): Promise<SendGate | null> {
  * newsletter-level (collection), shown read-only with an Edit link to the
  * newsletter settings. The editor keeps its own test send; this adds one too.
  */
-export function EditionSendingTab({ editionId, editionDate, subject, preheader, collection, newsletterSlug, editionStatus, getRenderedHtml, blockNames }: EditionSendingTabProps) {
+export function EditionSendingTab({ editionId, editionDate, subject, preheader, collection, newsletterSlug, editionStatus, getRenderedHtml, blockNames, beforeApprovalRequest }: EditionSendingTabProps) {
   // Research send gate (spec §5.3): shown as the "can't send yet" reason so
   // the author learns it before the insert. Re-checked when the tab mounts
   // and after every send attempt; the DB trigger remains the enforcement.
@@ -268,6 +271,9 @@ export function EditionSendingTab({ editionId, editionDate, subject, preheader, 
 
   return (
     <>
+      {/* Approval (migration 096): status, request, link for approvers. The
+          send gate above already explains why Send is locked. */}
+      <ApprovalPanel editionId={editionId} onChanged={refreshGate} {...(beforeApprovalRequest ? { beforeRequest: beforeApprovalRequest } : {})} />
       {held.map((h) => {
         const g = parseSendGateError(h.last_error);
         return (
