@@ -76,6 +76,23 @@ export const ARTBOARD_CSS = `
 .art .mark.tr { top: 6%; right: 4%; height: 7cqw; }
 `;
 
+/**
+ * Type sizes that fit. The shout line is set in a heavy face at about 0.72em
+ * per glyph, across 92% of the board, so a word longer than about ten
+ * letters would break mid-word at the full 14cqw; the size comes down to
+ * what the longest word needs. The lead line shrinks the same way so it
+ * stays on one or two lines.
+ */
+export function emphSize(emph: string): number {
+  const longest = Math.max(1, ...String(emph ?? '').split(/\s+/).map((w) => w.length));
+  return Math.round(Math.min(14, Math.max(7, 92 / (0.72 * longest))) * 10) / 10;
+}
+
+export function leadSize(lead: string): number {
+  const len = Math.max(1, String(lead ?? '').length);
+  return Math.round(Math.min(6, Math.max(3.6, (2 * 92) / (0.52 * len))) * 10) / 10;
+}
+
 export function escapeHtml(value: unknown): string {
   return String(value ?? '')
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
@@ -161,7 +178,7 @@ export function artboardHtml(input: ArtboardInput): string {
   ${panelHtml}
   ${input.cutSrc ? `<img class="cut" src="${escapeHtml(input.cutSrc)}" alt="" style="transform:${place.transform};transform-origin:${place.origin}">` : ''}
   <div class="scrim"></div>
-  <div class="txt"><span class="lead">${escapeHtml(sel.lead)}</span><span class="emph">${escapeHtml(sel.emph)}</span></div>
+  <div class="txt"><span class="lead" style="font-size:${leadSize(sel.lead)}cqw">${escapeHtml(sel.lead)}</span><span class="emph" style="font-size:${emphSize(sel.emph)}cqw">${escapeHtml(sel.emph)}</span></div>
   <span class="brand"><img src="${escapeHtml(input.logoSrc)}" alt=""></span>
   ${mark}
 </div>`;
