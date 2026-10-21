@@ -24,15 +24,19 @@ import { loadStudioAssets } from './studio-assets.js';
 import { assemble, renderCardPng, type CardSpeaker } from './preroll.js';
 import { downloadMaster, getMedia, putMedia, mediaUrl, studioFolder, MEDIA_BUCKET } from './studio-media.js';
 import { storeForNew } from './storage.js';
+import { resolveLogo, logoDataUri } from './studio-logo.js';
 import type { Analysis } from './studio-analyse.js';
 
 export interface Selection {
   cut?: string | null;
   scale?: number;
   x?: number;
+  y?: number | null;
   lead?: string;
   emph?: string;
   panels?: boolean;
+  /** Which panels show, in order, at most two; null means the first two. */
+  panel_keys?: string[] | null;
   trim_in?: number | null;
   trim_out?: number | null;
   preroll?: boolean;
@@ -67,6 +71,15 @@ function dataUri(bytes: Buffer, mime: string): string {
   return `data:${mime};base64,${bytes.toString('base64')}`;
 }
 
+/** The panels the editor chose, in their order, two at most; the first two when nothing was chosen. */
+export function chosenPanels<T extends { key: string }>(panels: T[], sel: { panels?: boolean; panel_keys?: string[] | null }): T[] {
+  if (sel.panels === false) return [];
+  if (Array.isArray(sel.panel_keys)) {
+    return sel.panel_keys.map((k) => panels.find((p) => p.key === k)).filter((p): p is T => Boolean(p)).slice(0, 2);
+  }
+  return panels.slice(0, 2);
+}
+
 export async function finalizeStudio(supabase, args: FinalizeArgs): Promise<Outputs> {
   const log = args.log ?? (() => {});
   const folder = studioFolder(args.videoId, args.studioId);
@@ -77,15 +90,16 @@ export async function finalizeStudio(supabase, args: FinalizeArgs): Promise<Outp
   // 1. The thumbnail.
   await args.progress('Rendering the thumbnail');
   const cut = a.cuts.find((c) => c.key === sel.cut) ?? a.cuts[0] ?? null;
-  const panels = sel.panels === false ? [] : a.panels.slice(0, 2);
+  const panels = chosenPanels(a.panels ?? [], sel);
+  const logo = await resolveLogo(supabase, args.videoId, a.context);
   const input: ArtboardInput = {
     backgroundSrc: assets.thumbnailBg,
     logoSrc: assets.logo,
     cutSrc: cut ? dataUri(await getMedia(supabase, cut.path), 'image/png') : null,
-    panelSrcs: await Promise.all(panels.map(async (p) => dataUri(await getMedia(supabase, p.path), 'image/jpeg'))),
-    markName: a.context?.org ?? null,
+    panelSrcs: await Promise.all(panels.map(async (p) => dataUri(await getMedia(supabase, p.path), p.path.endsWith('.png') ? 'image/png' : 'image/jpeg'))),
+    markSrc: await logoDataUri(supabase, logo),
     cutBounds: cut?.bbox ?? null,
-    selection: clampSelection({ scale: sel.scale, x: sel.x, lead: sel.lead, emph: sel.emph, panels: sel.panels }),
+    selection: clampSelection({ scale: sel.scale, x: sel.x, y: sel.y, lead: sel.lead, emph: sel.emph, panels: sel.panels }),
   };
   const png = await renderHtmlToPng(artboardPage(input, { archivo: assets.fonts.archivo }), 1280, 720, 1);
   const work = await mkdtemp(join(tmpdir(), 'studio-final-'));

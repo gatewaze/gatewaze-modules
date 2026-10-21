@@ -251,7 +251,8 @@ export async function analyseMaster(supabase, args: AnalyseArgs): Promise<{ anal
     const panels: AnalysisPanel[] = [];
     let triedPanels = 0;
     for (const s of rankSlideFrames(slideScored)) {
-      if (panels.length === 2 || triedPanels >= 6) break;
+      // Three to choose from on the page; two show at once.
+      if (panels.length === 3 || triedPanels >= 8) break;
       triedPanels += 1;
       try {
         const box = slideCrop(plan.layouts[s.t], W);

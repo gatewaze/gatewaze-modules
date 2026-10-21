@@ -53,8 +53,19 @@ editor finish the video by hand:
    behind the head; a panel must be a legible, interesting slide with nobody
    in it; a headline may not contain a number the abstract does not.
 2. The editor picks a speaker frame, a headline (or types one), the speaker's
-   size and position, whether the slides show, where the video starts and
-   ends, and whether the talk card goes in front.
+   size and position, which background panels show, where the video starts
+   and ends, and whether the talk card goes in front. Size and position are
+   anchored on the face, so the head stays in the picture whatever is set.
+   Up to three slides from the video are offered as background panels; two
+   can show at once. An image can be uploaded as a background instead, and
+   a photo of the speaker can be uploaded in place of a frame: the worker
+   cuts it out the same way (a PNG with transparency is used as it is).
+   The company logo comes from a logo uploaded for the talk, else from the
+   company on the speaker's programme record; with neither there is no mark
+   and the company name is not set in its place. A logo belongs to the talk
+   (`video_talk_logos`, keyed by the agenda entry or episode), not to the
+   person, because the same speaker talks for different companies, and a
+   later upload for the same talk replaces it.
 3. Approve (`videos:studio-finalize`) renders the thumbnail at 1280x720 in
    Chromium from the same markup the page showed, sets it on the video, and,
    when a trim or the card was asked for, writes a new master: the trim is a

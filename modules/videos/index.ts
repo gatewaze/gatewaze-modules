@@ -77,6 +77,9 @@ const videosModule: GatewazeModule = {
     // 019 records key revocation so a failed delete is retried, and makes
     // each uploaded object adopt exactly once.
     'migrations/019_batch_revoke_and_dedupe.sql',
+    // 020 adds a company logo per talk (not per speaker) and the studio's
+    // own uploads: a speaker photo or a background image in place of a frame.
+    'migrations/020_talk_logos_and_uploads.sql',
   ],
 
   apiRoutes: async (app: unknown, ctx?: unknown) => {
@@ -219,6 +222,12 @@ const videosModule: GatewazeModule = {
       // the master. One at a time for the same reason.
       name: 'videos:studio-finalize',
       handler: './workers/studio-finalize.ts',
+      concurrency: 1,
+    },
+    {
+      // Cuts an uploaded speaker photo out and adds it as a frame.
+      name: 'videos:studio-upload',
+      handler: './workers/studio-upload.ts',
       concurrency: 1,
     },
     {

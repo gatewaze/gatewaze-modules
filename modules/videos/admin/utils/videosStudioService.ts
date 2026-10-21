@@ -39,7 +39,9 @@ export type StudioState = 'queued' | 'analysing' | 'ready' | 'finalising' | 'app
 
 export interface StudioCut {
   key: string;
-  t: number;
+  /** Null for an uploaded photo. */
+  t: number | null;
+  source?: 'upload';
   url: string | null;
   bbox: [number, number, number, number] | null;
   meta: { face?: number; pose?: number; glare?: number; size?: string; note?: string; lectern?: boolean };
@@ -53,7 +55,7 @@ export interface StudioCut {
   flagged?: string;
 }
 
-export interface StudioPanel { key: string; t: number; url: string | null; note: string; composite: boolean }
+export interface StudioPanel { key: string; t: number | null; url: string | null; note: string; composite: boolean; source?: 'upload' }
 
 export interface StudioSpeaker { name: string; role: string | null; company: string | null; companyLogoUrl?: string | null }
 
@@ -75,9 +77,13 @@ export interface StudioSelection {
   cut: string | null;
   scale: number;
   x: number;
+  /** Head height down the frame; null keeps the frame's own. */
+  y: number | null;
   lead: string;
   emph: string;
   panels: boolean;
+  /** Which panels show, in order, at most two; null means the first two. */
+  panel_keys: string[] | null;
   trim_in: number | null;
   trim_out: number | null;
   preroll: boolean;
@@ -114,10 +120,21 @@ export interface StudioMaster { id: string; bytes: number | null; filename: stri
 
 export interface StudioBrand { thumbnail_bg: string; logo: string; card_bg: string }
 
+export interface StudioLogo {
+  url: string | null;
+  source: 'talk' | 'speaker' | null;
+  company: string | null;
+  /** False when the video is attached to no talk, so there is nothing to store a logo against. */
+  can_upload: boolean;
+}
+
+export type StudioUploadKind = 'logo' | 'speaker' | 'background';
+
 export interface StudioResponse {
   studio: StudioRow | null;
   master: StudioMaster | null;
   configured: boolean;
+  logo: StudioLogo;
   /** Only when asked for with `withBrand`; a few hundred KB of data URIs. */
   brand?: StudioBrand;
 }
@@ -144,6 +161,37 @@ export async function approveStudio(videoId: string, selection: Partial<StudioSe
     method: 'POST', body: JSON.stringify({ selection }),
   });
   return (await jsonOrThrow<{ studio: StudioRow }>(res)).studio;
+}
+
+/**
+ * Upload a logo, a speaker photo or a background image for the studio: mint,
+ * PUT straight to storage, complete. Returns what complete returned: the
+ * logo URL, the updated studio row, or (for a photo) the row with the
+ * worker's progress set.
+ */
+export async function uploadStudioImage(
+  videoId: string,
+  kind: StudioUploadKind,
+  file: File,
+  onProgress?: (fraction: number) => void,
+): Promise<{ logo?: { url: string; source: string }; studio?: StudioRow }> {
+  const mintRes = await authedFetch(`${BASE}/videos/${encodeURIComponent(videoId)}/studio/uploads/mint`, {
+    method: 'POST', body: JSON.stringify({ kind, mime_type: file.type, bytes: file.size }),
+  });
+  const mint = await jsonOrThrow<{ path: string; upload_url: string; upload_headers: Record<string, string> }>(mintRes);
+  await new Promise<void>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('PUT', mint.upload_url);
+    for (const [k, v] of Object.entries(mint.upload_headers ?? {})) xhr.setRequestHeader(k, v);
+    xhr.upload.onprogress = (e) => { if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total); };
+    xhr.onerror = () => reject(new Error('Network error during upload'));
+    xhr.onload = () => (xhr.status >= 200 && xhr.status < 300 ? resolve() : reject(new Error(`Upload failed: HTTP ${xhr.status}`)));
+    xhr.send(file);
+  });
+  const done = await authedFetch(`${BASE}/videos/${encodeURIComponent(videoId)}/studio/uploads/complete`, {
+    method: 'POST', body: JSON.stringify({ path: mint.path }),
+  });
+  return jsonOrThrow(done);
 }
 
 export async function getVideoSummary(videoId: string): Promise<{ title: string; kind: string } | null> {

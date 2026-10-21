@@ -18,11 +18,11 @@ import { toast } from 'sonner';
 import { Badge, Button, Card, WorkspaceLayout } from '@/components/ui';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 
-import { ARTBOARD_CSS, artboardHtml, clampSelection, type ArtboardSelection } from '../../lib/artboard';
+import { ARTBOARD_CSS, artboardHtml, clampSelection, headPoint, type ArtboardSelection } from '../../lib/artboard';
 import { getPlaybackUrl } from '../utils/videosEditorService';
 import {
-  getStudio, startStudio, saveSelection, approveStudio, mmss,
-  type StudioRow, type StudioMaster, type StudioBrand, type StudioSelection, type StudioCut,
+  getStudio, startStudio, saveSelection, approveStudio, uploadStudioImage, mmss,
+  type StudioRow, type StudioMaster, type StudioBrand, type StudioSelection, type StudioCut, type StudioLogo, type StudioUploadKind,
 } from '../utils/videosStudioService';
 
 const FONTS_HREF = 'https://fonts.googleapis.com/css2?family=Archivo:wght@500;700;900&family=Figtree:wght@400;500;600&display=swap';
@@ -37,6 +37,13 @@ const CARD_CSS = `
 .cardbox .ct .w b { font-weight: 600; color: #fff; }
 .cuts-pick button { width: 72px; height: 72px; border-radius: 8px; border: 2px solid var(--gray-a6); background-color: #0b0d12; cursor: pointer; padding: 0; }
 .cuts-pick button[aria-pressed="true"] { border-color: var(--accent-9); }
+.panels-pick button { width: 112px; height: 63px; border-radius: 6px; border: 2px solid var(--gray-a6); background: #0b0d12 center / cover no-repeat; cursor: pointer; padding: 0; position: relative; }
+.panels-pick button[aria-pressed="true"] { border-color: var(--accent-9); }
+.panels-pick button .n { position: absolute; left: 4px; top: 2px; font: 600 11px/1 sans-serif; color: #fff; background: var(--accent-9); border-radius: 999px; padding: 3px 6px; }
+.upload-btn { font-size: 12px; border: 1px dashed var(--gray-a7); border-radius: 6px; padding: 6px 10px; cursor: pointer; color: var(--gray-11); background: transparent; }
+.upload-btn:hover { border-color: var(--accent-9); color: var(--gray-12); }
+.logo-box { width: 160px; height: 64px; border-radius: 6px; background: #1e2337; display: flex; align-items: center; justify-content: center; padding: 8px; }
+.logo-box img { max-width: 100%; max-height: 100%; filter: brightness(0) invert(1); }
 .film { position: relative; display: flex; overflow-x: auto; gap: 1px; background: #0b0d12; border-radius: 6px; padding: 4px 0; cursor: pointer; }
 .film .cell { flex: 0 0 80px; height: 45px; background-repeat: no-repeat; opacity: .6; }
 .film .cell.in { opacity: 1; }
@@ -67,6 +74,8 @@ export default function VideoStudio() {
   const [row, setRow] = useState<StudioRow | null>(null);
   const [master, setMaster] = useState<StudioMaster | null>(null);
   const [brand, setBrand] = useState<StudioBrand | null>(null);
+  const [logo, setLogo] = useState<StudioLogo | null>(null);
+  const [uploading, setUploading] = useState<StudioUploadKind | null>(null);
   const [configured, setConfigured] = useState(true);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -87,15 +96,15 @@ export default function VideoStudio() {
   const brandLoaded = useRef(false);
   const load = useCallback(async () => {
     const r = await getStudio(videoId, { withBrand: !brandLoaded.current });
-    setRow(r.studio); setMaster(r.master); setConfigured(r.configured);
+    setRow(r.studio); setMaster(r.master); setConfigured(r.configured); setLogo(r.logo ?? null);
     if (r.brand) { setBrand(r.brand); brandLoaded.current = true; }
     if (r.studio && !dirty.current) {
       const s = r.studio.selection ?? {};
       setSel({
         cut: s.cut ?? r.studio.analysis.cuts?.[0]?.key ?? null,
-        scale: s.scale ?? 1, x: s.x ?? 0.62,
+        scale: s.scale ?? 1, x: s.x ?? 0.62, y: s.y ?? null,
         lead: s.lead ?? r.studio.headlines?.[0]?.lead ?? '', emph: s.emph ?? r.studio.headlines?.[0]?.emph ?? '',
-        panels: s.panels !== false, trim_in: s.trim_in ?? null, trim_out: s.trim_out ?? null,
+        panels: s.panels !== false, panel_keys: s.panel_keys ?? null, trim_in: s.trim_in ?? null, trim_out: s.trim_out ?? null,
         preroll: s.preroll === true, card_title: s.card_title ?? r.studio.analysis.context?.title ?? null,
         card_speakers: s.card_speakers ?? null,
       });
@@ -112,13 +121,15 @@ export default function VideoStudio() {
     return () => { cancelled = true; };
   }, [load]);
 
-  // Poll while the worker is busy.
+  // Poll while the worker is busy, including a photo being cut out (the
+  // state stays ready then, but progress is set).
   const state = row?.state;
+  const polling = Boolean(state && (['queued', 'analysing', 'finalising'].includes(state) || row?.progress));
   useEffect(() => {
-    if (!state || !['queued', 'analysing', 'finalising'].includes(state)) return;
+    if (!polling) return;
     const h = setInterval(() => { void load().catch(() => {}); }, 3000);
     return () => clearInterval(h);
-  }, [state, load]);
+  }, [polling, load]);
 
   // A playable URL for the master, for the trim timeline.
   useEffect(() => {
@@ -134,6 +145,37 @@ export default function VideoStudio() {
   const duration = analysis.duration ?? master?.duration_seconds ?? 0;
   const context = analysis.context;
   const cut = useMemo(() => cuts.find((c) => c.key === sel?.cut) ?? cuts[0] ?? null, [cuts, sel?.cut]);
+  // The panels that show, in order, two at most: the editor's picks, or the first two.
+  const shownPanelKeys = useMemo(() => {
+    if (!sel || sel.panels === false) return [] as string[];
+    if (Array.isArray(sel.panel_keys)) return sel.panel_keys.filter((k) => panels.some((p) => p.key === k)).slice(0, 2);
+    return panels.slice(0, 2).map((p) => p.key);
+  }, [sel, panels]);
+  const togglePanel = (key: string) => {
+    const cur = shownPanelKeys;
+    const next = cur.includes(key) ? cur.filter((k) => k !== key) : [...cur, key].slice(-2);
+    update({ panels: true, panel_keys: next });
+  };
+
+  const upload = async (kind: StudioUploadKind, file: File | null | undefined) => {
+    if (!file) return;
+    setUploading(kind);
+    try {
+      const r = await uploadStudioImage(videoId, kind, file);
+      if (r.logo) {
+        setLogo((l) => ({ url: r.logo!.url, source: 'talk', company: l?.company ?? null, can_upload: true }));
+        toast.success('Logo saved for this talk');
+      } else if (r.studio) {
+        dirty.current = false;
+        setRow(r.studio);
+        const s = r.studio.selection ?? {};
+        setSel((cur) => (cur ? { ...cur, panel_keys: s.panel_keys ?? cur.panel_keys, panels: s.panels !== false, cut: s.cut ?? cur.cut } : cur));
+        toast.success(kind === 'speaker' ? 'Photo uploaded; cutting it out now' : 'Background added');
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Upload failed');
+    } finally { setUploading(null); }
+  };
 
   const update = (patch: Partial<StudioSelection>) => {
     dirty.current = true;
@@ -183,15 +225,17 @@ export default function VideoStudio() {
     } finally { setBusy(false); }
   };
 
-  const artSelection: ArtboardSelection | null = sel ? clampSelection({ scale: sel.scale, x: sel.x, lead: sel.lead, emph: sel.emph, panels: sel.panels }) : null;
+  const artSelection: ArtboardSelection | null = sel ? clampSelection({ scale: sel.scale, x: sel.x, y: sel.y, lead: sel.lead, emph: sel.emph, panels: sel.panels }) : null;
   const artHtml = useMemo(() => {
     if (!artSelection || !brand) return '';
     return artboardHtml({
       backgroundSrc: brand.thumbnail_bg, logoSrc: brand.logo,
-      cutSrc: cut?.url ?? null, panelSrcs: panels.slice(0, 2).map((p) => p.url ?? '').filter(Boolean),
-      markName: context?.org ?? null, cutBounds: cut?.bbox ?? null, selection: artSelection,
+      cutSrc: cut?.url ?? null,
+      panelSrcs: shownPanelKeys.map((k) => panels.find((p) => p.key === k)?.url ?? '').filter(Boolean),
+      markSrc: logo?.url ?? null, cutBounds: cut?.bbox ?? null, selection: artSelection,
     });
-  }, [artSelection, brand, cut, panels, context?.org]);
+  }, [artSelection, brand, cut, panels, shownPanelKeys, logo?.url]);
+  const head = headPoint(cut?.bbox ?? null);
 
   // ── Trim helpers ───────────────────────────────────────────────────────────
   const seek = (t: number) => {
@@ -273,8 +317,11 @@ export default function VideoStudio() {
         )}
         {row && row.error && state !== 'failed' && (
           <Card variant="surface" className="p-4 mb-4 text-sm border border-[var(--amber-a6)]">
-            The last approval did not finish: {row.error}. Your choices are kept; approve again when ready.
+            Something did not finish: {row.error}. Your choices are kept.
           </Card>
+        )}
+        {row && row.progress && ['ready', 'approved'].includes(state ?? '') && (
+          <Card variant="surface" className="p-3 mb-4 text-sm flex items-center gap-3"><LoadingSpinner /> {row.progress}</Card>
         )}
 
         {row && state === 'approved' && (
@@ -325,23 +372,26 @@ export default function VideoStudio() {
                 </div>
 
                 <div>
-                  <div className="text-xs text-[var(--gray-9)] mb-1">Speaker frame</div>
-                  {cuts.length === 0 ? (
-                    <p className="text-xs text-[var(--gray-11)]">No usable speaker frame was found. The thumbnail will show the backdrop and the words only.</p>
-                  ) : (
-                    <div className="cuts-pick flex items-center gap-2 flex-wrap">
-                      {cuts.map((c) => (
-                        <button key={c.key} type="button" aria-pressed={sel.cut === c.key || (!sel.cut && c === cuts[0])}
-                          title={`frame at ${mmss(c.t)}: ${c.meta?.note ?? ''}`} style={thumbStyle(c)} onClick={() => update({ cut: c.key })} />
-                      ))}
-                      <span className="text-xs text-[var(--gray-9)]">
-                        {cuts.length} frame{cuts.length > 1 ? 's' : ''} passed the size, glare and screen checks.
-                      </span>
-                    </div>
-                  )}
+                  <div className="text-xs text-[var(--gray-9)] mb-1">Speaker image</div>
+                  <div className="cuts-pick flex items-center gap-2 flex-wrap">
+                    {cuts.map((c) => (
+                      <button key={c.key} type="button" aria-pressed={sel.cut === c.key || (!sel.cut && c === cuts[0])}
+                        title={c.t == null ? 'uploaded photo' : `frame at ${mmss(c.t)}: ${c.meta?.note ?? ''}`} style={thumbStyle(c)} onClick={() => update({ cut: c.key })} />
+                    ))}
+                    <label className="upload-btn">
+                      {uploading === 'speaker' ? 'Uploading…' : row.progress ? 'Cutting out…' : 'Upload a photo instead'}
+                      <input type="file" accept="image/png,image/jpeg,image/webp" className="hidden" disabled={uploading !== null || Boolean(row.progress)}
+                        onChange={(e) => { void upload('speaker', e.target.files?.[0]); e.currentTarget.value = ''; }} />
+                    </label>
+                    <span className="text-xs text-[var(--gray-9)]">
+                      {cuts.length === 0
+                        ? 'No usable frame was found in the video; upload a photo of the speaker.'
+                        : `${cuts.filter((c) => c.t != null).length} frame${cuts.filter((c) => c.t != null).length === 1 ? '' : 's'} passed the size, glare and screen checks. A photo you upload is cut out the same way; a PNG with transparency is used as it is.`}
+                    </span>
+                  </div>
                   {cut && (
                     <p className="text-xs text-[var(--gray-11)] mt-1">
-                      Frame at {mmss(cut.t)} of {mmss(duration)}{cut.meta?.note ? ` · ${cut.meta.note}` : ''}
+                      {cut.t == null ? 'Uploaded photo' : `Frame at ${mmss(cut.t)} of ${mmss(duration)}`}{cut.meta?.note && cut.t != null ? ` · ${cut.meta.note}` : ''}
                       {` · screen behind head ${Math.round((cut.screen ?? 0) * 100)}%, glare ${Math.round((cut.glare ?? 0) * 100)}%`}
                       {cut.camera_crop ? ' · cut from the camera panel of the composite' : ''}
                       {cut.lectern_joined ? ' · lectern joined' : ''}
@@ -354,17 +404,62 @@ export default function VideoStudio() {
                 <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-2 items-center text-xs text-[var(--gray-9)]">
                   <label htmlFor="st-scale">Speaker size</label>
                   <input id="st-scale" type="range" min={70} max={150} value={Math.round(sel.scale * 100)} onChange={(e) => update({ scale: Number(e.target.value) / 100 })} className="w-full accent-[var(--accent-9)]" />
-                  <label htmlFor="st-x">Speaker position</label>
+                  <label htmlFor="st-x">Across</label>
                   <input id="st-x" type="range" min={40} max={85} value={Math.round(sel.x * 100)} onChange={(e) => update({ x: Number(e.target.value) / 100 })} className="w-full accent-[var(--accent-9)]" />
+                  <label htmlFor="st-y">Height</label>
+                  <input id="st-y" type="range" min={5} max={75} value={Math.round((sel.y ?? head.hy) * 100)} onChange={(e) => update({ y: Number(e.target.value) / 100 })} className="w-full accent-[var(--accent-9)]" />
+                </div>
+                <p className="text-xs text-[var(--gray-9)]">Size and position are anchored on the face, so the head stays in the picture whatever you set.</p>
+
+                <div>
+                  <div className="text-xs text-[var(--gray-9)] mb-1">Background panels <span className="text-[var(--gray-8)]">(pick up to two; the first sits in front)</span></div>
+                  <div className="panels-pick flex items-center gap-2 flex-wrap">
+                    {panels.map((p) => {
+                      const n = shownPanelKeys.indexOf(p.key);
+                      return (
+                        <button key={p.key} type="button" aria-pressed={n >= 0} title={p.t == null ? 'uploaded image' : `${p.note} at ${mmss(p.t)}`}
+                          style={{ backgroundImage: p.url ? `url(${p.url})` : undefined }} onClick={() => togglePanel(p.key)}>
+                          {n >= 0 && <span className="n">{n + 1}</span>}
+                        </button>
+                      );
+                    })}
+                    <label className="upload-btn">
+                      {uploading === 'background' ? 'Uploading…' : 'Upload an image'}
+                      <input type="file" accept="image/jpeg,image/png,image/webp" className="hidden" disabled={uploading !== null}
+                        onChange={(e) => { void upload('background', e.target.files?.[0]); e.currentTarget.value = ''; }} />
+                    </label>
+                    {panels.length > 0 && shownPanelKeys.length > 0 && (
+                      <button type="button" className="text-xs text-[var(--gray-11)] underline" onClick={() => update({ panels: true, panel_keys: [] })}>None</button>
+                    )}
+                  </div>
+                  <p className="text-xs text-[var(--gray-9)] mt-1">
+                    {panels.some((p) => p.t != null)
+                      ? `${panels.filter((p) => p.t != null).length} slide${panels.filter((p) => p.t != null).length === 1 ? '' : 's'} from the video passed the check: legible, interesting, nobody in it.`
+                      : 'No slide from the video passed the check (legible, interesting, nobody in it). Upload an image, or leave the backdrop on its own.'}
+                  </p>
                 </div>
 
-                <label className="flex items-center gap-2 text-xs">
-                  <input type="checkbox" checked={sel.panels} onChange={(e) => update({ panels: e.target.checked })} disabled={panels.length === 0} />
-                  Show the slide panels behind the speaker
-                  <span className="text-[var(--gray-9)]">
-                    {panels.length ? `(${panels.map((p) => `${p.note} at ${mmss(p.t)}`).join('; ')})` : '(no slide passed the check: legible, interesting, nobody in it)'}
-                  </span>
-                </label>
+                <div>
+                  <div className="text-xs text-[var(--gray-9)] mb-1">Company logo</div>
+                  <div className="flex items-center gap-3 flex-wrap">
+                    <div className="logo-box">
+                      {logo?.url ? <img src={logo.url} alt="" /> : <span className="text-xs text-[var(--gray-9)]">none</span>}
+                    </div>
+                    <div className="text-xs text-[var(--gray-11)] max-w-sm">
+                      {logo?.url
+                        ? logo.source === 'talk' ? 'Uploaded for this talk.' : `From ${logo.company ?? 'the company'}'s record on the speaker. Upload one here to use a different mark for this talk.`
+                        : `No logo on file${logo?.company ? ` for ${logo.company}` : ''}, so no mark is shown. The company name is never set in its place.`}
+                    </div>
+                    {logo?.can_upload ? (
+                      <label className="upload-btn">
+                        {uploading === 'logo' ? 'Uploading…' : logo.url ? 'Replace logo' : 'Upload logo'}
+                        <input type="file" accept="image/png,image/svg+xml,image/jpeg,image/webp" className="hidden" disabled={uploading !== null}
+                          onChange={(e) => { void upload('logo', e.target.files?.[0]); e.currentTarget.value = ''; }} />
+                      </label>
+                    ) : <span className="text-xs text-[var(--gray-9)]">Attach the video to a talk to store a logo against it.</span>}
+                  </div>
+                  <p className="text-xs text-[var(--gray-9)] mt-1">A logo belongs to the talk, not the person: the same speaker may speak for different companies. White or single-colour marks look best; the thumbnail renders it white.</p>
+                </div>
               </div>
             </Card>
 
