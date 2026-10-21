@@ -15,6 +15,10 @@ import { isIP } from 'node:net';
 export const DEFAULT_HOST_ALLOWLIST = [
   'events.linuxfoundation.org',
   '*.sched.com',
+  // Sessionize: a hosted <event>.sessionize.com site, or the API v2 feed
+  // on sessionize.com itself that a conference page embeds.
+  '*.sessionize.com',
+  'sessionize.com',
   'i.ytimg.com',
 ];
 
@@ -208,6 +212,8 @@ export const LIMITS = {
 export const AVATAR_HOST_ALLOWLIST = [
   '*.sched.com', 'sched.com',
   '*.sched.co', 'sched.co',
+  // Sessionize serves profile pictures from its own CDN.
+  'cdn.sessionize.com', '*.sessionize.com', 'sessionize.com',
   '*.amazonaws.com', '*.cloudfront.net',
 ];
 

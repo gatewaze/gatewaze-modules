@@ -12,7 +12,7 @@ import type { Request, Response, Router } from 'express';
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Hosts an operator may point the importer at (mirrors the fetch allowlist). */
-const MANUAL_URL_RE = /^https:\/\/([a-z0-9-]+\.)*(sched\.com|linuxfoundation\.org)(\/|$)/i;
+const MANUAL_URL_RE = /^https:\/\/([a-z0-9-]+\.)*(sched\.com|sessionize\.com|linuxfoundation\.org)(\/|$)/i;
 
 export interface AdminScheduleDeps {
   /** Service role, for the writes RLS intentionally denies to authenticated. */
@@ -110,7 +110,7 @@ export function mountAdminScheduleRoutes(router: Router, deps: AdminScheduleDeps
     const url = String(raw).trim();
     if (!MANUAL_URL_RE.test(url)) {
       return res.status(400).json({
-        error: 'schedule_url must be an https link on sched.com or linuxfoundation.org',
+        error: 'schedule_url must be an https link on sched.com, sessionize.com or linuxfoundation.org',
       });
     }
     const up = await supabase.from('events_schedule_imports').upsert({
