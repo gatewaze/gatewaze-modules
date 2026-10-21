@@ -1,7 +1,8 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { Badge, Button, Card } from '@/components/ui';
 import { SideDrawer } from '@/components/shared/SideDrawer';
-import { inboxService, type InboxRow, type ExplainResponse } from '../utils/inboxService';
+import { inboxService, type InboxRow, type ExplainResponse, type InboxDetail } from '../utils/inboxService';
+import { previewHtml, httpsOnly } from '../utils/previewHtml';
 
 export function InboxDrawer({
   row,
@@ -24,6 +25,26 @@ export function InboxDrawer({
   const [error, setError] = useState<string | null>(null);
   const [rejectReason, setRejectReason] = useState('');
   const [showReject, setShowReject] = useState(false);
+  const [detail, setDetail] = useState<InboxDetail | null>(null);
+  const [detailLoading, setDetailLoading] = useState(true);
+
+  // The item itself (original link, featured image, stored body), from the
+  // content type's adapter. Failure only hides the preview.
+  useEffect(() => {
+    let mounted = true;
+    setDetail(null);
+    setDetailLoading(true);
+    inboxService.detail(row.content_type, row.content_id)
+      .then((d) => { if (mounted) setDetail(d); })
+      .catch(() => { /* no preview */ })
+      .finally(() => { if (mounted) setDetailLoading(false); });
+    return () => { mounted = false; };
+  }, [row.content_type, row.content_id]);
+
+  const originalUrl = httpsOnly(detail?.url) ?? httpsOnly(row.source_url);
+  const imageUrl = httpsOnly(detail?.image_url) ?? httpsOnly(row.thumbnail_url);
+  const bodyHtml = useMemo(() => previewHtml(detail?.body_html), [detail?.body_html]);
+  const isEvent = row.content_type === 'event';
 
   useEffect(() => {
     let mounted = true;
@@ -138,10 +159,11 @@ export function InboxDrawer({
     >
       <div className="p-6">
           <div className="flex items-start gap-4 mb-4">
-            {row.thumbnail_url && (
+            {imageUrl && (
               <img
-                src={row.thumbnail_url}
+                src={imageUrl}
                 alt=""
+                referrerPolicy="no-referrer"
                 className="w-80 h-auto max-h-80 object-contain rounded-lg bg-[var(--gray-a3)] flex-shrink-0"
                 onError={(e) => { (e.currentTarget as HTMLImageElement).style.display = 'none'; }}
               />
@@ -158,22 +180,22 @@ export function InboxDrawer({
                   {acting && i === 0 ? 'Working…' : a.label}
                 </Button>
               ))}
-              {row.source_url && (
+              {originalUrl && (
                 <a
-                  href={row.source_url}
+                  href={originalUrl}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="inline-flex items-center justify-center gap-1 px-3 py-1.5 rounded-md text-sm font-medium bg-[var(--gray-a3)] hover:bg-[var(--gray-a5)] text-[var(--gray-12)]"
                 >
-                  View event ↗
+                  {isEvent ? 'View event ↗' : 'Open original ↗'}
                 </a>
               )}
             </div>
           </div>
 
-          {row.source_url && (
+          {originalUrl && (
             <Card className="p-3 mb-4 text-xs text-[var(--gray-11)]">
-              <span className="break-all" title={row.source_url}>{row.source_url}</span>
+              <span className="break-all" title={originalUrl}>{originalUrl}</span>
             </Card>
           )}
 
@@ -204,6 +226,27 @@ export function InboxDrawer({
             <div className="p-3 mb-4 bg-red-500/10 border border-red-500/30 rounded-md text-sm text-red-600">
               {error}
             </div>
+          )}
+
+          {!isEvent && (
+            <Card className="p-3 mb-4">
+              <h3 className="text-sm font-semibold mb-2">Preview</h3>
+              {detailLoading ? (
+                <div className="text-xs text-[var(--gray-11)]">Loading preview…</div>
+              ) : bodyHtml ? (
+                // previewHtml() re-sanitises the stored body with an
+                // allow-list (tags, attributes, https-only URLs) first.
+                <div
+                  className="inbox-preview-body max-h-[28rem] overflow-y-auto text-sm leading-relaxed text-[var(--gray-12)] [&_p]:mb-3 [&_h1]:text-lg [&_h1]:font-semibold [&_h1]:mb-2 [&_h2]:text-base [&_h2]:font-semibold [&_h2]:mb-2 [&_h3]:font-semibold [&_h3]:mb-2 [&_h4]:font-semibold [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:mb-3 [&_ol]:list-decimal [&_ol]:pl-5 [&_ol]:mb-3 [&_a]:text-[var(--accent-11)] [&_a]:underline [&_img]:max-w-full [&_img]:h-auto [&_img]:my-2 [&_pre]:overflow-x-auto [&_pre]:p-2 [&_pre]:mb-3 [&_pre]:rounded [&_pre]:bg-[var(--gray-a3)] [&_code]:text-xs [&_blockquote]:border-l-2 [&_blockquote]:pl-3 [&_blockquote]:text-[var(--gray-11)] [&_table]:text-xs"
+                  dangerouslySetInnerHTML={{ __html: bodyHtml }}
+                />
+              ) : (
+                <div className="text-xs text-[var(--gray-11)]">
+                  No body stored for this item yet.
+                  {originalUrl ? ' Open the original to read it.' : ''}
+                </div>
+              )}
+            </Card>
           )}
 
           {loading ? (

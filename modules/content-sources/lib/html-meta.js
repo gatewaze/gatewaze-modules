@@ -10,6 +10,7 @@
  */
 
 import { decodeEntities, stripHtml, attrsOf } from './feed-parser.js';
+import { policeUrl } from './http.js';
 
 const HEAD_CAP = 200 * 1024;
 
@@ -146,30 +147,114 @@ function region(s, openRe, closeRe) {
   return { inner: s.slice(gt + 1, c.index), outer: s.slice(o.index, c.index + c[0].length) };
 }
 
-/** Remove <nav>, <aside>, <header>, <footer>, <form>, <script>, <style>, <noscript>, <svg>, <button> regions (non-nested, linear). */
+/**
+ * Remove <nav>, <aside>, <header>, <footer>, <form>, <script>, <style>,
+ * <noscript>, <svg>, <button> regions (non-nested). One forward pass per
+ * name: each region is skipped as the scan passes it, so a page with
+ * thousands of them costs the same as a page with one.
+ */
 function stripChrome(s) {
   const names = ['nav', 'aside', 'header', 'footer', 'form', 'script', 'style', 'noscript', 'svg', 'button'];
   let out = s;
   for (const name of names) {
-    let guard = 0;
+    const openRe = new RegExp(`<${name}(?=[\\s>])`, 'ig');
+    const closeRe = new RegExp(`</${name}\\s*>`, 'ig');
+    let kept = '';
+    let i = 0;
     for (;;) {
-      if (guard++ > 500) break;
-      const r = region(out, new RegExp(`<${name}(?=[\\s>])`, 'ig'), new RegExp(`</${name}\\s*>`, 'ig'));
-      if (!r) break;
-      out = out.replace(r.outer, ' ');
+      openRe.lastIndex = i;
+      const o = openRe.exec(out);
+      if (!o) break;
+      const gt = out.indexOf('>', o.index);
+      if (gt < 0) break;
+      closeRe.lastIndex = gt + 1;
+      const c = closeRe.exec(out);
+      if (!c) break;
+      kept += out.slice(i, o.index) + ' ';
+      i = c.index + c[0].length;
     }
+    out = kept + out.slice(i);
   }
   return out;
 }
 
 /**
- * The article body as raw HTML: the `entry-content` region (WordPress), a
- * `w-richtext` region (Webflow), the largest <article>, then <main> minus
- * its own chrome (Hugo, Docusaurus, HubSpot), then a few well-known content
- * classes. null when nothing plausible is found (we do not want page chrome).
+ * The inner HTML of the element whose open tag starts at `openIdx`, matched
+ * to ITS close tag by counting nested same-name tags in one forward scan
+ * (so a <span> body full of <span>s, or a <section> holding sections, is
+ * taken whole). Linear: one global regex walks forward once. null when the
+ * element never closes.
+ */
+function balanced(s, openIdx, name) {
+  const gt = s.indexOf('>', openIdx);
+  if (gt < 0) return null;
+  if (s[gt - 1] === '/') return null; // self-closing: no body
+  const re = new RegExp(`<(/?)${name}(?=[\\s>/])`, 'ig');
+  re.lastIndex = gt + 1;
+  let depth = 1;
+  let m;
+  while ((m = re.exec(s)) !== null) {
+    if (m[1]) {
+      depth -= 1;
+      if (depth === 0) return s.slice(gt + 1, m.index);
+    } else {
+      depth += 1;
+    }
+  }
+  return null;
+}
+
+/**
+ * Known post-body containers, tried in order before anything generic. Each
+ * is an element (tag names, then an id or class token) taken whole with
+ * `balanced`. Only the FIRST opener of each is used, so a page of 100k
+ * fake openers costs one scan, not one per opener.
+ *   - HubSpot CMS (linuxfoundation.org, finos.org): the post body is
+ *     `<span id="hs_cos_wrapper_post_body" class="hs_cos_wrapper ...">`.
+ *   - Google Developers Blog: `<section class="blocks-container ...">`
+ *     holds the rich-text, code and image blocks; the summary, author,
+ *     tags and related-posts sections are its siblings, not its children.
+ *   - `<div class="article-content">` (blog.cloudflare.com and others):
+ *     taken whole, so the post's tag list and the newsletter box around it
+ *     stay out.
+ */
+const BODY_CONTAINERS = [
+  { tags: ['span', 'div'], attr: 'id', token: 'hs_cos_wrapper_post_body' },
+  { tags: ['span', 'div'], attr: 'class', token: 'hs_cos_wrapper_post_body' },
+  { tags: ['section', 'div'], attr: 'class', token: 'blocks-container' },
+  { tags: ['div'], attr: 'class', token: 'article-content' },
+];
+
+function knownContainer(s) {
+  for (const { tags, attr, token } of BODY_CONTAINERS) {
+    const re = new RegExp(`<(${tags.join('|')})(?=[\\s>])[^<>]*\\b${attr}\\s*=\\s*["'][^"'<>]*\\b${token}\\b`, 'i');
+    const m = re.exec(s);
+    if (!m) continue;
+    const inner = balanced(s, m.index, m[1].toLowerCase());
+    if (inner != null && stripHtml(inner).length > 120) return inner;
+  }
+  return null;
+}
+
+/**
+ * The share of the page's readable text an <article> must hold before we
+ * believe it is the post. On linuxfoundation.org the largest <article> is a
+ * ~126-character related-post card while the post itself sits elsewhere.
+ */
+const ARTICLE_MIN_SHARE = 0.3;
+
+/**
+ * The article body as raw HTML: a known post-body container (HubSpot,
+ * Google Developers), the `entry-content` region (WordPress), a
+ * `w-richtext` region (Webflow), the largest <article> when it holds a
+ * real share of the page's text, then <main> minus its own chrome (Hugo,
+ * Docusaurus), then a few well-known content classes. null when nothing
+ * plausible is found (we do not want page chrome).
  */
 export function articleBody(html) {
   const s = String(html ?? '');
+  const known = knownContainer(s);
+  if (known) return known;
   for (const cls of ['entry-content', 'w-richtext']) {
     const r = region(s, new RegExp(`<div(?=[\\s>])[^<>]*\\bclass\\s*=\\s*["'][^"'<>]*\\b${cls}\\b`, 'ig'), /<\/(?:article|main|section)\s*>|<footer(?=[\s>])|<aside(?=[\s>])|<div(?=[\s>])[^<>]*\bclass\s*=\s*["'][^"'<>]*\b(?:post-navigation|elementor-location-footer|lf-footer)\b/gi);
     if (r && stripHtml(r.inner).length > 120) return r.inner;
@@ -184,15 +269,91 @@ export function articleBody(html) {
     if (r.outer.length > best.length) best = r.outer;
     from += rest.indexOf(r.outer) + r.outer.length;
   }
-  if (best && stripHtml(best).length > 120) return best;
   const main = region(s, /<main(?=[\s>])/ig, /<\/main\s*>/ig);
-  if (main) {
-    const inner = stripChrome(main.inner);
-    if (stripHtml(inner).length > 120) return inner;
+  const mainInner = main ? stripChrome(main.inner) : null;
+  if (best) {
+    const bestText = stripHtml(best).length;
+    if (bestText > 120) {
+      // Compare against the page's readable text: <main> minus chrome when
+      // there is one, else the whole <body> minus chrome.
+      const bodyOpen = s.search(/<body(?=[\s>])/i);
+      const ref = mainInner ?? stripChrome(bodyOpen >= 0 ? s.slice(bodyOpen) : s);
+      const refText = stripHtml(ref).length;
+      if (refText === 0 || bestText >= ARTICLE_MIN_SHARE * refText) return best;
+    }
   }
+  if (mainInner != null && stripHtml(mainInner).length > 120) return mainInner;
   for (const cls of ['post-content', 'post-body', 'article-content', 'article-body', 'blog-post-content', 'content-body', 'td-content', 'markdown']) {
     const r = region(s, new RegExp(`<div(?=[\\s>])[^<>]*\\bclass\\s*=\\s*["'][^"'<>]*\\b${cls}\\b`, 'ig'), /<\/(?:main|section|article)\s*>|<footer(?=[\s>])|<aside(?=[\s>])/gi);
     if (r && stripHtml(r.inner).length > 120) return r.inner;
+  }
+  return null;
+}
+
+/**
+ * Block-level closers a truncated body may end on. Cutting just after one
+ * of these never splits a paragraph, a code block, a list item or a heading.
+ */
+const BLOCK_CLOSERS = ['</p>', '</pre>', '</li>', '</h1>', '</h2>', '</h3>', '</h4>', '</h5>', '</h6>', '</blockquote>', '</figure>', '</table>'];
+
+/**
+ * The longest prefix of `html` no longer than `maxChars` that ends just
+ * after a block closer (else after the last '>', else a plain cut). The
+ * caller re-sanitises the result so any element left open (a <ul>, a
+ * <div>) is closed and the stored HTML is well-formed. Linear: one
+ * lastIndexOf per closer over the prefix.
+ */
+export function truncateAtBlock(html, maxChars) {
+  const s = String(html ?? '');
+  if (s.length <= maxChars) return s;
+  const head = s.slice(0, maxChars).toLowerCase();
+  let cut = -1;
+  for (const closer of BLOCK_CLOSERS) {
+    const i = head.lastIndexOf(closer);
+    if (i >= 0 && i + closer.length > cut) cut = i + closer.length;
+  }
+  if (cut <= 0) {
+    const gt = head.lastIndexOf('>');
+    cut = gt >= 0 ? gt + 1 : maxChars;
+  }
+  return s.slice(0, cut);
+}
+
+/** The stored-body cap. Long engineering posts (Cloudflare, Node.js, Ceph) run past 60 KB of sanitised HTML. */
+export const BODY_MAX_CHARS = 200_000;
+
+/** The longest image URL we store; matches policeUrl's URL cap. */
+const IMAGE_URL_MAX = 2048;
+
+/**
+ * An image URL safe to store for display: absolute (resolved against
+ * `baseUrl` when relative), https only, no credentials, no IP-literal or
+ * internal-looking host, at most 2048 characters. We never fetch it; the
+ * admin and portal render it in an <img>. null when it does not pass.
+ */
+export function imageUrlForStorage(raw, baseUrl) {
+  const v = String(raw ?? '').trim();
+  if (!v || v.length > IMAGE_URL_MAX) return null;
+  let u;
+  try {
+    u = new URL(v, baseUrl || undefined);
+  } catch {
+    return null;
+  }
+  if (u.protocol !== 'https:') return null;
+  try {
+    const out = policeUrl(u.toString()).toString();
+    return out.length <= IMAGE_URL_MAX ? out : null;
+  } catch {
+    return null;
+  }
+}
+
+/** og:image (or its secure_url), else twitter:image, as a storable https URL, or null. */
+export function pageImage(html, baseUrl, tags = headTags(html)) {
+  for (const key of ['og:image:secure_url', 'og:image', 'og:image:url', 'twitter:image', 'twitter:image:src']) {
+    const v = imageUrlForStorage(metaContent(tags, key), baseUrl);
+    if (v) return v;
   }
   return null;
 }
@@ -205,9 +366,11 @@ export function articleBody(html) {
  * picks it up); when it throws on the input it returns ''. The earlier
  * regex fallback was bypassable (unquoted on* attributes, entity-encoded
  * schemes) and the body is rendered on the portal once approved.
- * Caps the result at `maxChars`.
+ * Caps the result at `maxChars` (default BODY_MAX_CHARS): a longer body is
+ * cut at a block boundary (see truncateAtBlock) and sanitised again, which
+ * closes anything the cut left open.
  */
-export async function sanitizeBody(html, maxChars = 60_000) {
+export async function sanitizeBody(html, maxChars = BODY_MAX_CHARS) {
   if (!html) return '';
   let sanitizeHtml;
   try {
@@ -218,7 +381,7 @@ export async function sanitizeBody(html, maxChars = 60_000) {
     return null;
   }
   try {
-    const out = sanitizeHtml(String(html), {
+    const options = {
       allowedTags: ['p', 'br', 'hr', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'blockquote', 'pre', 'code', 'ul', 'ol', 'li', 'strong', 'em', 'b', 'i', 'a', 'img', 'figure', 'figcaption', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'span', 'div'],
       allowedAttributes: { a: ['href', 'title'], img: ['src', 'alt'], '*': [] },
       allowedSchemes: ['http', 'https', 'mailto'],
@@ -229,8 +392,16 @@ export async function sanitizeBody(html, maxChars = 60_000) {
       // a relative image src would resolve against our own portal host, so an
       // image survives only with an absolute https source.
       exclusiveFilter: (frame) => frame.tag === 'img' && !/^https:\/\//i.test(String(frame.attribs?.src ?? '')),
-    }).trim();
-    return out.length > maxChars ? out.slice(0, maxChars) : out;
+    };
+    let out = sanitizeHtml(String(html), options).trim();
+    // Cut at a block boundary, re-sanitise to close what the cut left open,
+    // and step the limit down if the closing tags pushed it back over.
+    for (let limit = maxChars, tries = 0; out.length > maxChars && tries < 5; tries++, limit -= 1000) {
+      out = sanitizeHtml(truncateAtBlock(out, Math.max(limit, 1)), options).trim();
+    }
+    // Never hand back a hard slice: it could end inside a tag the portal
+    // then renders. A body that still will not fit is treated as unusable.
+    return out.length > maxChars ? '' : out;
   } catch (e) {
     console.warn(`[content-sources] sanitize-html failed on a body (${e?.message ?? e}); body not stored`);
     return '';
