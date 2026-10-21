@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { artboardHtml, artboardPage, clampSelection, markPosition, cutPlacement, headPoint, escapeHtml } from '../lib/artboard.js';
+import { artboardHtml, artboardPage, clampSelection, markPosition, cutPlacement, headPoint, escapeHtml, emphSize, leadSize } from '../lib/artboard.js';
 
 describe('clampSelection', () => {
   it('bounds every number and trims the text', () => {
@@ -52,6 +52,15 @@ describe('artboardHtml', () => {
     expect(page).toContain('width: 1280px; height: 720px');
     expect(page).toContain('data:font/woff2;base64,AAAA');
     expect(page).toContain('container-type: inline-size');
+  });
+  it('sizes the shout line to its longest word so nothing breaks mid-word', () => {
+    expect(emphSize('REAL RESULTS')).toBe(14);
+    expect(emphSize('BUT STILL VULNERABLE')).toBeLessThan(14);
+    expect(emphSize('BUT STILL VULNERABLE')).toBeGreaterThan(12);
+    expect(emphSize('INCOMPREHENSIBILITIES')).toBe(7);
+    expect(leadSize('Agent attacks and what stops them')).toBe(6);
+    expect(leadSize('x'.repeat(120))).toBe(3.6);
+    expect(artboardHtml(base)).toContain('class="emph" style="font-size:14cqw"');
   });
   it('escapeHtml covers the five characters', () => {
     expect(escapeHtml(`<a href="x" title='y'>&</a>`)).toBe('&lt;a href=&quot;x&quot; title=&#39;y&#39;&gt;&amp;&lt;/a&gt;');
