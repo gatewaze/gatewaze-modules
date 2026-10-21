@@ -17,13 +17,15 @@
  *      fails ("network dead, not a quiet week") and writes no posts.
  *   2. Body backlog: posts with no body yet get their article page fetched,
  *      the body extracted + sanitised, og:description as excerpt fallback,
- *      og:image / twitter:image as the featured image when the feed gave none.
+ *      og:image / twitter:image as the featured image, over any feed media tag.
  *
  * Featured images go in blog_posts.featured_image (the column the blog
- * module's admin, portal and inbox preview read). Feed entries supply one
- * from media:content / media:thumbnail / an image enclosure; pages from
- * og:image / twitter:image. Only an absolute https URL that passes
- * policeUrl is stored. We never fetch the image.
+ * module's admin, portal and inbox preview read). The page's og:image /
+ * twitter:image is preferred: it is the image the publisher chose. A feed's
+ * media:content / media:thumbnail / image enclosure is stored on insert and
+ * kept only when the page declares none, because some feeds list every
+ * inline image. Images are never taken from the post body. Only an absolute
+ * https URL that passes policeUrl is stored. We never fetch the image.
  *
  * Config (scrapers.config jsonb, all optional):
  *   concurrency (16), per_host (2), feed_timeout_ms (20000), page_timeout_ms (8000),
@@ -549,9 +551,14 @@ export class FeedScraper {
         try {
           const html = this._pageCache?.[p.id] ?? (await fetchText(p.canonical_url, { maxBytes: PAGE_BYTES, timeoutMs: this.opts.pageTimeoutMs, proxyUrl })).text;
           if (!html) throw new Error('empty page');
-          if (!p.featured_image) {
+          // The page's own og:image / twitter:image is the image the publisher
+          // chose for the post, so it wins over a feed media tag (some feeds
+          // list every inline image as media:content). The feed's image stays
+          // only when the page declares none. This backlog only sees pending
+          // discovered posts, so no image a reviewer chose is replaced.
+          {
             const img = pageImage(html, p.canonical_url);
-            if (img) patch.featured_image = img;
+            if (img && img !== p.featured_image) patch.featured_image = img;
           }
           const body = articleBody(html);
           const clean = body ? await sanitizeBody(body) : '';
