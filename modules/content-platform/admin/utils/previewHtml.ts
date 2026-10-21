@@ -1,7 +1,15 @@
-// Named import, not the default: bundled into the admin app the default
-// export gains an extra `.default` hop and `DOMPurify.sanitize` resolves to
-// undefined (see event-invites/admin/AdminResponseModal.tsx).
-import { sanitize } from 'isomorphic-dompurify';
+// dompurify, not isomorphic-dompurify: the admin build resolves module files
+// with Node conditions, so isomorphic-dompurify gave its JSDOM (server) build,
+// whose JSDOM is stubbed in the browser bundle, leaving `sanitize` undefined
+// ("b.sanitize is not a function" on LF dev). dompurify is a direct admin
+// dependency and builds its instance from the browser window. Depending on the
+// CJS/ESM interop the instance is the default import or its `.default`.
+import DOMPurifyImport from 'dompurify';
+
+type Purifier = { sanitize: (html: string, cfg: Record<string, unknown>) => unknown };
+const DOMPurify: Purifier = typeof (DOMPurifyImport as unknown as Purifier).sanitize === 'function'
+  ? (DOMPurifyImport as unknown as Purifier)
+  : (DOMPurifyImport as unknown as { default: Purifier }).default;
 
 /** The tags a stored discovery body may contain (content-sources sanitizeBody's allow-list). */
 const PREVIEW_TAGS = [
@@ -23,7 +31,7 @@ const PREVIEW_TAGS = [
  */
 export function previewHtml(html: string | null | undefined): string {
   if (!html) return '';
-  const frag = sanitize(html, {
+  const frag = DOMPurify.sanitize(html, {
     ALLOWED_TAGS: PREVIEW_TAGS,
     ALLOWED_ATTR: ['href', 'title', 'src', 'alt'],
     ALLOWED_URI_REGEXP: /^(?:https:|mailto:)/i,
