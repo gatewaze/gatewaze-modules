@@ -16,9 +16,10 @@ const PREVIEW_TAGS = [
  * The body was sanitised when it was stored, but it came from a third-party
  * page and the admin is a privileged origin, so it is sanitised again here
  * rather than trusted: an allow-list of tags, only href/title/src/alt
- * attributes, and only https: (or mailto: for links) URLs. Links open in a
- * new tab with no opener and no referrer; an image without an absolute https
- * source is dropped; images load lazily and send no referrer.
+ * attributes (no data-* or aria-*), and only https: (or mailto: for links)
+ * URLs. Links open in a new tab with no opener and no referrer; an image
+ * without an absolute https source is dropped; images load lazily and send
+ * no referrer.
  */
 export function previewHtml(html: string | null | undefined): string {
   if (!html) return '';
@@ -26,6 +27,10 @@ export function previewHtml(html: string | null | undefined): string {
     ALLOWED_TAGS: PREVIEW_TAGS,
     ALLOWED_ATTR: ['href', 'title', 'src', 'alt'],
     ALLOWED_URI_REGEXP: /^(?:https:|mailto:)/i,
+    // DOMPurify keeps data-* and aria-* by default, separately from
+    // ALLOWED_ATTR; third-party content gets neither in the admin DOM.
+    ALLOW_DATA_ATTR: false,
+    ALLOW_ARIA_ATTR: false,
     RETURN_DOM_FRAGMENT: true,
   }) as unknown as DocumentFragment;
   frag.querySelectorAll('a').forEach((a) => {
