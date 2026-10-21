@@ -6,7 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseFeed, stripHtml, tagText, decodeEntities } from '../lib/feed-parser.js';
-import { articleBody, headTags, publishedDate, pageDescription, parseSitemap, sanitizeBody } from '../lib/html-meta.js';
+import { articleBody, headTags, publishedDate, pageDescription, pageImage, parseSitemap, sanitizeBody, truncateAtBlock } from '../lib/html-meta.js';
 import { cleanText, entryBlurb } from '../lib/blurb.js';
 import { policeUrl, conditionalHeaders } from '../lib/http.js';
 
@@ -48,6 +48,39 @@ test('100k unclosed <article>, <main> and <div class="entry-content"> openers', 
     const html = '<html><body><main>' + opener.repeat(100_000) + '</body></html>';
     timed(`articleBody(${opener})`, () => articleBody(html), 800);
   }
+});
+
+test('100k unclosed known-container openers (HubSpot, Google, article-content) stay linear', () => {
+  for (const opener of [
+    '<span id="hs_cos_wrapper_post_body" class="hs_cos_wrapper">',
+    '<div class="hs_cos_wrapper_post_body">',
+    '<section class="blocks-container glue-page">',
+    '<div class="article-content">',
+  ]) {
+    // one real opener whose body is a flood of nested, never-closed same-name tags
+    const html = '<html><body>' + opener + opener.repeat(100_000) + '</body></html>';
+    timed(`articleBody(${opener.slice(0, 30)})`, () => articleBody(html), 800);
+  }
+  // openers that never finish their attribute list
+  const half = '<html><body>' + '<span id="hs_cos_wrapper_post_body" class="'.repeat(100_000);
+  timed('articleBody(half-open span)', () => articleBody(half), 800);
+});
+
+test('thousands of closed chrome regions inside <main> strip in one pass each', () => {
+  const html = '<html><body><main>' + '<nav>n</nav><aside>a</aside><button>b</button><p>text</p>'.repeat(50_000) + '</main></body></html>';
+  timed('articleBody(chrome-heavy main)', () => articleBody(html), 1500);
+  // many <article> cards compared against the page text
+  const cards = '<html><body><main>' + '<article><p>card</p></article>'.repeat(50_000) + '</main></body></html>';
+  timed('articleBody(50k article cards)', () => articleBody(cards), 1500);
+});
+
+test('truncateAtBlock and the feed image scan are linear on junk', () => {
+  const s = '</p'.repeat(500_000) + '<p>x</p>';
+  timed('truncateAtBlock', () => truncateAtBlock(s, 1_000_000), 400);
+  const feed = '<rss><channel><item><title>t</title><link>https://x.org/</link>' + '<media:content url="https://x.org/a.png" '.repeat(100_000) + '</item></channel></rss>';
+  timed('parseFeed(unclosed media:content)', () => parseFeed(feed), 1500);
+  const head = '<html><head>' + '<meta property="og:image" content="https://x.org/'.repeat(50_000) + '</head>';
+  timed('pageImage(unclosed)', () => pageImage(head, 'https://x.org/'), 600);
 });
 
 test('entities decode once; a decoded tag never survives as a tag', () => {
