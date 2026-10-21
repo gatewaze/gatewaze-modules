@@ -14,6 +14,10 @@ describe('previewHtml', () => {
     expect(out).toContain('<p>hi</p>');
   });
 
+  it('drops data-* and aria-* attributes', () => {
+    expect(previewHtml('<p data-x="1" aria-label="x" data-state="open">t</p>')).toBe('<p>t</p>');
+  });
+
   it('only https (or mailto) links survive, and they open in a new tab without an opener', () => {
     const out = previewHtml('<a href="javascript:alert(1)">a</a><a href="data:text/html,x">b</a><a href="http://x.org/">c</a><a href="/rel">d</a><a href="https://x.org/ok">e</a><a href="mailto:a@x.org">f</a>');
     expect(out).not.toMatch(/javascript:|data:|http:\/\/|href="\/rel"/);

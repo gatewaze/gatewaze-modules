@@ -399,7 +399,9 @@ export async function sanitizeBody(html, maxChars = BODY_MAX_CHARS) {
     for (let limit = maxChars, tries = 0; out.length > maxChars && tries < 5; tries++, limit -= 1000) {
       out = sanitizeHtml(truncateAtBlock(out, Math.max(limit, 1)), options).trim();
     }
-    return out.length > maxChars ? out.slice(0, maxChars) : out;
+    // Never hand back a hard slice: it could end inside a tag the portal
+    // then renders. A body that still will not fit is treated as unusable.
+    return out.length > maxChars ? '' : out;
   } catch (e) {
     console.warn(`[content-sources] sanitize-html failed on a body (${e?.message ?? e}); body not stored`);
     return '';
