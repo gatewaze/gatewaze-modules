@@ -204,7 +204,7 @@ test('featured image: a pending row gets one only when it has none', async () =>
   }
 });
 
-test('body backlog: og:image becomes the featured image when the post has none; an existing one is kept', async () => {
+test('body backlog: og:image becomes the featured image, including over an existing feed image', async () => {
   const page = `<html><head><meta property="og:image" content="https://a.example.org/og.png"></head><body><div class="entry-content"><p>${'Body text here. '.repeat(20)}</p></div></body></html>`;
   const posts = [
     { id: 'p1', canonical_url: 'https://a.example.org/blog/one', excerpt: 'x', featured_image: null, discovery_source_id: SRC.id, body_fetch_attempts: 0, discovery_sources: { egress: 'direct' } },
@@ -216,7 +216,7 @@ test('body backlog: og:image becomes the featured image when the post has none; 
   await s.fetchBodies(sb);
   const upd = Object.fromEntries(sb.writes('blog_posts').map((w) => [w.calls.find((c) => c[0] === 'eq')[2], w.payload]));
   assert.equal(upd.p1.featured_image, 'https://a.example.org/og.png');
-  assert.equal(upd.p2.featured_image, undefined);
+  assert.equal(upd.p2.featured_image, 'https://a.example.org/og.png');
 });
 
 test('a focused scraper row selects only its active sources; job source_ids win over the row', async () => {
@@ -233,4 +233,19 @@ test('a focused scraper row selects only its active sources; job source_ids win 
   const job = await calls({ source_ids: [A] }, { source_ids: [B] });
   assert.ok(job.some((c) => c[0] === 'in' && c[2][0] === B));
   assert.ok(job.some((c) => c[0] === 'neq' && c[1] === 'status' && c[2] === 'dead'));
+});
+
+test('body backlog: the page og:image replaces a feed image; a page without one keeps it', async () => {
+  const run = async (pageHtml) => {
+    const post = { id: 'p1', canonical_url: 'https://a.example.org/blog/hello', excerpt: 'x', featured_image: 'https://a.example.org/wp-content/inline-diagram.png', discovery_source_id: SRC.id, body_fetch_attempts: 0, discovery_sources: { egress: 'direct' } };
+    const sb = fakeSupabase((e) => (e.table === 'blog_posts' && e.op === 'select' ? { data: [post], error: null } : { data: null, error: null }));
+    const s = scraperWith(sb);
+    s._pageCache = { p1: pageHtml };
+    await s.fetchBodies(sb);
+    return sb.writes('blog_posts').map((w) => w.payload);
+  };
+  const withOg = await run('<html><head><meta property="og:image" content="https://a.example.org/hero.jpg"></head><body><article><p>' + 'Body text. '.repeat(40) + '<img src="https://a.example.org/body-photo.jpg"></p></article></body></html>');
+  assert.equal(withOg[0].featured_image, 'https://a.example.org/hero.jpg');
+  const withoutOg = await run('<html><head></head><body><article><p>' + 'Body text. '.repeat(40) + '<img src="https://a.example.org/body-photo.jpg"></p></article></body></html>');
+  assert.ok(withoutOg.every((w) => !('featured_image' in w)), 'no og:image: the feed image stays and no body image is taken');
 });
