@@ -218,3 +218,19 @@ test('body backlog: og:image becomes the featured image when the post has none; 
   assert.equal(upd.p1.featured_image, 'https://a.example.org/og.png');
   assert.equal(upd.p2.featured_image, undefined);
 });
+
+test('a focused scraper row selects only its active sources; job source_ids win over the row', async () => {
+  const A = '11111111-1111-4111-8111-111111111111';
+  const B = '22222222-2222-4222-8222-222222222222';
+  const calls = async (config, options) => {
+    const sb = fakeSupabase(() => ({ data: [], error: null }));
+    await new FeedScraper({ config, options }, { supabase: sb, logger: { log() {} } }).loadSources(sb);
+    return sb.log.find((e) => e.table === 'discovery_sources').calls;
+  };
+  const row = await calls({ source_ids: [A, 'not-a-uuid'] }, {});
+  assert.ok(row.some((c) => c[0] === 'in' && c[1] === 'id' && c[2].length === 1 && c[2][0] === A));
+  assert.ok(row.some((c) => c[0] === 'eq' && c[1] === 'status' && c[2] === 'active'));
+  const job = await calls({ source_ids: [A] }, { source_ids: [B] });
+  assert.ok(job.some((c) => c[0] === 'in' && c[2][0] === B));
+  assert.ok(job.some((c) => c[0] === 'neq' && c[1] === 'status' && c[2] === 'dead'));
+});
