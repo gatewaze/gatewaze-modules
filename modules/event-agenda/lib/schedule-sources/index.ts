@@ -1,8 +1,9 @@
 /** Schedule-source registry (spec §5.5). The enum grows as parsers are added. */
 import { schedSource } from './sched.js';
+import { sessionizeSource } from './sessionize.js';
 import type { ScheduleSource } from './types.js';
 
-export const SCHEDULE_SOURCES: ScheduleSource[] = [schedSource];
+export const SCHEDULE_SOURCES: ScheduleSource[] = [schedSource, sessionizeSource];
 
 /** First source that claims the page, or null. */
 export function detectSource(
@@ -16,5 +17,4 @@ export function detectSource(
   return null;
 }
 
-export * from './types.js';
-export { schedSource };
+export { schedSource, sessionizeSource };
