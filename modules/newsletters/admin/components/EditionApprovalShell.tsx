@@ -36,6 +36,13 @@ interface Props {
 }
 
 /**
+ * Stops the page behind the layer scrolling. Puck copies the host's <style>
+ * tags into the canvas iframe too, but nothing in the iframe carries the
+ * marker, so the rule never matches there.
+ */
+const PAGE_SCROLL_LOCK = 'html:has([data-gw-approval-layer]), body:has([data-gw-approval-layer]) { overflow: hidden !important; }';
+
+/**
  * Make everything except `el` (and its ancestors) inert; returns an undo.
  * Page-level widgets outside the app root (e.g. a feedback button) are also
  * hidden: the layer sits inside the app's stacking context, so it cannot be
@@ -78,10 +85,11 @@ export function EditionApprovalShell({
   useLayoutEffect(() => {
     const el = layerRef.current;
     if (!el) return undefined;
-    const undo = inertEverythingBut(el);
-    const prevOverflow = document.body.style.overflow;
-    document.body.style.overflow = 'hidden';
-    return () => { undo(); document.body.style.overflow = prevOverflow; };
+    // The page behind the layer stops scrolling through PAGE_SCROLL_LOCK, not an
+    // inline body style: Puck copies the host <body>'s attributes into the
+    // canvas iframe when it mounts, so `body.style.overflow = 'hidden'` would
+    // stop the email itself from scrolling.
+    return inertEverythingBut(el);
   }, []);
 
   const load = useCallback(async () => {
@@ -137,11 +145,13 @@ export function EditionApprovalShell({
     <Page title={`Approve: ${subject || 'Newsletter edition'}`}>
       <div
         ref={layerRef}
+        data-gw-approval-layer=""
         role="dialog"
         aria-modal="true"
         aria-label="Approve newsletter edition"
         className="fixed inset-0 z-[60] flex flex-col bg-[var(--color-background)]"
       >
+        <style>{PAGE_SCROLL_LOCK}</style>
         <header className="flex items-center gap-3 flex-wrap px-5 py-3 border-b border-[var(--gray-a5)] bg-[var(--color-panel-solid)]">
           <div className="min-w-0">
             <div className="text-xs uppercase tracking-wide text-[var(--gray-10)]">{newsletterName ?? 'Newsletter'}{dateLabel ? ` · ${dateLabel}` : ''}</div>
