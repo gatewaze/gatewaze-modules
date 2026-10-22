@@ -153,6 +153,14 @@ export function CanvasShell(props: CanvasShellProps): ReactElement {
   const review = variant === 'review';
 
   const [previewMode, setPreviewMode] = useState<CanvasPreviewMode>(initialPreviewMode);
+  // Review opens with the canvas and the Fields panel at half the width each.
+  // Passing the width in `ui` wins over the width Puck saved in localStorage
+  // from the full editor. The review layer is full screen, so half the window
+  // is half the panel. Created once: a new `ui` object re-initialises Puck.
+  const [reviewUi] = useState(() => ({
+    ...REVIEW_UI,
+    rightSideBarWidth: typeof window === 'undefined' ? undefined : Math.round(window.innerWidth / 2),
+  }));
 
   // Plugin spread — see NewsletterPuckCanvas history for the
   // duplicate-name re-insertion trick. Puck always prepends blocks +
@@ -223,7 +231,7 @@ export function CanvasShell(props: CanvasShellProps): ReactElement {
             overrides={mergedOverrides as never}
             onPublish={onPublish as never}
             onChange={onChange as never}
-            {...(review ? { ui: REVIEW_UI as never, permissions: REVIEW_PERMISSIONS } : {})}
+            {...(review ? { ui: reviewUi as never, permissions: REVIEW_PERMISSIONS } : {})}
           />
           <ViewportLightDarkPortal previewMode={previewMode} setPreviewMode={setPreviewMode} />
         </div>
@@ -459,7 +467,7 @@ const SHELL_CSS = `
    the Fields panel room: approvers edit there. The panel's drag handle sets
    --puck-user-right-side-bar-width, so the width must read it to resize. */
 .gw-canvas-shell--review [class*="PuckLayout-inner"] {
-  grid-template-columns: 0 0 minmax(0, 1fr) var(--puck-user-right-side-bar-width, 340px) !important;
+  grid-template-columns: 0 0 minmax(0, 1fr) var(--puck-user-right-side-bar-width, 50%) !important;
 }
 
 /* Selection-outline offset so contentEditable text has breathing room
