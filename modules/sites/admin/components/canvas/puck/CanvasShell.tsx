@@ -456,9 +456,10 @@ const SHELL_CSS = `
   display: none !important;
 }
 /* With the nav and left sidebar hidden, collapse their grid tracks and give
-   the Fields panel room: approvers edit there. */
+   the Fields panel room: approvers edit there. The panel's drag handle sets
+   --puck-user-right-side-bar-width, so the width must read it to resize. */
 .gw-canvas-shell--review [class*="PuckLayout-inner"] {
-  grid-template-columns: 0 0 minmax(0, 1fr) 340px !important;
+  grid-template-columns: 0 0 minmax(0, 1fr) var(--puck-user-right-side-bar-width, 340px) !important;
 }
 
 /* Selection-outline offset so contentEditable text has breathing room
