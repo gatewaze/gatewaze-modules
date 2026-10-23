@@ -73,6 +73,9 @@ export function cleanDocHtml(raw: string, maxChars = 180_000): string {
       .replace(/<(script|style|head|noscript)[^>]*>[\s\S]*?<\/\1>/gi, '')
       .replace(/<!--[\s\S]*?-->/g, '');
   } while (html !== prevHtml);
+  // An unclosed <script (no </script>) survives the loop; escape the "<" of
+  // any that is left. A single-character replacement can't create a new match.
+  html = html.replace(/<(?=\/?(?:script|style|head|noscript)\b)/gi, '&lt;');
   // Spans: bold/italic by class or inline style, otherwise unwrapped.
   html = html.replace(/<span([^>]*)>([\s\S]*?)<\/span>/gi, (_m, attrs: string, inner: string) => {
     const classes = (/class="([^"]*)"/i.exec(attrs)?.[1] ?? '').split(/\s+/);
