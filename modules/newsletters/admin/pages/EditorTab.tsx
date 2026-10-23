@@ -626,7 +626,9 @@ export function EditorTab({ newsletterId, newsletterSlug, setupComplete = true }
         const body = await res.text().catch(() => '');
         throw new Error(`publish-to-git ${res.status}: ${body.slice(0, 200)}`);
       }
-      toast.success('Published to git', { id: tid });
+      const result = (await res.json().catch(() => null)) as { kind?: string; git?: boolean; message?: string } | null;
+      if (result?.kind === 'skipped') toast.warning(result.message ?? 'Nothing was published.', { id: tid });
+      else toast.success(result?.git === false ? 'Published' : 'Published to git', { id: tid });
       loadEditions();
     } catch (error) {
       console.error('[newsletters] publish failed:', error);
