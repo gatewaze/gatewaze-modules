@@ -64,9 +64,15 @@ export function cleanDocHtml(raw: string, maxChars = 180_000): string {
   }
   const body = /<body[^>]*>([\s\S]*?)<\/body>/i.exec(html);
   html = body ? body[1] : html;
-  html = html
-    .replace(/<(script|style|head|noscript)[^>]*>[\s\S]*?<\/\1>/gi, '')
-    .replace(/<!--[\s\S]*?-->/g, '');
+  // Repeat until nothing changes, so a removal can't join the pieces of a new
+  // <script> or comment together (e.g. "<scr<script></script>ipt>").
+  let prevHtml: string;
+  do {
+    prevHtml = html;
+    html = html
+      .replace(/<(script|style|head|noscript)[^>]*>[\s\S]*?<\/\1>/gi, '')
+      .replace(/<!--[\s\S]*?-->/g, '');
+  } while (html !== prevHtml);
   // Spans: bold/italic by class or inline style, otherwise unwrapped.
   html = html.replace(/<span([^>]*)>([\s\S]*?)<\/span>/gi, (_m, attrs: string, inner: string) => {
     const classes = (/class="([^"]*)"/i.exec(attrs)?.[1] ?? '').split(/\s+/);
