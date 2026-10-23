@@ -64,15 +64,11 @@ export function cleanDocHtml(raw: string, maxChars = 180_000): string {
   }
   const body = /<body[^>]*>([\s\S]*?)<\/body>/i.exec(html);
   html = body ? body[1] : html;
-  // Repeat until nothing changes, so a removal can't join the pieces of a new
-  // <script> or comment together (e.g. "<scr<script></script>ipt>").
-  let prevHtml: string;
-  do {
-    prevHtml = html;
-    html = html
-      .replace(/<(script|style|head|noscript)[^>]*>[\s\S]*?<\/\1>/gi, '')
-      .replace(/<!--[\s\S]*?-->/g, '');
-  } while (html !== prevHtml);
+  // Replace with a space, not nothing, so the text either side of a removal
+  // can't join into a new <script> or comment (e.g. "<scr<script></script>ipt>").
+  html = html
+    .replace(/<(script|style|head|noscript)[^>]*>[\s\S]*?<\/\1>/gi, ' ')
+    .replace(/<!--[\s\S]*?-->/g, ' ');
   // An unclosed <script (no </script>) survives the loop; escape the "<" of
   // any that is left. A single-character replacement can't create a new match.
   html = html.replace(/<(?=\/?(?:script|style|head|noscript)\b)/gi, '&lt;');
