@@ -236,14 +236,25 @@ export function createPublishToGitRoute(deps: PublishToGitDeps) {
       // graduate-to-external flow later. Return a 200/skipped so the
       // editor can surface a clear "no external repo connected"
       // warning instead of an opaque error.
+      // Git publishing is off for this newsletter, but Publish still means
+      // "make it live": promote a draft to status='published' so the portal
+      // lists it, the same as the git path below does after its commit.
+      // publish_state is left alone because it tracks the git snapshot.
       if (collection.git_provenance !== 'external' || !collection.git_url) {
+        if (ed.status === 'draft') {
+          const upd = await deps.supabase
+            .from('newsletters_editions')
+            .update({ status: 'published', updated_at: new Date().toISOString() })
+            .eq('id', ed.id);
+          if (upd.error) {
+            res.status(500).json({ error: { code: 'publish_failed', message: 'Could not mark the edition as published.' } });
+            return;
+          }
+        }
         res.status(200).json({
-          kind: 'skipped',
-          reason: 'no_external_git_repo',
-          message:
-            'This newsletter is using the platform boilerplate template. ' +
-            'Connect an external git repo (Settings → Git) before publishing — ' +
-            'editions are still saved to the database.',
+          kind: 'published',
+          git: false,
+          message: 'Edition published. This newsletter has no git repo connected, so nothing was written to git.',
           editionId,
         });
         return;
