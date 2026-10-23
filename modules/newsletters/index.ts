@@ -7,7 +7,7 @@ const newslettersModule: GatewazeModule = {
   visibility: 'public',
   name: 'Newsletters',
   description: 'Create, edit, and distribute newsletters with edition management and subscriber tracking',
-  version: '1.3.4',
+  version: '1.3.5',
   features: [
     'newsletters',
     'newsletters.editor',

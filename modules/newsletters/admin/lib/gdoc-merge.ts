@@ -64,7 +64,16 @@ function schemaOf(tpl: BlockTemplate | undefined | null): Record<string, SchemaF
 
 function isEmptyValue(v: unknown): boolean {
   if (v === null || v === undefined) return true;
-  if (typeof v === 'string') return v.replace(/<[^>]*>/g, '').trim() === '';
+  if (typeof v === 'string') {
+    // Strip tags until nothing changes; one pass can leave a tag behind.
+    let text = v;
+    let prev: string;
+    do {
+      prev = text;
+      text = text.replace(/<[^<>]*>/g, '');
+    } while (text !== prev);
+    return text.trim() === '';
+  }
   if (Array.isArray(v)) return v.length === 0;
   if (typeof v === 'object') return Object.values(v as Record<string, unknown>).every(isEmptyValue);
   return false;
