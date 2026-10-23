@@ -43,6 +43,9 @@ describe('cleanDocHtml', () => {
     const nested = cleanDocHtml('<body><p>Text</p><scr<script>x</script>ipt>alert(1)</script><!<!-- a -->-- b --></body>');
     expect(nested).not.toMatch(/<script|alert\(1\)|<!--/i);
   });
+  it('escapes an unclosed script tag', () => {
+    expect(cleanDocHtml('<body><p>Hi</p><script src="https://x.example/a.js"></body>')).not.toMatch(/<script/i);
+  });
   it('drops scripts and empty paragraphs', () => {
     expect(out).not.toContain('alert');
     expect(out).not.toMatch(/<p>\s*<\/p>/);
