@@ -103,6 +103,12 @@ export interface CanvasShellProps {
   className?: string;
   /** Initial preview-backdrop colour. Defaults to 'light'. */
   initialPreviewMode?: CanvasPreviewMode;
+  /**
+   * 'review' is the cut-down editor an approver gets: only the canvas and the
+   * Fields panel. No left sidebar (blocks, outline, AI), and blocks cannot be
+   * inserted, moved, duplicated or deleted, only edited. Default 'full'.
+   */
+  variant?: 'full' | 'review';
 }
 
 // Defaults match the newsletter editor's existing chrome — both hosts
@@ -119,6 +125,9 @@ const DEFAULT_VIEWPORTS: CanvasShellViewport[] = [
 // onChange → setEdition), inline literals here would churn the store.
 const EMPTY_PLUGINS: ReadonlyArray<Plugin> = [];
 const PUCK_IFRAME = { enabled: true } as const;
+// Review variant: edit in place, nothing structural.
+const REVIEW_PERMISSIONS = { drag: false, duplicate: false, delete: false, insert: false, edit: true } as const;
+const REVIEW_UI = { leftSideBarVisible: false, rightSideBarVisible: true } as const;
 
 export function CanvasShell(props: CanvasShellProps): ReactElement {
   const {
@@ -139,16 +148,26 @@ export function CanvasShell(props: CanvasShellProps): ReactElement {
     extraMetadata,
     className = '',
     initialPreviewMode = 'light',
+    variant = 'full',
   } = props;
+  const review = variant === 'review';
 
   const [previewMode, setPreviewMode] = useState<CanvasPreviewMode>(initialPreviewMode);
+  // Review opens with the canvas and the Fields panel at half the width each.
+  // Passing the width in `ui` wins over the width Puck saved in localStorage
+  // from the full editor. The review layer is full screen, so half the window
+  // is half the panel. Created once: a new `ui` object re-initialises Puck.
+  const [reviewUi] = useState(() => ({
+    ...REVIEW_UI,
+    rightSideBarWidth: typeof window === 'undefined' ? undefined : Math.round(window.innerWidth / 2),
+  }));
 
   // Plugin spread — see NewsletterPuckCanvas history for the
   // duplicate-name re-insertion trick. Puck always prepends blocks +
   // outline; we want our extras (notably AI) FIRST. Re-pass blocks /
   // outline / fields after our extras so Puck's tab map bumps them to
   // the end.
-  const plugins = useMemo<Plugin[]>(() => [
+  const plugins = useMemo<Plugin[]>(() => review ? [fieldsPlugin({ desktopSideBar: 'right' })] : [
     ...extraPlugins,
     ...getCanvasPuckPlugins(),
     blocksPlugin(),
@@ -157,7 +176,7 @@ export function CanvasShell(props: CanvasShellProps): ReactElement {
     // *alongside* whatever left tab is active (Blocks / AI / Outline) instead of
     // hijacking the left panel and yanking the operator out of the block picker.
     fieldsPlugin({ desktopSideBar: 'right' }),
-  ], [extraPlugins]);
+  ], [extraPlugins, review]);
 
   // Merged overrides — shared defaults first, host overrides win.
   const mergedOverrides = useMemo<Partial<Overrides>>(() => ({
@@ -189,7 +208,7 @@ export function CanvasShell(props: CanvasShellProps): ReactElement {
       }}
     >
       <div
-        className={`gw-canvas-shell gw-canvas-shell--preview-${previewMode}${className ? ` ${className}` : ''}`}
+        className={`gw-canvas-shell gw-canvas-shell--preview-${previewMode}${review ? ' gw-canvas-shell--review' : ''}${className ? ` ${className}` : ''}`}
         style={S.root}
       >
         <style dangerouslySetInnerHTML={{ __html: SHELL_CSS }} />
@@ -212,6 +231,7 @@ export function CanvasShell(props: CanvasShellProps): ReactElement {
             overrides={mergedOverrides as never}
             onPublish={onPublish as never}
             onChange={onChange as never}
+            {...(review ? { ui: reviewUi as never, permissions: REVIEW_PERMISSIONS } : {})}
           />
           <ViewportLightDarkPortal previewMode={previewMode} setPreviewMode={setPreviewMode} />
         </div>
@@ -434,6 +454,20 @@ const SHELL_CSS = `
    _Breadcrumbs-breadcrumbLabel_. */
 .gw-canvas-shell [class*="Breadcrumbs-breadcrumb_"] {
   display: none !important;
+}
+
+/* Review variant: no left sidebar at all (Puck still registers its Blocks and
+   Outline tabs), only the canvas and the Fields panel on the right. */
+.gw-canvas-shell--review [class*="Sidebar--left"],
+.gw-canvas-shell--review [class*="PuckLayout-leftSideBar"],
+.gw-canvas-shell--review [class*="PuckLayout-nav"] {
+  display: none !important;
+}
+/* With the nav and left sidebar hidden, collapse their grid tracks and give
+   the Fields panel room: approvers edit there. The panel's drag handle sets
+   --puck-user-right-side-bar-width, so the width must read it to resize. */
+.gw-canvas-shell--review [class*="PuckLayout-inner"] {
+  grid-template-columns: 0 0 minmax(0, 1fr) var(--puck-user-right-side-bar-width, 50%) !important;
 }
 
 /* Selection-outline offset so contentEditable text has breathing room

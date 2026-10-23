@@ -7,7 +7,7 @@ const contentKeywordsModule: GatewazeModule = {
   visibility: 'hidden',
   name: 'Content Keywords',
   description: 'Platform-wide keyword rule layer applied retroactively to all governed content. Replaces per-scraper keyword filtering with a centrally-edited rule set.',
-  version: '1.0.0',
+  version: '1.0.1',
   features: [
     'content-keywords',
     'content-keywords.manage',
@@ -25,7 +25,11 @@ const contentKeywordsModule: GatewazeModule = {
     {
       name: 'content-keywords:drain-queue',
       handler: './worker/drain-queue.js',
-      concurrency: 2,
+      // Advisory only: the job worker ignores per-worker concurrency and runs
+      // module jobs at MODULE_WORKER_CONCURRENCY, so two drains can overlap.
+      // That is harmless: evaluation is idempotent and the verdict handler
+      // tolerates a duplicate event.
+      concurrency: 1,
     },
     {
       name: 'content-keywords:recompute',
@@ -41,6 +45,24 @@ const contentKeywordsModule: GatewazeModule = {
       name: 'content-keywords:break-stale-leases',
       handler: './worker/break-leases.js',
       concurrency: 1,
+    },
+  ],
+
+  // Nothing else enqueues the drain on a chart deploy: the worker there only
+  // runs what lands on the shared 'jobs' queue, so without this tick the
+  // match queue is never drained and new items never get a keyword verdict.
+  // On a database whose queue has never been drained, the first drains
+  // evaluate that whole backlog for the first time, which can move published
+  // items to auto_suppressed (for events that hides them from the portal; the
+  // blog portal reads status, so for blog posts it only changes the inbox). recompute and scan-stale stay unscheduled on
+  // purpose: they re-evaluate whole tables, so turning them on is a separate
+  // decision.
+  crons: [
+    {
+      name: 'content-keywords-drain-tick',
+      queue: 'jobs',
+      schedule: { every: 30_000 },
+      data: { kind: 'content-keywords:drain-queue' },
     },
   ],
 

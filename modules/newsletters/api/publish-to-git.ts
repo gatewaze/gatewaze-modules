@@ -32,6 +32,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createHash } from 'node:crypto';
 import { editionFolderSlug } from '../lib/edition-slug.js';
+import { resolveContentForDef } from '../lib/research-merge.js';
 
 const execFileP = promisify(execFile);
 
@@ -235,14 +236,25 @@ export function createPublishToGitRoute(deps: PublishToGitDeps) {
       // graduate-to-external flow later. Return a 200/skipped so the
       // editor can surface a clear "no external repo connected"
       // warning instead of an opaque error.
+      // Git publishing is off for this newsletter, but Publish still means
+      // "make it live": promote a draft to status='published' so the portal
+      // lists it, the same as the git path below does after its commit.
+      // publish_state is left alone because it tracks the git snapshot.
       if (collection.git_provenance !== 'external' || !collection.git_url) {
+        if (ed.status === 'draft') {
+          const upd = await deps.supabase
+            .from('newsletters_editions')
+            .update({ status: 'published', updated_at: new Date().toISOString() })
+            .eq('id', ed.id);
+          if (upd.error) {
+            res.status(500).json({ error: { code: 'publish_failed', message: 'Could not mark the edition as published.' } });
+            return;
+          }
+        }
         res.status(200).json({
-          kind: 'skipped',
-          reason: 'no_external_git_repo',
-          message:
-            'This newsletter is using the platform boilerplate template. ' +
-            'Connect an external git repo (Settings → Git) before publishing — ' +
-            'editions are still saved to the database.',
+          kind: 'published',
+          git: false,
+          message: 'Edition published. This newsletter has no git repo connected, so nothing was written to git.',
           editionId,
         });
         return;
@@ -292,7 +304,7 @@ export function createPublishToGitRoute(deps: PublishToGitDeps) {
         .from('newsletters_edition_blocks')
         .select(`
           id, block_type, content, sort_order, templates_block_def_id,
-          block_template:templates_block_defs!templates_block_def_id(id, html, render_kind, component_id)
+          block_template:templates_block_defs!templates_block_def_id(id, html, render_kind, component_id, source_kind, data_source)
         `)
         .eq('edition_id', editionId)
         .order('sort_order');
@@ -300,10 +312,10 @@ export function createPublishToGitRoute(deps: PublishToGitDeps) {
         res.status(500).json({ error: { code: 'blocks_fetch_failed', message: blocksRes.error.message } });
         return;
       }
-      const blockRows = (blocksRes.data ?? []) as Array<{
+      const blockRows = (blocksRes.data ?? []) as unknown as Array<{
         id: string; block_type: string; content: Record<string, unknown>; sort_order: number;
         templates_block_def_id: string | null;
-        block_template: { id: string; html: string | null; render_kind: 'mustache' | 'react-email'; component_id: string | null } | null;
+        block_template: { id: string; html: string | null; render_kind: 'mustache' | 'react-email'; component_id: string | null; source_kind?: string | null; data_source?: unknown } | null;
       }>;
 
       // 6. Build the publish file map.
@@ -399,6 +411,10 @@ export function createPublishToGitRoute(deps: PublishToGitDeps) {
           }
         }
       }
+      // The public edition.json carries what readers saw: research blocks
+      // resolved through the edit layer, and no research_edits on any block.
+      const bindingHashes = new Map<string, string>();
+      const publicContent = await Promise.all(blockRows.map((b) => resolveContentForDef(b.content, b.block_template, bindingHashes)));
       files.set(`${editionSlug}/edition.json`, JSON.stringify({
         id: ed.id,
         slug: editionSlug,
@@ -406,12 +422,12 @@ export function createPublishToGitRoute(deps: PublishToGitDeps) {
         subject: ed.title,
         preheader: ed.preheader,
         status: ed.status,
-        blocks: blockRows.map((b) => {
+        blocks: blockRows.map((b, i) => {
           const eff = blockRenderById.get(b.id);
           return {
             id: b.id,
             block_type: b.block_type,
-            content: b.content,
+            content: publicContent[i],
             sort_order: b.sort_order,
             render_kind: eff?.render_kind ?? b.block_template?.render_kind ?? 'react-email',
             component_id: eff?.component_id ?? b.block_template?.component_id ?? b.block_type,

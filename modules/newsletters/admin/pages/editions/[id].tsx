@@ -9,6 +9,7 @@ import {
   DocumentTextIcon,
   ChatBubbleLeftRightIcon,
   ChartBarIcon,
+  CheckBadgeIcon,
 } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 import { Page } from '@/components/shared/Page';
@@ -24,9 +25,18 @@ import { useEditionPresence } from '../../hooks/useEditionPresence';
 import { stripStorageUrlsInJson, resolveStoragePathsInJson } from '@gatewaze/shared';
 import {
   type NewsletterEdition,
+  type EditionBlock,
   type BlockTemplate,
   type BrickTemplate,
 } from '../../utils';
+import { researchBindingOf, withBindingHashes } from '../../lib/research-block';
+import { applyResearchReplacements, diffResearchOnly, type SnapshotBlock } from '../../lib/research-conflict';
+import { ResearchPanel } from '../../components/ResearchPanel';
+import { GDocFillDialog, GDocFillButton } from '../../components/GDocFillDialog';
+import { applyGdocMerge, type GdocChange, type GdocChoice } from '../../lib/gdoc-merge';
+import { EditionApprovalShell } from '../../components/EditionApprovalShell';
+import { useAdminScope } from '@/hooks/usePermissions';
+import { researchService } from '../../utils/researchService';
 import { exportEditionHtml } from '../../components/puck/email-blocks/export-edition-html';
 import { getViewOnlineUrl } from '../../utils/view-online-url';
 import { publicSupabaseUrl } from '../../utils/publicSupabaseUrl';
@@ -81,6 +91,11 @@ interface DbBlockTemplate {
    * nothing on the 2026-06-23 send. */
   render_kind?: 'mustache' | 'react-email' | 'declarative' | null;
   component_id?: string | null;
+  /** 'research' when `data_source` is a research binding (spec §5.1). */
+  source_kind?: string | null;
+  data_source?: unknown;
+  /** Stamped after load by withBindingHashes; the edit layer records it. */
+  binding_hash?: string;
 }
 
 interface DbBrickTemplate {
@@ -99,10 +114,43 @@ interface DbEditionBlock {
   id: string;
   edition_id: string;
   /** FK to templates_block_defs.id (after PR 16.b). */
-  templates_block_def_id: string;
+  templates_block_def_id: string | null;
+  block_type: string;
   content: Record<string, unknown>;
   sort_order: number;
-  block_template: DbBlockTemplate;
+  block_template: DbBlockTemplate | null;
+}
+
+/** Edition-level columns the conflict handler compares (see tryAdoptResearchChanges). */
+interface ServerEditionMeta {
+  title: string | null;
+  preheader: string | null;
+  edition_date: string | null;
+  send_target_at: string | null;
+  research_at: string | null;
+}
+
+/** timestamptz round-trips in different ISO spellings; compare instants. */
+function sameInstant(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  return Date.parse(a) === Date.parse(b);
+}
+
+/** ISO → the value an <input type="datetime-local"> wants (local wall time). */
+function toLocalInput(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/** datetime-local value → ISO, or null when blank/invalid. */
+function fromLocalInput(v: string): string | null {
+  if (!v) return null;
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
 
 interface DbEditionBrick {
@@ -137,12 +185,23 @@ interface CollectionInfo {
 
 type EditionTab = 'details' | 'editor' | 'sending';
 
-export default function EditionEditorPage() {
+/**
+ * `approvalMode`: the approver's view (route newsletters/approve/:id). The same
+ * loading, saving and conflict handling as the editor, rendered as a
+ * full-screen canvas + fields with Approve / Ask for changes, and no way into
+ * the rest of the editor.
+ */
+export default function EditionEditorPage({ approvalMode = false }: { approvalMode?: boolean } = {}) {
   const { id, tab: tabFromUrl, slug: newsletterSlug } = useParams<{ id: string; tab?: string; slug?: string }>();
   const [searchParams] = useSearchParams();
   const navigate = useNavigate();
   const isNew = id === 'new';
   const hasBulkEmailing = useHasModule('bulk-emailing');
+  const { isSuperAdmin } = useAdminScope();
+  // Bumped to remount the canvas after content is replaced from outside it
+  // (Google Doc fill): Puck reads `data` only when it mounts.
+  const [canvasKey, setCanvasKey] = useState(0);
+  const [gdocOpen, setGdocOpen] = useState(false);
 
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -164,6 +223,19 @@ export default function EditionEditorPage() {
   const [sessionExpired, setSessionExpired] = useState(false);
   const loadedSnapshotRef = useRef<string>('');
   const draftCheckedRef = useRef(false);
+  // The blocks and edition columns as the SERVER last had them (stored shape:
+  // relative storage paths), refreshed on load and after every successful
+  // save. On version_conflict the handler diffs a refetch against this: when
+  // the only differences are research blocks' research field / edit layer (a
+  // run or a research-edit landed), those fields are adopted and the save is
+  // retried with the author's dirty state intact (spec §5.2). Anything else
+  // falls back to the reload toast.
+  const serverBlocksRef = useRef<SnapshotBlock[]>([]);
+  const serverMetaRef = useRef<ServerEditionMeta>({ title: null, preheader: null, edition_date: null, send_target_at: null, research_at: null });
+  // Latest edition state for callbacks that outlive a render (ResearchPanel).
+  const editionRef = useRef<NewsletterEdition | null>(null);
+  // newsletters_effective_research_at as the server computes it (GET research route).
+  const [effectiveResearchAt, setEffectiveResearchAt] = useState<string | null>(null);
   const [blockTemplates, setBlockTemplates] = useState<(DbBlockTemplate & BlockTemplate)[]>([]);
   const [brickTemplates, setBrickTemplates] = useState<BrickTemplate[]>([]);
   const [collectionId, setCollectionId] = useState<string | null>(null);
@@ -232,7 +304,7 @@ export default function EditionEditorPage() {
 
   const validTabs: EditionTab[] = ['editor', 'details', ...(hasBulkEmailing ? ['sending' as EditionTab] : [])];
   const defaultTab: EditionTab = 'editor';
-  const activeTab: EditionTab = validTabs.includes(tabFromUrl as EditionTab) ? (tabFromUrl as EditionTab) : defaultTab;
+  const activeTab: EditionTab = approvalMode ? 'editor' : validTabs.includes(tabFromUrl as EditionTab) ? (tabFromUrl as EditionTab) : defaultTab;
 
   const handleTabChange = (tab: string) => {
     const basePath = newsletterSlug ? `/newsletters/${newsletterSlug}/editions` : '/newsletters/editor';
@@ -312,7 +384,7 @@ export default function EditionEditorPage() {
       // drops a block would leave a stale row in the palette as a phantom.
       let blocksQuery = supabase
         .from('templates_block_defs')
-        .select('id, key, name, description, schema, html, rich_text_template, has_bricks, render_kind, component_id, block_type:key')
+        .select('id, key, name, description, schema, html, rich_text_template, has_bricks, render_kind, component_id, source_kind, data_source, block_type:key')
         .eq('is_current', true)
         .order('key');
       // Bricks: filter by parent block_def's library via inner-embed join.
@@ -335,7 +407,9 @@ export default function EditionEditorPage() {
       // `t.content.schema` etc. resolve. Before any git source was
       // connected the result set was empty and the map never ran, so
       // this latent mismatch only surfaces once real rows exist.
-      const adaptedBlocks = (blocksRes.data ?? []).map((r) => ({
+      // Research blocks (source_kind='research') get their binding hash once
+      // here; the Puck adapter and the registry read it off the template.
+      const adaptedBlocks = await withBindingHashes((blocksRes.data ?? []).map((r) => ({
         ...r,
         content: {
           html_template: r.html ?? '',
@@ -343,7 +417,7 @@ export default function EditionEditorPage() {
           has_bricks: r.has_bricks ?? false,
           schema: r.schema ?? {},
         },
-      }));
+      })));
       const adaptedBricks = (bricksRes.data ?? []).map((r) => ({
         ...r,
         content: {
@@ -427,11 +501,33 @@ export default function EditionEditorPage() {
 
       const { data: blocksData, error: blocksError } = await supabase
         .from('newsletters_edition_blocks')
-        .select('*, block_template:templates_block_defs!templates_block_def_id(id, key, name, description, schema, html, rich_text_template, has_bricks, render_kind, component_id, block_type:key)')
+        .select('*, block_template:templates_block_defs!templates_block_def_id(id, key, name, description, schema, html, rich_text_template, has_bricks, render_kind, component_id, source_kind, data_source, block_type:key)')
         .eq('edition_id', id)
         .is('deleted_at', null)   // exclude soft-deleted blocks (migration 069)
         .order('sort_order');
       if (blocksError) throw blocksError;
+
+      // Binding hash per research block def (once per def id). The edit layer
+      // records the hash it was made against; renderers resolve with it.
+      const hashedDefs = await withBindingHashes(
+        ((blocksData || []) as DbEditionBlock[]).map((b) => b.block_template).filter((t): t is DbBlockTemplate => !!t),
+      );
+      const bindingHashById = new Map(hashedDefs.filter((t) => t.binding_hash).map((t) => [t.id, t.binding_hash!]));
+
+      // Server snapshot for the version_conflict handler (stored shape).
+      serverBlocksRef.current = ((blocksData || []) as DbEditionBlock[]).map((b) => ({
+        id: b.id,
+        content: (b.content ?? {}) as Record<string, unknown>,
+        sort_order: b.sort_order,
+        templates_block_def_id: b.templates_block_def_id ?? null,
+      }));
+      serverMetaRef.current = {
+        title: editionData.title ?? null,
+        preheader: editionData.preheader ?? null,
+        edition_date: editionData.edition_date ?? null,
+        send_target_at: editionData.send_target_at ?? null,
+        research_at: editionData.research_at ?? null,
+      };
 
       const blockIds = (blocksData || []).map((b: DbEditionBlock) => b.id);
       let bricksData: DbEditionBrick[] = [];
@@ -457,6 +553,7 @@ export default function EditionEditorPage() {
       // loadTemplates fix (f800d20) missed this twin call site.
       const adaptBlockTemplate = (r: DbBlockTemplate): BlockTemplate => ({
         ...r,
+        ...(bindingHashById.has(r.id) ? { binding_hash: bindingHashById.get(r.id)! } : {}),
         content: {
           html_template: r.html ?? '',
           rich_text_template: r.rich_text_template ?? null,
@@ -487,6 +584,8 @@ export default function EditionEditorPage() {
         subject: editionData.title || '',
         preheader: editionData.preheader || '',
         status: editionData.status,
+        send_target_at: editionData.send_target_at ?? null,
+        research_at: editionData.research_at ?? null,
         blocks: (blocksData || []).map((block: DbEditionBlock) => ({
           id: block.id,
           // Per spec-builder-evaluation §3.6 (extended). When the row has
@@ -527,6 +626,99 @@ export default function EditionEditorPage() {
 
   useEffect(() => { loadEdition(); }, [loadEdition]);
   useEffect(() => { if (collectionId) loadTemplates(collectionId); }, [collectionId, loadTemplates]);
+  editionRef.current = edition;
+
+  const hasResearchBlocks = useMemo(() => (edition?.blocks ?? []).some((b) => researchBindingOf(b.block_template) !== null), [edition]);
+  // Block id → label, for the Sending tab's research send-gate message.
+  const blockNames = useMemo(
+    () => Object.fromEntries((edition?.blocks ?? []).map((b) => [b.id, b.block_template.name || b.block_template.block_type])),
+    [edition?.blocks],
+  );
+
+  // The server-derived research time for the Details tab (coalesce(research_at,
+  // send_target_at - lead)). Fetched from the research route so the UI and
+  // the cron agree; refreshed after each save.
+  const refreshEffectiveResearchAt = useCallback(async (editionId: string) => {
+    if (!editionId || editionId === 'new') return;
+    try {
+      const r = await researchService.edition(editionId);
+      setEffectiveResearchAt(r.effective_research_at);
+    } catch {
+      setEffectiveResearchAt(null);
+    }
+  }, []);
+  useEffect(() => {
+    if (activeTab === 'details' && edition?.id && edition.id !== 'new') void refreshEffectiveResearchAt(edition.id);
+  }, [activeTab, edition?.id, refreshEffectiveResearchAt]);
+
+  /**
+   * version_conflict handler, spec §5.2: refetch the edition and its blocks
+   * and compare with the server snapshot we hold. When the only differences
+   * are research blocks' research layer and/or edit layer, adopt those fields
+   * into the in-memory blocks (keeping every other dirty field), adopt the
+   * new version, and return the updated edition for a retry. Returns null
+   * when anything else changed — the caller then shows the reload toast.
+   */
+  const tryAdoptResearchChanges = useCallback(async (base?: NewsletterEdition): Promise<NewsletterEdition | null> => {
+    const cur = base ?? editionRef.current;
+    if (!cur || cur.id === 'new') return null;
+    const [{ data: ed }, { data: rows }] = await Promise.all([
+      supabase.from('newsletters_editions').select('version, title, preheader, edition_date, send_target_at, research_at').eq('id', cur.id).maybeSingle(),
+      supabase.from('newsletters_edition_blocks').select('id, content, sort_order, templates_block_def_id').eq('edition_id', cur.id).is('deleted_at', null).order('sort_order'),
+    ]);
+    if (!ed || !rows) return null;
+    const meta = serverMetaRef.current;
+    if ((ed.title ?? null) !== meta.title || (ed.preheader ?? null) !== meta.preheader || (ed.edition_date ?? null) !== meta.edition_date
+      || !sameInstant(ed.send_target_at, meta.send_target_at) || !sameInstant(ed.research_at, meta.research_at)) {
+      console.info('[edition] version_conflict: edition columns changed elsewhere; not adopting');
+      return null;
+    }
+    const researchFieldByBlock: Record<string, string> = {};
+    for (const b of cur.blocks) {
+      const binding = researchBindingOf(b.block_template);
+      if (binding) researchFieldByBlock[b.id] = binding.output.field;
+    }
+    const fresh = (rows as SnapshotBlock[]).map((r) => ({ ...r, content: (r.content ?? {}) as Record<string, unknown> }));
+    const diff = diffResearchOnly(serverBlocksRef.current, fresh, researchFieldByBlock);
+    if (!diff.only_research) {
+      console.info('[edition] version_conflict: not research-only —', diff.reason);
+      return null;
+    }
+    const bucketUrl = `${publicSupabaseUrl()}/storage/v1/object/public/media`;
+    const next: NewsletterEdition = {
+      ...cur,
+      blocks: applyResearchReplacements(cur.blocks, diff.replacements, (v) => resolveStoragePathsInJson(v, bucketUrl)),
+    };
+    serverBlocksRef.current = fresh;
+    if (typeof ed.version === 'number') editionVersionRef.current = ed.version;
+    setEdition(next);
+    return next;
+  }, []);
+
+  /** The Research panel wrote the edit layer through its RPC: mirror it in state and the server snapshot, adopt the version. */
+  const handleResearchEditsWritten = useCallback((blockId: string, edits: Record<string, unknown>, newVersion: number) => {
+    editionVersionRef.current = newVersion;
+    serverBlocksRef.current = serverBlocksRef.current.map((b) => (b.id === blockId ? { ...b, content: { ...b.content, research_edits: edits } } : b));
+    setEdition((prev) => prev ? {
+      ...prev,
+      blocks: prev.blocks.map((b) => (b.id === blockId ? { ...b, content: { ...b.content, research_edits: edits } } : b)),
+    } : prev);
+  }, []);
+
+  const renderBlockSidebarExtra = useCallback((block: EditionBlock) => {
+    const cur = editionRef.current;
+    if (!cur || !researchBindingOf(block.block_template)) return null;
+    return (
+      <ResearchPanel
+        editionId={cur.id}
+        editionStatus={cur.status}
+        block={block}
+        getVersion={() => editionVersionRef.current}
+        onEditsWritten={handleResearchEditsWritten}
+        onResearchChanged={async () => (await tryAdoptResearchChanges()) !== null}
+      />
+    );
+  }, [handleResearchEditsWritten, tryAdoptResearchChanges]);
 
   // Once the edition is loaded, baseline the clean fingerprint and check for a
   // recoverable local draft (unsaved edits a prior session couldn't persist —
@@ -550,7 +742,14 @@ export default function EditionEditorPage() {
     const fp = draftFingerprint(toDraftPayload(edition));
     if (fp === loadedSnapshotRef.current) return;
     const editionId = edition.id;
-    const t = setTimeout(() => writeDraft(editionId, toDraftPayload(edition), Date.now()), 800);
+    // Re-check when the timer fires: a save that finished inside the 800ms
+    // (the Google Doc fill saves straight away) has already cleared the draft
+    // and moved the clean baseline, so writing now would leave a stale draft
+    // and a false "unsaved changes" banner on the next load.
+    const t = setTimeout(() => {
+      if (draftFingerprint(toDraftPayload(edition)) === loadedSnapshotRef.current) return;
+      writeDraft(editionId, toDraftPayload(edition), Date.now());
+    }, 800);
     return () => clearTimeout(t);
   }, [edition, pendingDraft]);
 
@@ -579,7 +778,131 @@ export default function EditionEditorPage() {
     }
   }, [isNew, edition, collectionId, saving]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const handleSave = async (options?: { silent?: boolean }) => {
+  /**
+   * Update path for an existing edition. Atomic, concurrency-controlled save
+   * (migration 069's newsletters_save_edition). ONE RPC does: optimistic
+   * version-check → snapshot current blocks into a revision → diff-upsert the
+   * canvas blocks/bricks → soft-delete removed ones → bump version. This
+   * replaces the old destructive "update edition, delete EVERY block,
+   * re-insert one by one" — which was non-atomic (a mid-loop failure lost
+   * blocks) and had no concurrency control (a stale tab / second session /
+   * any writer silently clobbered newer content — the lost-update that wiped
+   * edition 21afd12a). Empty-id template refs map to NULL exactly as before
+   * (registry blocks carry no block_def row).
+   *
+   * On version_conflict (55006) with `allowRetry`, tryAdoptResearchChanges
+   * refetches: when only research blocks' research field / edit layer moved
+   * (a run landed while the author typed), those fields are adopted, the
+   * version is adopted, and the save runs once more with everything else
+   * intact. Any other change throws the marked conflict error (reload toast).
+   */
+  const saveExisting = async (ed: NewsletterEdition, options: { silent?: boolean } | undefined, allowRetry: boolean): Promise<void> => {
+    const payloadBlocks = ed.blocks.map((block) => ({
+      id: block.id,
+      block_type: block.block_template.block_type,
+      templates_block_def_id:
+        block.block_template.id && block.block_template.id !== '' ? block.block_template.id : null,
+      content: stripStorageUrlsInJson(block.content),
+      sort_order: block.sort_order,
+      bricks: block.bricks.map((brick) => ({
+        id: brick.id,
+        brick_type: brick.brick_template.brick_type,
+        templates_brick_def_id:
+          brick.brick_template.id && brick.brick_template.id !== '' ? brick.brick_template.id : null,
+        content: stripStorageUrlsInJson(brick.content),
+        sort_order: brick.sort_order,
+      })),
+    }));
+    const { data: saveResult, error: saveErr } = await supabase.rpc('newsletters_save_edition', {
+      p_edition_id: ed.id,
+      p_expected_version: editionVersionRef.current,
+      p_title: ed.subject || 'Untitled',
+      p_preheader: ed.preheader || null,
+      p_content_category: collection?.content_category || null,
+      p_edition_date: ed.edition_date,
+      p_blocks: payloadBlocks,
+    });
+    if (saveErr) {
+      // 55006 = version_conflict: the edition changed since we loaded it.
+      const isConflict = saveErr.code === '55006' || /version_conflict/i.test(saveErr.message || '');
+      if (isConflict) {
+        if (allowRetry) {
+          const adopted = await tryAdoptResearchChanges(ed);
+          if (adopted) return saveExisting(adopted, options, false);
+        }
+        // Do NOT overwrite — keep the operator's in-memory work and tell them
+        // to reload. Throw a marked error so callers know the save failed;
+        // the catch in handleSave skips its generic toast for this case.
+        toast.error(
+          'This edition was changed elsewhere since you opened it. Reload to get the latest before saving — your current changes were NOT saved.',
+          { duration: 12000 },
+        );
+        throw new Error('__edition_version_conflict__');
+      }
+      // Auth session died (expired/invalid JWT) — the save didn't persist.
+      // Preserve the work locally and surface it loudly; NEVER swallow this,
+      // even for a silent autosave (that's how Steve's edits were lost on
+      // 2026-07-22).
+      if (isAuthError(saveErr)) {
+        writeDraft(ed.id, toDraftPayload(ed), Date.now());
+        setSessionExpired(true);
+        throw new Error('__edition_session_expired__');
+      }
+      console.error('Save edition error:', saveErr);
+      throw saveErr;
+    }
+    // Advance our optimistic-lock counter to the just-written version so the
+    // next save from this session doesn't self-conflict.
+    const newVersion = (saveResult as { version?: number } | null)?.version;
+    if (typeof newVersion === 'number') editionVersionRef.current = newVersion;
+
+    // send_target_at / research_at (migration 092) are not parameters of
+    // newsletters_save_edition, so they go by a direct write guarded on the
+    // version the RPC just returned and bumping it, the same optimistic lock.
+    // Zero rows matched means another writer got in between: say so rather
+    // than overwrite.
+    const wantSchedule = { send_target_at: ed.send_target_at ?? null, research_at: ed.research_at ?? null };
+    if (!sameInstant(wantSchedule.send_target_at, serverMetaRef.current.send_target_at) || !sameInstant(wantSchedule.research_at, serverMetaRef.current.research_at)) {
+      const v = editionVersionRef.current;
+      const { data: upd, error: schedErr } = await supabase
+        .from('newsletters_editions')
+        .update({ ...wantSchedule, version: v + 1, updated_at: new Date().toISOString() })
+        .eq('id', ed.id)
+        .eq('version', v)
+        .select('version');
+      if (schedErr) throw schedErr;
+      const row = (upd as Array<{ version: number }> | null)?.[0];
+      if (!row) {
+        toast.error('The send target / research time were not saved: the edition changed elsewhere. Reload and set them again.', { duration: 12000 });
+      } else {
+        editionVersionRef.current = row.version;
+        serverMetaRef.current = { ...serverMetaRef.current, ...wantSchedule };
+        void refreshEffectiveResearchAt(ed.id);
+      }
+    }
+
+    // Saved — the server now holds this state; refresh the conflict snapshot,
+    // the clean baseline, drop the local recovery draft and clear any prior
+    // session-expired flag.
+    serverBlocksRef.current = payloadBlocks.map((b) => ({ id: b.id, content: b.content as Record<string, unknown>, sort_order: b.sort_order, templates_block_def_id: b.templates_block_def_id }));
+    serverMetaRef.current = {
+      ...serverMetaRef.current,
+      title: ed.subject || 'Untitled',
+      preheader: ed.preheader || null,
+      edition_date: ed.edition_date,
+    };
+    loadedSnapshotRef.current = draftFingerprint(toDraftPayload(ed));
+    clearDraft(ed.id);
+    if (sessionExpired) setSessionExpired(false);
+    if (!options?.silent) toast.success('Edition saved');
+  };
+
+  // `options.edition` saves that state instead of the rendered one, for a
+  // caller that has just computed the next edition (Google Doc fill) and
+  // cannot wait for a re-render.
+  const handleSave = async (options?: { silent?: boolean; edition?: NewsletterEdition }) => {
+    // editionRef.current is the latest rendered state (set on every render).
+    const edition = options?.edition ?? editionRef.current;
     if (!edition) return;
     setSaving(true);
     try {
@@ -604,6 +927,8 @@ export default function EditionEditorPage() {
             content_category: collection?.content_category || null,
             status: 'draft',
             collection_id: collectionId,
+            send_target_at: edition.send_target_at ?? null,
+            research_at: edition.research_at ?? null,
           })
           .select();
         if (createError) throw createError;
@@ -663,76 +988,7 @@ export default function EditionEditorPage() {
           navigate(`${edBasePath}/${newEdition.id}/editor`, { replace: true });
         }
       } else {
-        // Atomic, concurrency-controlled save (migration 069's
-        // newsletters_save_edition). ONE RPC does: optimistic version-check →
-        // snapshot current blocks into a revision → diff-upsert the canvas
-        // blocks/bricks → soft-delete removed ones → bump version. This
-        // replaces the old destructive "update edition, delete EVERY block,
-        // re-insert one by one" — which was non-atomic (a mid-loop failure
-        // lost blocks) and had no concurrency control (a stale tab / second
-        // session / any writer silently clobbered newer content — the
-        // lost-update that wiped edition 21afd12a). Empty-id template refs map
-        // to NULL exactly as before (registry blocks carry no block_def row).
-        const payloadBlocks = edition.blocks.map((block) => ({
-          id: block.id,
-          block_type: block.block_template.block_type,
-          templates_block_def_id:
-            block.block_template.id && block.block_template.id !== '' ? block.block_template.id : null,
-          content: stripStorageUrlsInJson(block.content),
-          sort_order: block.sort_order,
-          bricks: block.bricks.map((brick) => ({
-            id: brick.id,
-            brick_type: brick.brick_template.brick_type,
-            templates_brick_def_id:
-              brick.brick_template.id && brick.brick_template.id !== '' ? brick.brick_template.id : null,
-            content: stripStorageUrlsInJson(brick.content),
-            sort_order: brick.sort_order,
-          })),
-        }));
-        const { data: saveResult, error: saveErr } = await supabase.rpc('newsletters_save_edition', {
-          p_edition_id: edition.id,
-          p_expected_version: editionVersionRef.current,
-          p_title: edition.subject || 'Untitled',
-          p_preheader: edition.preheader || null,
-          p_content_category: collection?.content_category || null,
-          p_edition_date: edition.edition_date,
-          p_blocks: payloadBlocks,
-        });
-        if (saveErr) {
-          // 55006 = version_conflict: the edition changed since we loaded it.
-          // Do NOT overwrite — keep the operator's in-memory work and tell them
-          // to reload. Throw a marked error so callers know the save failed;
-          // the catch below skips its generic toast for this case.
-          const isConflict = saveErr.code === '55006' || /version_conflict/i.test(saveErr.message || '');
-          if (isConflict) {
-            toast.error(
-              'This edition was changed elsewhere since you opened it. Reload to get the latest before saving — your current changes were NOT saved.',
-              { duration: 12000 },
-            );
-            throw new Error('__edition_version_conflict__');
-          }
-          // Auth session died (expired/invalid JWT) — the save didn't persist.
-          // Preserve the work locally and surface it loudly; NEVER swallow this,
-          // even for a silent autosave (that's how Steve's edits were lost on
-          // 2026-07-22).
-          if (isAuthError(saveErr)) {
-            writeDraft(edition.id, toDraftPayload(edition), Date.now());
-            setSessionExpired(true);
-            throw new Error('__edition_session_expired__');
-          }
-          console.error('Save edition error:', saveErr);
-          throw saveErr;
-        }
-        // Advance our optimistic-lock counter to the just-written version so the
-        // next save from this session doesn't self-conflict.
-        const newVersion = (saveResult as { version?: number } | null)?.version;
-        if (typeof newVersion === 'number') editionVersionRef.current = newVersion;
-        // Saved — this in-memory state is now the clean baseline; drop the local
-        // recovery draft and clear any prior session-expired flag.
-        loadedSnapshotRef.current = draftFingerprint(toDraftPayload(edition));
-        clearDraft(edition.id);
-        if (sessionExpired) setSessionExpired(false);
-        if (!options?.silent) toast.success('Edition saved');
+        await saveExisting(edition, options, true);
       }
     } catch (error) {
       // The version-conflict path already showed a specific toast — don't stack
@@ -786,12 +1042,146 @@ export default function EditionEditorPage() {
     navigate('/login');
   };
 
+  /**
+   * Apply the author's choices from the Google Doc fill dialog, then save.
+   * Unsaved edits are saved first so research edit layers (written by their
+   * own versioned RPC, like the Research panel's) land on blocks that exist
+   * and on the current version. Everything else goes through the normal save.
+   */
+  const applyGdocFill = async (changes: GdocChange[], choices: Record<string, GdocChoice>) => {
+    if (!editionRef.current || editionRef.current.id === 'new') throw new Error('Save the edition first.');
+    if (draftFingerprint(toDraftPayload(editionRef.current)) !== loadedSnapshotRef.current) {
+      await handleSave({ silent: true });
+      if (draftFingerprint(toDraftPayload(editionRef.current)) !== loadedSnapshotRef.current) {
+        throw new Error('Your unsaved changes could not be saved. Save the edition, then try again.');
+      }
+    }
+    const base = editionRef.current;
+    const result = applyGdocMerge(base, changes, choices, blockTemplates as unknown as BlockTemplate[], freshUuid);
+    let next = result.edition;
+    for (const { blockId, edits } of result.researchEdits) {
+      const { data, error } = await supabase.rpc('newsletters_research_edits_write', {
+        p_block_id: blockId,
+        p_edits: edits,
+        p_expected_version: editionVersionRef.current,
+      });
+      if (error) {
+        if (error.code === '55006' || /version_conflict/i.test(error.message || '')) {
+          throw new Error('This edition was changed elsewhere. Reload it, then fill from the document again.');
+        }
+        throw error;
+      }
+      editionVersionRef.current = typeof data === 'number' ? data : editionVersionRef.current + 1;
+      serverBlocksRef.current = serverBlocksRef.current.map((b) => (b.id === blockId ? { ...b, content: { ...b.content, research_edits: edits } } : b));
+      next = { ...next, blocks: next.blocks.map((b) => (b.id === blockId ? { ...b, content: { ...b.content, research_edits: edits } } : b)) };
+    }
+    setEdition(next);
+    editionRef.current = next;
+    setCanvasKey((k) => k + 1);
+    await handleSave({ edition: next, silent: true });
+    if (draftFingerprint(toDraftPayload(next)) !== loadedSnapshotRef.current) {
+      throw new Error('The content was applied but not saved. Save the edition to keep it.');
+    }
+    toast.success(`Filled ${result.applied} part${result.applied === 1 ? '' : 's'} of the edition from the document and saved.${result.skipped.length ? ` Not applied: ${result.skipped.join(', ')}.` : ''}`);
+  };
+
   if (loading) {
     return <Page title="Loading..."><div className="flex items-center justify-center h-64"><LoadingSpinner /></div></Page>;
   }
 
   if (!edition) {
     return <Page title="Not Found"><div className="p-6 text-center text-[var(--gray-9)]">Edition not found</div></Page>;
+  }
+
+  // Presence / signed-out / unsaved-draft banners: shown by the editor and
+  // by the approval view alike.
+  const notices = (
+    <>
+        {presencePeers.length > 0 && (
+          <div
+            style={{
+              display: 'flex', alignItems: 'center', gap: 8,
+              padding: '6px 14px', fontSize: 13,
+              background: '#FEF3C7', color: '#92400E', borderBottom: '1px solid #FDE68A',
+            }}
+          >
+            <span aria-hidden>👀</span>
+            <span>
+              {presencePeers.length === 1
+                ? `${presencePeers[0].name} is also editing this edition`
+                : `${presencePeers.length} other people are also editing this edition`}
+              {' — your changes are protected, but coordinate to avoid conflicting saves.'}
+            </span>
+          </div>
+        )}
+        {sessionExpired && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '10px 14px', fontSize: 13, background: '#FEE2E2', color: '#991B1B', borderBottom: '1px solid #FCA5A5' }}>
+            <span aria-hidden>⚠️</span>
+            <span style={{ fontWeight: 600 }}>You&rsquo;ve been signed out.</span>
+            <span>Your recent changes are saved on this device and will be restored after you sign in again — they were <strong>not</strong> saved to the server.</span>
+            <button onClick={handleReLogin} style={{ marginLeft: 'auto', padding: '4px 12px', background: '#991B1B', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, cursor: 'pointer' }}>
+              Sign in again
+            </button>
+          </div>
+        )}
+        {pendingDraft && !sessionExpired && (
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '10px 14px', fontSize: 13, background: '#FEF3C7', color: '#92400E', borderBottom: '1px solid #FDE68A' }}>
+            <span aria-hidden>💾</span>
+            <span>Unsaved changes from {new Date(pendingDraft.savedAt).toLocaleString()} were found on this device (they never reached the server).</span>
+            <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
+              <button onClick={restoreDraft} style={{ padding: '4px 12px', background: '#92400E', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, cursor: 'pointer' }}>Restore</button>
+              <button onClick={discardDraft} style={{ padding: '4px 12px', background: 'transparent', color: '#92400E', border: '1px solid #92400E', borderRadius: 6, fontSize: 13, cursor: 'pointer' }}>Discard</button>
+            </span>
+          </div>
+        )}
+    </>
+  );
+
+  if (approvalMode) {
+    // Save pending edits; true when the server now holds what is on screen.
+    const ensureSaved = async (): Promise<boolean> => {
+      const cur = editionRef.current;
+      if (!cur) return false;
+      if (draftFingerprint(toDraftPayload(cur)) !== loadedSnapshotRef.current) {
+        await handleSave({ silent: true });
+      }
+      return !!editionRef.current && draftFingerprint(toDraftPayload(editionRef.current)) === loadedSnapshotRef.current;
+    };
+    return (
+      <EditionApprovalShell
+        editionId={edition.id}
+        subject={edition.subject || ''}
+        editionDate={edition.edition_date}
+        newsletterName={collection?.name ?? null}
+        saving={saving}
+        // The baseline is recorded by an effect after the first render; until
+        // then (empty) nothing can have been edited.
+        dirty={loadedSnapshotRef.current !== '' && draftFingerprint(toDraftPayload(edition)) !== loadedSnapshotRef.current}
+        onSave={async () => { await handleSave(); }}
+        ensureSaved={ensureSaved}
+        getVersion={() => editionVersionRef.current}
+        notices={notices}
+      >
+        <NewsletterCanvasEditor
+          edition={edition}
+          blockTemplates={blockTemplates}
+          brickTemplates={brickTemplates}
+          collectionMetadata={collectionMetadata}
+          wrapperTemplate={collection?.wrapperTemplate ?? null}
+          viewOnlineUrl={getViewOnlineUrl(
+            collection,
+            { edition_date: edition.edition_date, subject: edition.subject, title: edition.title },
+          )}
+          {...(collectionId ? { collectionId } : {})}
+          {...(enabledRegistryComponentIds ? { enabledRegistryComponentIds } : {})}
+          reviewMode
+          hideDefaultActions
+          onChange={setEdition}
+          onSave={handleSave}
+          isSaving={saving}
+        />
+      </EditionApprovalShell>
+    );
   }
 
   const status = (edition as any).status || 'draft';
@@ -810,6 +1200,7 @@ export default function EditionEditorPage() {
   const newsletterTabs: Tab[] = [
     { id: 'details', label: 'Settings', icon: <Cog6ToothIcon className={ic} /> },
     { id: 'template', label: 'Template', icon: <RectangleGroupIcon className={ic} /> },
+    ...(isSuperAdmin ? [{ id: 'approval', label: 'Approval', icon: <CheckBadgeIcon className={ic} /> }] : []),
     { id: 'editions', label: 'Editions', icon: <DocumentTextIcon className={ic} /> },
     ...(hasBulkEmailing
       ? [
@@ -844,43 +1235,7 @@ export default function EditionEditorPage() {
         activeSubTabId={activeTab}
         onSubTabChange={handleTabChange}
       >
-      {presencePeers.length > 0 && (
-        <div
-          style={{
-            display: 'flex', alignItems: 'center', gap: 8,
-            padding: '6px 14px', fontSize: 13,
-            background: '#FEF3C7', color: '#92400E', borderBottom: '1px solid #FDE68A',
-          }}
-        >
-          <span aria-hidden>👀</span>
-          <span>
-            {presencePeers.length === 1
-              ? `${presencePeers[0].name} is also editing this edition`
-              : `${presencePeers.length} other people are also editing this edition`}
-            {' — your changes are protected, but coordinate to avoid conflicting saves.'}
-          </span>
-        </div>
-      )}
-      {sessionExpired && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '10px 14px', fontSize: 13, background: '#FEE2E2', color: '#991B1B', borderBottom: '1px solid #FCA5A5' }}>
-          <span aria-hidden>⚠️</span>
-          <span style={{ fontWeight: 600 }}>You&rsquo;ve been signed out.</span>
-          <span>Your recent changes are saved on this device and will be restored after you sign in again — they were <strong>not</strong> saved to the server.</span>
-          <button onClick={handleReLogin} style={{ marginLeft: 'auto', padding: '4px 12px', background: '#991B1B', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, cursor: 'pointer' }}>
-            Sign in again
-          </button>
-        </div>
-      )}
-      {pendingDraft && !sessionExpired && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '10px 14px', fontSize: 13, background: '#FEF3C7', color: '#92400E', borderBottom: '1px solid #FDE68A' }}>
-          <span aria-hidden>💾</span>
-          <span>Unsaved changes from {new Date(pendingDraft.savedAt).toLocaleString()} were found on this device (they never reached the server).</span>
-          <span style={{ marginLeft: 'auto', display: 'flex', gap: 8 }}>
-            <button onClick={restoreDraft} style={{ padding: '4px 12px', background: '#92400E', color: '#fff', border: 'none', borderRadius: 6, fontSize: 13, cursor: 'pointer' }}>Restore</button>
-            <button onClick={discardDraft} style={{ padding: '4px 12px', background: 'transparent', color: '#92400E', border: '1px solid #92400E', borderRadius: 6, fontSize: 13, cursor: 'pointer' }}>Discard</button>
-          </span>
-        </div>
-      )}
+      {notices}
       {/* Tab Content */}
       {activeTab === 'editor' && (
         <div
@@ -911,6 +1266,7 @@ export default function EditionEditorPage() {
           }}
         >
           <NewsletterCanvasEditor
+            key={canvasKey}
             edition={edition}
             blockTemplates={blockTemplates}
             brickTemplates={brickTemplates}
@@ -930,6 +1286,10 @@ export default function EditionEditorPage() {
             // blocks available out of the box. Mustache rows still appear
             // alongside whichever registry surface is active.
             {...(enabledRegistryComponentIds ? { enabledRegistryComponentIds } : {})}
+            // Research blocks get the Research panel beneath their Puck
+            // fields (spec §5.2, §5.4); every other block renders nothing extra.
+            blockSidebarExtra={renderBlockSidebarExtra}
+            toolbarActions={<GDocFillButton onClick={() => setGdocOpen(true)} disabled={edition.id === 'new' || saving} />}
             onChange={setEdition}
             onSave={handleSave}
             onStatusChange={async (newStatus) => {
@@ -997,6 +1357,59 @@ export default function EditionEditorPage() {
               </p>
             </div>
 
+            {/* Scheduling (spec §5.3 / §6): the intended send time and the
+                research time. research_at blank = derived by the server
+                (send target minus the collection's research_lead_hours,
+                default 36h); a value pins it. */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-[var(--gray-12)] mb-1.5">
+                  Send target
+                </label>
+                <input
+                  type="datetime-local"
+                  value={toLocalInput(edition.send_target_at)}
+                  onChange={(e) => setEdition({ ...edition, send_target_at: fromLocalInput(e.target.value) })}
+                  className="w-full px-3 py-2 border border-[var(--gray-a6)] rounded-md bg-[var(--color-surface)] text-sm text-[var(--gray-12)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-8)]"
+                />
+                <p className="text-xs text-[var(--gray-9)] mt-1">
+                  When this edition is meant to go out. Research blocks are scheduled from it.
+                </p>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-[var(--gray-12)] mb-1.5">
+                  Research time{' '}
+                  <span className="font-normal text-[var(--gray-9)]">({edition.research_at ? 'pinned' : 'derived'})</span>
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="datetime-local"
+                    value={toLocalInput(edition.research_at)}
+                    onChange={(e) => setEdition({ ...edition, research_at: fromLocalInput(e.target.value) })}
+                    className="w-full px-3 py-2 border border-[var(--gray-a6)] rounded-md bg-[var(--color-surface)] text-sm text-[var(--gray-12)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-8)]"
+                  />
+                  {edition.research_at && (
+                    <button
+                      type="button"
+                      onClick={() => setEdition({ ...edition, research_at: null })}
+                      className="px-3 py-2 text-sm border border-[var(--gray-a6)] rounded-md text-[var(--gray-11)] hover:bg-[var(--gray-a3)]"
+                      title="Derive from the send target again"
+                    >
+                      Derive
+                    </button>
+                  )}
+                </div>
+                <p className="text-xs text-[var(--gray-9)] mt-1">
+                  {edition.research_at
+                    ? 'Pinned: moving the send target will not move this.'
+                    : effectiveResearchAt
+                      ? `Derived from the saved send target: ${new Date(effectiveResearchAt).toLocaleString()}${sameInstant(edition.send_target_at, serverMetaRef.current.send_target_at) ? '' : ' (updates after you save)'}.`
+                      : 'Blank = derived from the send target minus the newsletter’s research lead (36h by default). Set a send target first.'}
+                  {hasResearchBlocks ? '' : ' This edition has no research blocks yet.'}
+                </p>
+              </div>
+            </div>
+
             {edition.id && (
               <ContentAccessControl contentType="newsletter_edition" entityId={edition.id} />
             )}
@@ -1025,6 +1438,9 @@ export default function EditionEditorPage() {
             collection={collection}
             newsletterSlug={newsletterSlug}
             editionStatus={(edition as { status?: string }).status}
+            // For the send gate's message: block id → the block's label.
+            blockNames={blockNames}
+            beforeApprovalRequest={async () => { await handleSave({ silent: true }); }}
             getRenderedHtml={edition
               ? async () => {
                   // Build per-block render metadata: react-email blocks
@@ -1080,6 +1496,13 @@ export default function EditionEditorPage() {
           />
         </div>
       )}
+      <GDocFillDialog
+        isOpen={gdocOpen}
+        onClose={() => setGdocOpen(false)}
+        edition={edition}
+        blockTemplates={blockTemplates as unknown as BlockTemplate[]}
+        onApply={applyGdocFill}
+      />
       </WorkspaceLayout>
     </Page>
   );
@@ -1104,11 +1527,12 @@ async function seedFromTemplateSkeleton(libraryId: string): Promise<NewsletterEd
 
   const { data: defs, error } = await supabase
     .from('templates_block_defs')
-    .select('id, key, name, description, schema, html, rich_text_template, has_bricks, render_kind, component_id, block_type:key')
+    .select('id, key, name, description, schema, html, rich_text_template, has_bricks, render_kind, component_id, source_kind, data_source, block_type:key')
     .eq('library_id', libraryId)
     .eq('is_current', true);
   if (error) throw error;
-  const rows = (defs ?? []) as unknown as Array<SkeletonBlockDef & { block_type: string }>;
+  // Seeded research blocks carry their binding hash like loaded ones do.
+  const rows = await withBindingHashes((defs ?? []) as unknown as Array<SkeletonBlockDef & { block_type: string; source_kind?: string | null; data_source?: unknown }>);
   const registry = buildEmailRegistry(
     rows.map((r) => ({ ...r, content: { html_template: r.html ?? '', rich_text_template: r.rich_text_template ?? null, has_bricks: r.has_bricks ?? false, schema: r.schema ?? {} } })) as never,
     [],

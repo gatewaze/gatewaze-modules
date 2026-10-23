@@ -15,7 +15,7 @@ const contentHubModule: GatewazeModule = {
   visibility: 'hidden',
   name: 'Content',
   description: 'Unified admin shell for content workflows — triage, library, rules, and sources.',
-  version: '1.0.0',
+  version: '1.0.1',
   features: ['content-hub'],
 
   // No hard dependencies: each tab is contributed via slots and only
