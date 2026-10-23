@@ -39,6 +39,10 @@ describe('cleanDocHtml', () => {
     expect(out).toContain('<img src="https://lh7-rt.googleusercontent.com/docsz/abc">');
     expect(out).not.toContain('data:image');
   });
+  it('drops a script that a single removal would leave behind', () => {
+    const nested = cleanDocHtml('<body><p>Text</p><scr<script>x</script>ipt>alert(1)</script><!<!-- a -->-- b --></body>');
+    expect(nested).not.toMatch(/<script|alert\(1\)|<!--/i);
+  });
   it('drops scripts and empty paragraphs', () => {
     expect(out).not.toContain('alert');
     expect(out).not.toMatch(/<p>\s*<\/p>/);

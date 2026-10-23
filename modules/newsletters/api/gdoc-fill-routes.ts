@@ -27,6 +27,7 @@
 import type { Router, Request, Response, NextFunction } from 'express';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { rateLimit } from '../lib/rate-limit.js';
+import { stripTags } from '../lib/sanitize-inline.js';
 import {
   parseGoogleDocId,
   cleanDocHtml,
@@ -284,7 +285,7 @@ async function runJob(jobId: string, editionId: string, userId: string, input: {
     console.log(`[newsletters] gdoc-fill job=${jobId} user=${userId} edition=${editionId} source=${'html' in input ? 'pasted-html' : `google-doc:${input.docId}`}`);
     const rawHtml = 'html' in input ? input.html : await fetchGoogleDocHtml(input.docId);
     const docHtml = cleanDocHtml(rawHtml);
-    if (docHtml.replace(/<[^>]+>/g, '').trim().length < 20) throw new UserFacingError('The document looks empty.', 422, 'empty_doc');
+    if (stripTags(docHtml).trim().length < 20) throw new UserFacingError('The document looks empty.', 422, 'empty_doc');
     const { blocks, library } = await loadTargets(editionId);
     if (blocks.length === 0 && library.length === 0) {
       throw new UserFacingError('This newsletter has no template blocks to fill.', 422, 'no_blocks');

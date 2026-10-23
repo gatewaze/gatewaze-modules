@@ -108,7 +108,7 @@ export function cleanItemText(v: unknown, max: number): string {
   return String(v ?? '')
     // eslint-disable-next-line no-control-regex
     .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/g, ' ')
-    .replace(/<\/?item[^>]*>/gi, ' ')
+    .replace(/<\/?item[^<>]*>/gi, ' ')
     .replace(/[ \t]+/g, ' ')
     .replace(/\n{3,}/g, '\n\n')
     .trim()

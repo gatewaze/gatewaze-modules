@@ -24,7 +24,7 @@ const socialPostsModule: GatewazeModule = {
   name: 'Social Posts',
   description:
     'Write LinkedIn post drafts from curated content with AI: pick blog posts, videos, events or recaps, pick a format, then edit, copy and save the draft.',
-  version: '1.0.0',
+  version: '1.0.1',
 
   features: ['social-posts'],
 
