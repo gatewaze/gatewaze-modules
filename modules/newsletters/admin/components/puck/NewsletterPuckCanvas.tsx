@@ -489,6 +489,7 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
       const body = (await res.json().catch(() => null)) as
         | {
             kind?: 'published' | 'skipped';
+            git?: boolean;
             reason?: string;
             message?: string;
             error?: { message?: string };
@@ -499,7 +500,9 @@ const NewsletterPuckCanvasInner: FC<NewsletterPuckCanvasProps> = ({
       if (!res.ok) {
         throw new Error(body?.error?.message ?? `publish-to-git ${res.status}`);
       }
-      if (body?.kind === 'skipped') {
+      if (body?.kind === 'published' && body.git === false) {
+        toast.success('Edition published.');
+      } else if (body?.kind === 'skipped') {
         toast.warning(body.message ?? 'Edition saved to the database, but no external git repo is connected — nothing published to git.');
       } else if (body?.externalPush && body.externalPush.pushed === false) {
         // Internal commit landed but the mirror push to the external
