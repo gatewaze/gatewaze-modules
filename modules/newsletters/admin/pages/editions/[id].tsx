@@ -1086,10 +1086,18 @@ export default function EditionEditorPage({ approvalMode = false }: { approvalMo
   };
 
   if (loading) {
+    // The approval view is full screen from the first paint; no admin page
+    // frame shows while it loads.
+    if (approvalMode) {
+      return <Page title="Loading..."><div className="fixed inset-0 z-[60] flex items-center justify-center bg-[var(--color-background)]"><LoadingSpinner /></div></Page>;
+    }
     return <Page title="Loading..."><div className="flex items-center justify-center h-64"><LoadingSpinner /></div></Page>;
   }
 
   if (!edition) {
+    if (approvalMode) {
+      return <Page title="Not Found"><div className="fixed inset-0 z-[60] flex items-center justify-center bg-[var(--color-background)] text-[var(--gray-9)]">This edition no longer exists.</div></Page>;
+    }
     return <Page title="Not Found"><div className="p-6 text-center text-[var(--gray-9)]">Edition not found</div></Page>;
   }
 
