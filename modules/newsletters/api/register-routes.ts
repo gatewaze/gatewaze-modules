@@ -116,6 +116,22 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
   const router = Router();
   router.use(requireJwt());
 
+  // Research blocks: run / cancel / revert / status (api/research-routes.ts).
+  // Each handler re-checks is_admin() as the caller on top of requireJwt.
+  const { registerResearchRoutes } = await import('./research-routes.js');
+  registerResearchRoutes(router, wrap, context?.enqueueJob as Parameters<typeof registerResearchRoutes>[2]);
+
+  // Edition approval: request / decide, with the notification emails
+  // (api/approval-routes.ts). The rules live in the migration-096 functions,
+  // called as the caller.
+  const { registerApprovalRoutes } = await import('./approval-routes.js');
+  registerApprovalRoutes(router, wrap);
+
+  // Google Doc → this edition's blocks: fetch + AI mapping, returned as a
+  // proposal the editor merges (api/gdoc-fill-routes.ts). Writes nothing.
+  const { registerGdocFillRoutes } = await import('./gdoc-fill-routes.js');
+  registerGdocFillRoutes(router, wrap);
+
   router.post('/newsletters/editions/:editionId/publish-to-git', wrap(publishHandler));
   router.post('/newsletters/editions/:editionId/unpublish-from-git', wrap(unpublishHandler));
   router.post('/newsletters/collections/:collectionId/init-repo', wrap(initRepoHandler));

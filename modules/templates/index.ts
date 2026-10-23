@@ -19,7 +19,7 @@ const templatesModule: GatewazeModule = {
   name: 'Templates',
   description:
     'Shared block/wrapper authoring: marker grammar, parser, source ingest, A/B engine, version pinning. Consumed by newsletters, sites, and future content modules.',
-  version: '0.1.0',
+  version: '0.2.0',
 
   features: [
     'templates',
@@ -65,6 +65,7 @@ const templatesModule: GatewazeModule = {
     'migrations/028_sources_token_column_privileges.sql',
     // Blocks a new edition starts with, from the template repo's edition.json.
     'migrations/029_library_new_edition_blocks.sql',
+    'migrations/031_block_def_research_binding.sql',
   ],
 
   // HTTP routes per spec-templates-module §6.9. Mounted under

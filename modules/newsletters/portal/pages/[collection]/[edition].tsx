@@ -21,6 +21,7 @@ import { editionFolderSlug } from '@gatewaze-modules/newsletters/lib/edition-slu
 // suffix, so without this pre-pass the literal token leaks into the rendered
 // HTML and a reader sees `Hey {{first_name|"there"}}!`.
 import { substituteMergeFieldsInContent } from '@gatewaze-modules/newsletters/lib/merge-fields'
+import { resolveContentForDef } from '@gatewaze-modules/newsletters/lib/research-merge'
 
 const NO_RECIPIENT_ATTRS = {} as const
 
@@ -196,15 +197,25 @@ export default function NewsletterEditionPage({ params }: { params: { collection
         if (defIds.length) {
           const { data: defs } = await supabase
             .from('templates_block_defs')
-            .select('id, name, html, rich_text_template')
+            .select('id, name, html, rich_text_template, source_kind, data_source')
             .in('id', defIds)
           for (const d of defs || []) defsById[d.id] = d
         }
 
-        const blocks = (rpcBlocks || []).map((b: any) => ({
+        // Research blocks render their RESOLVED content (research layer plus
+        // the author's edits, research_edits dropped), the same resolver the
+        // email uses, never the raw research field.
+        const hashes = new Map<string, string>()
+        const resolved = await Promise.all(
+          (rpcBlocks || []).map((b: any) =>
+            b.gated ? b.content : resolveContentForDef(b.content, defsById[b.templates_block_def_id], hashes),
+          ),
+        )
+
+        const blocks = (rpcBlocks || []).map((b: any, i: number) => ({
           id: b.id,
           block_type: b.block_type,
-          content: b.content,
+          content: resolved[i],
           sort_order: b.sort_order,
           gated: b.gated,
           placeholder: b.placeholder,

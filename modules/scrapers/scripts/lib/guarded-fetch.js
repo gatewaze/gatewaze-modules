@@ -104,8 +104,11 @@ function checkUrl(raw, allowHttp) {
 }
 
 /**
- * Fetch with the guard. Returns { status, contentType, buffer, finalUrl }.
- * A non-2xx final response returns its status with an empty buffer.
+ * Fetch with the guard. Returns { status, contentType, buffer, finalUrl,
+ * headers } where `headers` is the final response's headers as a lowercase
+ * map (so a caller can do conditional GET: send If-None-Match, read etag).
+ * A non-2xx final response (including 304) returns its status with an
+ * empty buffer.
  *
  * Options:
  *   maxBytes      body cap (default 10 MB)
@@ -139,7 +142,7 @@ export async function guardedFetch(rawUrl, options = {}) {
     if (res.status >= 300 && res.status < 400) {
       const loc = res.headers.get('location');
       res.body?.resume?.();
-      if (!loc) return { status: res.status, contentType: '', buffer: Buffer.alloc(0), finalUrl: u.toString() };
+      if (!loc) return { status: res.status, contentType: '', buffer: Buffer.alloc(0), finalUrl: u.toString(), headers: headerMap(res.headers) };
       if (hop === maxRedirects) break;
       url = new URL(loc, u).toString(); // checked again at the top of the loop
       continue;
@@ -148,7 +151,7 @@ export async function guardedFetch(rawUrl, options = {}) {
     const contentType = String(res.headers.get('content-type') ?? '').split(';')[0].trim().toLowerCase();
     if (!res.ok) {
       res.body?.resume?.();
-      return { status: res.status, contentType, buffer: Buffer.alloc(0), finalUrl: u.toString() };
+      return { status: res.status, contentType, buffer: Buffer.alloc(0), finalUrl: u.toString(), headers: headerMap(res.headers) };
     }
 
     const declared = Number(res.headers.get('content-length') ?? 0);
@@ -168,9 +171,17 @@ export async function guardedFetch(rawUrl, options = {}) {
       }
       chunks.push(chunk);
     }
-    return { status: res.status, contentType, buffer: Buffer.concat(chunks, total), finalUrl: u.toString() };
+    return { status: res.status, contentType, buffer: Buffer.concat(chunks, total), finalUrl: u.toString(), headers: headerMap(res.headers) };
   }
   throw new FetchRefused('too many redirects');
+}
+
+function headerMap(h) {
+  const out = {};
+  if (!h) return out;
+  if (typeof h.forEach === 'function') h.forEach((v, k) => { out[String(k).toLowerCase()] = String(v); });
+  else if (h.raw) for (const [k, v] of Object.entries(h.raw())) out[k.toLowerCase()] = Array.isArray(v) ? v.join(', ') : String(v);
+  return out;
 }
 
 const IMAGE_TYPES = /^(image\/[a-z0-9.+-]+|application\/octet-stream|binary\/octet-stream)$/;

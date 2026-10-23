@@ -54,3 +54,16 @@ describe('useEditionDraft', () => {
     expect(() => clearDraft('ed1')).not.toThrow();
   });
 });
+
+describe('draftFingerprint', () => {
+  it('does not depend on object key order', () => {
+    const a = { subject: 's', preheader: 'p', edition_date: 'd', blocks: [{ content: { title: 'T', body: 'B', items: [{ a: 1, b: 2 }] } }] };
+    const b = { blocks: [{ content: { items: [{ b: 2, a: 1 }], body: 'B', title: 'T' } }], edition_date: 'd', preheader: 'p', subject: 's' };
+    expect(draftFingerprint(a as never)).toBe(draftFingerprint(b as never));
+  });
+  it('still sees a real change', () => {
+    const a = { subject: 's', preheader: 'p', edition_date: 'd', blocks: [{ content: { title: 'T' } }] };
+    const b = { subject: 's', preheader: 'p', edition_date: 'd', blocks: [{ content: { title: 'T2' } }] };
+    expect(draftFingerprint(a as never)).not.toBe(draftFingerprint(b as never));
+  });
+});

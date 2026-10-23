@@ -1,6 +1,7 @@
 import type { Express, Request, Response } from 'express';
 import { createClient } from '@supabase/supabase-js';
 import type { ModuleContext } from '@gatewaze/shared';
+import { DETAIL_CONTENT_TYPE_RE, DETAIL_UUID_RE, shapeDetail } from './lib/detail';
 
 let _sb: ReturnType<typeof createClient> | null = null;
 function sb() {
@@ -840,6 +841,37 @@ export function registerRoutes(app: Express, _ctx?: ModuleContext) {
       res.json({ data: { processed, failed, errors } });
     } catch (err: any) {
       res.status(500).json({ error: { code: 'internal', message: err?.message ?? String(err) } });
+    }
+  });
+
+  // ──────────────────────────────────────────────────────────────────────────
+  // Item detail for the drawer preview: link to the original, featured image,
+  // stored body. Keyed on (content_type, content_id) rather than the triage
+  // id so it works for every tab, including rows that have no triage item.
+  // The content type's adapter supplies it (content_publish_adapters
+  // .inbox_detail_fn via content_inbox_detail); types without one get null.
+  // ──────────────────────────────────────────────────────────────────────────
+  app.get('/api/admin/inbox/detail/:content_type/:content_id', async (req: Request, res: Response) => {
+    const fail = await requireAdmin(req, res); if (fail) return fail;
+    try {
+      const contentType = String(req.params.content_type ?? '');
+      const contentId = String(req.params.content_id ?? '');
+      if (!DETAIL_CONTENT_TYPE_RE.test(contentType) || !DETAIL_UUID_RE.test(contentId)) {
+        return res.status(400).json({ error: { code: 'validation', message: 'content_type and a uuid content_id are required' } });
+      }
+      const { data, error } = await sb().rpc('content_inbox_detail', {
+        p_content_type: contentType,
+        p_content_id: contentId,
+      });
+      if (error) {
+        // A database without content-platform/012 has no dispatcher yet: no
+        // preview, not an error the reviewer can act on.
+        if (error.code === 'PGRST202' || error.code === '42883') return res.json({ data: null });
+        return res.status(500).json({ error: { code: 'internal', message: error.message } });
+      }
+      return res.json({ data: shapeDetail(data) });
+    } catch (err: any) {
+      return res.status(500).json({ error: { code: 'internal', message: err?.message ?? String(err) } });
     }
   });
 

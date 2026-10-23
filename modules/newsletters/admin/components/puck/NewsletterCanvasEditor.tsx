@@ -11,6 +11,7 @@ import type { FC, ReactNode } from 'react';
 import { NewsletterPuckCanvas } from './NewsletterPuckCanvas';
 import type {
   NewsletterEdition,
+  EditionBlock,
   BlockTemplate,
   BrickTemplate,
 } from '../../utils/types.js';
@@ -44,6 +45,10 @@ interface NewsletterCanvasEditorProps {
   hideDefaultActions?: boolean;
   /** Custom toolbar actions (e.g. a broadcast's Save / Send buttons). */
   toolbarActions?: ReactNode;
+  /** Extra sidebar panel for the selected block (see NewsletterPuckCanvas). */
+  blockSidebarExtra?: (block: EditionBlock) => ReactNode;
+  /** Approver's cut-down editor (see NewsletterPuckCanvas). */
+  reviewMode?: boolean;
 }
 
 export const NewsletterCanvasEditor: FC<NewsletterCanvasEditorProps> = (props) => (
@@ -61,6 +66,8 @@ export const NewsletterCanvasEditor: FC<NewsletterCanvasEditorProps> = (props) =
     {...(props.viewOnlineUrl !== undefined ? { viewOnlineUrl: props.viewOnlineUrl } : {})}
     {...(props.hideDefaultActions !== undefined ? { hideDefaultActions: props.hideDefaultActions } : {})}
     {...(props.toolbarActions !== undefined ? { toolbarActions: props.toolbarActions } : {})}
+    {...(props.blockSidebarExtra ? { blockSidebarExtra: props.blockSidebarExtra } : {})}
+    {...(props.reviewMode ? { reviewMode: true } : {})}
   />
 );
 

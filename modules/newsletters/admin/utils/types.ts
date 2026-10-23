@@ -6,6 +6,21 @@
 
 export type OutputFormat = 'html' | 'substack' | 'beehiiv';
 
+/**
+ * The research binding a block def declares in its DATA_SOURCE marker
+ * (spec-content-discovery-and-research-blocks.md §5.1). Mirrors
+ * `BlockDefDataSourceResearch` in modules/templates/types; kept structural
+ * here so the editor's types don't import the templates module.
+ */
+export interface ResearchBinding {
+  kind: 'research';
+  input: { kind: 'discovery_posts'; [k: string]: unknown } | { kind: 'recipe'; use_case: string; [k: string]: unknown };
+  transform?: { kind: 'template'; group_by?: string; max_items?: number; max_per_group?: number; [k: string]: unknown }
+    | { kind: 'recipe'; use_case: string; [k: string]: unknown };
+  output: { field: string; format?: 'array' | 'richtext' | 'text' };
+  schedule?: 'edition' | 'daily' | 'manual';
+}
+
 export interface BlockTemplate {
   id: string;
   name: string;
@@ -17,6 +32,17 @@ export interface BlockTemplate {
    * into react-email by the declarative engine).
    */
   render_kind?: 'mustache' | 'react-email' | 'declarative';
+  component_id?: string | null;
+  /** templates_block_defs.source_kind; 'research' means `data_source` is a ResearchBinding. */
+  source_kind?: string | null;
+  /** templates_block_defs.data_source, as stored. Only read when source_kind === 'research'. */
+  data_source?: unknown;
+  /**
+   * sha1 of the canonical JSON of `data_source`, computed once when the block
+   * def is loaded (lib/research-merge bindingHash). The edit layer records
+   * the hash it was made against; a mismatch sets the edits aside.
+   */
+  binding_hash?: string;
   content: {
     html_template: string;
     rich_text_template?: string | null;
@@ -55,7 +81,13 @@ export interface NewsletterEdition {
   id: string;
   edition_date: string;
   subject?: string;
+  title?: string;
   preheader?: string;
+  status?: string;
+  /** When the edition is meant to go out (newsletters_editions.send_target_at, ISO). */
+  send_target_at?: string | null;
+  /** Pinned research time (ISO). null/undefined = derived from send_target_at (spec §5.3). */
+  research_at?: string | null;
   blocks: EditionBlock[];
 }
 

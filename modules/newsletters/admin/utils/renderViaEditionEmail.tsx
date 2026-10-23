@@ -64,7 +64,14 @@ export async function renderViaEditionEmail(args: RenderViaEditionEmailArgs): Pr
     edition_date: context.edition.edition_date,
     ...(context.edition.subject !== undefined ? { subject: context.edition.subject } : {}),
     ...(context.edition.preheader !== undefined ? { preheader: context.edition.preheader } : {}),
-    blocks: context.blocks.map<EditionBlock>((b) => ({
+    blocks: context.blocks.map<EditionBlock>((b) => {
+      // Research blocks (spec §5.2): when the context builder joined the block
+      // def's source_kind / data_source / binding_hash, carry them so
+      // EditionEmail resolves the output field instead of rendering the raw
+      // research layer. A context without them renders the research layer
+      // with any edit layer set aside.
+      const research = b as unknown as { source_kind?: string | null; data_source?: unknown; binding_hash?: string };
+      return {
       id: b.id,
       // EditionEmail looks at block_template.content.html_template ONLY
       // when no meta is provided. Since we always provide meta below,
@@ -73,6 +80,9 @@ export async function renderViaEditionEmail(args: RenderViaEditionEmailArgs): Pr
         id: '', // unused by EditionEmail when meta is provided
         name: b.block_type,
         block_type: b.block_type,
+        ...(research.source_kind === 'research'
+          ? { source_kind: research.source_kind, data_source: research.data_source, ...(research.binding_hash ? { binding_hash: research.binding_hash } : {}) }
+          : {}),
         content: {
           html_template: b.template,
           has_bricks: b.has_bricks,
@@ -91,7 +101,8 @@ export async function renderViaEditionEmail(args: RenderViaEditionEmailArgs): Pr
         content: br.content,
         sort_order: br.sort_order,
       })),
-    })),
+      };
+    }),
   };
 
   const blockMeta = new Map<string, BlockRenderMeta>();

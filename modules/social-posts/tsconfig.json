@@ -1,0 +1,19 @@
+{
+  // index.ts and admin/ import the host app (@gatewaze/shared, the admin's
+  // "@/" alias), so they are typechecked inside a gatewaze checkout, not here.
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    "rootDir": ".",
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "types": ["node"]
+  },
+  "include": ["lib/**/*.ts", "api/**/*.ts", "__tests__/**/*.ts"]
+}
