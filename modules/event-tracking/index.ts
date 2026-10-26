@@ -7,7 +7,7 @@ const eventTrackingModule: GatewazeModule = {
   group: 'events',
   name: 'Event Tracking',
   description: 'UTM tracking, referral links, conversion analytics, and attribution for events',
-  version: '1.0.0',
+  version: '1.0.1',
   features: [
     'event-tracking',
     'event-tracking.utm',
