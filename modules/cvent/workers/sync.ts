@@ -46,19 +46,31 @@ export default async function handleSync(_job: Job) {
   const deps = { db, cvent, log: (m: string) => console.warn(m) };
   const results = [];
 
-  for (const event of events) {
-    if (Date.now() > limits.deadline) break;
+  // Each event gets an equal share of what is left of the budget, so one
+  // event's backfill cannot starve the live events behind it. Start from a
+  // different event each run so the same one is not always first.
+  const offset = Math.floor(Date.now() / 60_000) % events.length;
+  const ordered = [...events.slice(offset), ...events.slice(0, offset)];
+
+  for (let i = 0; i < ordered.length; i++) {
+    const event = ordered[i];
+    const now = Date.now();
+    if (now > limits.deadline) break;
+    const share = Math.floor((limits.deadline - now) / (ordered.length - i));
+    const eventLimits = { ...limits, deadline: now + share };
     try {
-      const pushed = await syncEvent(deps, event, limits);
-      const contacts = Date.now() > limits.deadline ? null : await pushChangedContacts(deps, event, limits);
+      const pushed = await syncEvent(deps, event, eventLimits);
+      const contacts = pushed.aborted || Date.now() > eventLimits.deadline ? null : await pushChangedContacts(deps, event, eventLimits);
       results.push({ event: event.event_id, ...pushed, contacts });
-      if (pushed.attempted || contacts?.updated) {
+      if (pushed.attempted || contacts?.updated || pushed.aborted) {
         console.log(
           `[cvent] ${event.event_id}: ${pushed.created} created, ${pushed.alreadyExists} existed, ${pushed.failed} failed` +
             (contacts ? `, ${contacts.updated} contacts updated` : '') +
-            (pushed.remaining ? ' (more pending)' : ''),
+            (pushed.aborted ? ` (stopped: ${pushed.aborted})` : pushed.remaining ? ' (more pending)' : ''),
         );
       }
+      // A Cvent-wide failure on one event will hit the others too; stop the run.
+      if (pushed.aborted || contacts?.aborted) break;
     } catch (e) {
       console.error(`[cvent] ${event.event_id}: ${(e as Error).message}`);
       results.push({ event: event.event_id, error: (e as Error).message });

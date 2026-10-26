@@ -51,6 +51,7 @@ interface SyncNowResult {
   alreadyExists: number;
   failed: number;
   remaining: boolean;
+  aborted?: string;
   errors: string[];
 }
 
@@ -109,6 +110,7 @@ export function CventTab({ eventId, eventUuid }: CventTabProps) {
 
   const [syncing, setSyncing] = useState(false);
   const [syncResult, setSyncResult] = useState<SyncNowResult | null>(null);
+  const [retrying, setRetrying] = useState(false);
 
   const [registrantSearch, setRegistrantSearch] = useState('');
   const [registrants, setRegistrants] = useState<Registrant[]>([]);
@@ -174,15 +176,32 @@ export function CventTab({ eventId, eventUuid }: CventTabProps) {
       const data = await api<SyncNowResult & { status: SyncStatus }>(`/events/${id}/sync-now`, { method: 'POST' });
       setSyncResult(data);
       setStatus(data.status ?? {});
-      toast.success(
-        data.remaining
-          ? `Pushed ${data.created + data.alreadyExists} so far; the worker will finish the rest within a few minutes.`
-          : `Done: ${data.created} new, ${data.alreadyExists} already in Cvent, ${data.failed} failed`,
-      );
+      if (data.aborted) {
+        toast.error(`Stopped: ${data.aborted}`);
+      } else {
+        toast.success(
+          data.remaining
+            ? `Pushed ${data.created + data.alreadyExists} so far; the worker will finish the rest within a few minutes.`
+            : `Done: ${data.created} new, ${data.alreadyExists} already in Cvent, ${data.failed} failed`,
+        );
+      }
     } catch (err) {
       toast.error('Sync failed: ' + (err as Error).message);
     } finally {
       setSyncing(false);
+    }
+  }
+
+  async function retryFailed() {
+    setRetrying(true);
+    try {
+      const data = await api<{ reset: number }>(`/events/${id}/retry-failed`, { method: 'POST' });
+      toast.success(`${data.reset} registration${data.reset === 1 ? '' : 's'} will be retried on the next run`);
+      await load();
+    } catch (err) {
+      toast.error('Could not reset: ' + (err as Error).message);
+    } finally {
+      setRetrying(false);
     }
   }
 
@@ -313,11 +332,11 @@ export function CventTab({ eventId, eventUuid }: CventTabProps) {
                 />
               )}
               <Button
-                variant="secondary"
+                variant="soft"
                 size="sm"
                 onClick={fetchAdmissionItems}
-                isLoading={loadingItems}
-                disabled={!settings.cvent_event_id || !credentialsConfigured}
+                loading={loadingItems}
+                disabled={loadingItems || !settings.cvent_event_id || !credentialsConfigured}
               >
                 Fetch
               </Button>
@@ -359,7 +378,7 @@ export function CventTab({ eventId, eventUuid }: CventTabProps) {
             </div>
           )}
 
-          <Button onClick={save} isLoading={saving} className="w-full">
+          <Button onClick={save} loading={saving} disabled={saving} className="w-full">
             Save Cvent settings
           </Button>
         </div>
@@ -373,7 +392,8 @@ export function CventTab({ eventId, eventUuid }: CventTabProps) {
               Active registrations for this event and how many are in Cvent.
             </p>
           </div>
-          <Button variant="secondary" size="sm" onClick={load} icon={<ArrowPathIcon className="w-4 h-4" />}>
+          <Button variant="soft" size="sm" onClick={load}>
+            <ArrowPathIcon className="w-4 h-4" />
             Refresh
           </Button>
         </div>
@@ -394,19 +414,24 @@ export function CventTab({ eventId, eventUuid }: CventTabProps) {
         )}
 
         <Button
-          variant="secondary"
+          variant="soft"
           onClick={syncNow}
-          isLoading={syncing}
-          disabled={!isConfigured || !credentialsConfigured}
+          loading={syncing}
+          disabled={syncing || !isConfigured || !credentialsConfigured}
           className="w-full"
-          icon={<ArrowPathIcon className="w-4 h-4" />}
         >
+          <ArrowPathIcon className="w-4 h-4" />
           {syncing ? 'Syncing to Cvent…' : 'Sync now'}
         </Button>
         <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
           Pushes pending registrants now (about 20 seconds per click). With live sync on, the worker does this on its own every minute.
           Safe to run again; registrants already in Cvent are skipped.
         </p>
+        {(status.failed ?? 0) > 0 && (
+          <Button variant="soft" size="sm" onClick={retryFailed} loading={retrying} disabled={retrying} className="mt-2 w-full">
+            Retry failed ({status.failed})
+          </Button>
+        )}
 
         {syncResult && (
           <div className="mt-3 p-3 bg-gray-50 dark:bg-gray-800/50 rounded-xl text-xs text-gray-600 dark:text-gray-300 space-y-0.5">
@@ -461,11 +486,11 @@ export function CventTab({ eventId, eventUuid }: CventTabProps) {
             )}
           </div>
           <Button
-            variant="secondary"
+            variant="soft"
             size="sm"
             onClick={testSyncRegistrant}
-            isLoading={testSyncing}
-            disabled={!selectedRegistrantId || !isConfigured || !credentialsConfigured}
+            loading={testSyncing}
+            disabled={testSyncing || !selectedRegistrantId || !isConfigured || !credentialsConfigured}
             className="w-full"
           >
             Test sync to Cvent

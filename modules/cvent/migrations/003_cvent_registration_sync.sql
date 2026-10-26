@@ -35,6 +35,10 @@ CREATE TRIGGER cvent_registration_sync_updated_at
 -- Written only by the worker and the module's API routes (service role).
 -- Admins may read it; nobody else sees it.
 ALTER TABLE public.cvent_registration_sync ENABLE ROW LEVEL SECURITY;
+-- Supabase's default privileges hand every table right to anon and
+-- authenticated; keep only SELECT for authenticated (the admin read policy).
+REVOKE ALL ON public.cvent_registration_sync FROM PUBLIC, anon, authenticated;
+GRANT SELECT ON public.cvent_registration_sync TO authenticated;
 DROP POLICY IF EXISTS cvent_registration_sync_admin_read ON public.cvent_registration_sync;
 CREATE POLICY cvent_registration_sync_admin_read ON public.cvent_registration_sync
   FOR SELECT TO authenticated
@@ -42,6 +46,7 @@ CREATE POLICY cvent_registration_sync_admin_read ON public.cvent_registration_sy
 
 -- Active registrations that still need a push: never attempted, or failed and
 -- due for a retry (backoff doubles per attempt, capped at a day).
+DROP FUNCTION IF EXISTS public.cvent_pending_registrations(uuid, integer, integer);
 CREATE OR REPLACE FUNCTION public.cvent_pending_registrations(
   p_event_id uuid,
   p_limit integer DEFAULT 100,
@@ -77,6 +82,7 @@ AS $$
 $$;
 
 -- Synced registrations whose person row changed after the last push.
+DROP FUNCTION IF EXISTS public.cvent_changed_contacts(uuid, integer);
 CREATE OR REPLACE FUNCTION public.cvent_changed_contacts(
   p_event_id uuid,
   p_limit integer DEFAULT 100
@@ -86,12 +92,13 @@ RETURNS TABLE (
   person_id uuid,
   email text,
   attributes jsonb,
-  badge_hash text
+  badge_hash text,
+  cvent_contact_id text
 )
 LANGUAGE sql STABLE
 SET search_path = public
 AS $$
-  SELECT s.registration_id, s.person_id, p.email, p.attributes, s.badge_hash
+  SELECT s.registration_id, s.person_id, p.email, p.attributes, s.badge_hash, s.cvent_contact_id
   FROM public.cvent_registration_sync s
   JOIN public.people p ON p.id = s.person_id
   WHERE s.event_id = p_event_id
@@ -103,6 +110,7 @@ AS $$
 $$;
 
 -- Counts for the admin tab.
+DROP FUNCTION IF EXISTS public.cvent_event_sync_status(uuid);
 CREATE OR REPLACE FUNCTION public.cvent_event_sync_status(p_event_id uuid)
 RETURNS jsonb
 LANGUAGE sql STABLE

@@ -8,6 +8,10 @@
  *   - cvent_changed_contacts: synced rows whose person changed since the sync,
  *     so badge fields (name, title, company) are pushed again.
  *
+ * A failure the client marks `transient` (Cvent down, credentials rejected,
+ * rate limited, timeout) stops the batch without writing ledger rows, so an
+ * outage does not use up every registration's retry budget.
+ *
  * Nothing here talks to Cvent directly; it goes through CventClient so tests
  * can run with fakes for both the database and Cvent.
  */
@@ -21,6 +25,7 @@ export interface CventEvent {
   id: string;
   event_id: string;
   event_title?: string | null;
+  cvent_event_code?: string | null;
   cvent_event_id: string | null;
   cvent_admission_item_id: string | null;
   cvent_sync_enabled: boolean;
@@ -40,6 +45,7 @@ export interface ChangedContact {
   email: string;
   attributes: Record<string, unknown> | null;
   badge_hash: string | null;
+  cvent_contact_id: string | null;
 }
 
 export interface SyncLimits {
@@ -56,8 +62,10 @@ export interface EventSyncSummary {
   created: number;
   alreadyExists: number;
   failed: number;
-  /** True when the batch filled or the deadline hit, so another run is needed. */
+  /** True when the batch filled, the deadline hit, or the batch was aborted. */
   remaining: boolean;
+  /** Set when a transient (Cvent-wide) failure stopped the batch early. */
+  aborted?: string;
   errors: string[];
 }
 
@@ -65,6 +73,7 @@ export interface ContactPushSummary {
   checked: number;
   updated: number;
   failed: number;
+  aborted?: string;
 }
 
 /**
@@ -97,7 +106,8 @@ export interface SyncDeps {
   log?: (msg: string) => void;
 }
 
-const EVENT_COLUMNS = 'id, event_id, event_title, cvent_event_id, cvent_admission_item_id, cvent_sync_enabled';
+const EVENT_COLUMNS = 'id, event_id, event_title, cvent_event_code, cvent_event_id, cvent_admission_item_id, cvent_sync_enabled';
+const LEDGER = 'cvent_registration_sync';
 
 function str(v: unknown): string | null {
   if (typeof v !== 'string') return null;
@@ -105,11 +115,15 @@ function str(v: unknown): string | null {
   return s ? s : null;
 }
 
-/** Badge fields from a person row, as the registration forms store them. */
+/**
+ * Badge fields from a person row, as the registration forms store them. The
+ * email is passed through as stored (trimmed only): Cvent's email filter may
+ * be case-sensitive, and the importers already normalise case.
+ */
 export function badgeFields(email: string, attributes: Record<string, unknown> | null | undefined): BadgeFields {
   const a = attributes ?? {};
   return {
-    email: email.trim().toLowerCase(),
+    email: email.trim(),
     firstName: str(a.first_name),
     lastName: str(a.last_name),
     title: str(a.job_title),
@@ -162,18 +176,33 @@ export async function eventSyncStatus(db: SyncDb, eventUuid: string): Promise<Re
   return (data as Record<string, unknown> | null) ?? {};
 }
 
+export interface OneResult {
+  success: boolean;
+  action?: string;
+  error?: string;
+  /** Cvent-wide failure; no ledger row was written and the batch should stop. */
+  transient?: boolean;
+}
+
 /**
  * Push one registration to Cvent and record the outcome in the ledger.
- * Never throws: a failure is a 'failed' row with the error text.
+ * Never throws. A transient failure writes nothing, so it costs no attempt.
  */
 export async function syncOneRegistration(
   deps: SyncDeps,
   event: CventEvent & { cvent_event_id: string; cvent_admission_item_id: string },
   reg: PendingRegistration,
-): Promise<{ success: boolean; action?: string; error?: string }> {
+): Promise<OneResult> {
   const now = deps.now ?? Date.now;
   const fields = badgeFields(reg.email, reg.attributes);
+  // Stamp before the round trip: a person edited while Cvent is being called
+  // has updated_at after this and is picked up by the changed-contacts pass.
+  const stamp = new Date(now()).toISOString();
   const result = await deps.cvent.syncRegistrant(event.cvent_event_id, event.cvent_admission_item_id, fields);
+
+  if (!result.success && result.transient) {
+    return { success: false, transient: true, error: result.error };
+  }
 
   const row: Record<string, unknown> = {
     registration_id: reg.registration_id,
@@ -188,7 +217,7 @@ export async function syncOneRegistration(
       cvent_attendee_id: result.attendeeId ?? null,
       badge_hash: badgeHash(fields),
       last_error: null,
-      synced_at: new Date(now()).toISOString(),
+      synced_at: stamp,
     });
   } else {
     Object.assign(row, {
@@ -197,7 +226,7 @@ export async function syncOneRegistration(
     });
   }
 
-  const { error } = await deps.db.from('cvent_registration_sync').upsert(row, { onConflict: 'registration_id' });
+  const { error } = await deps.db.from(LEDGER).upsert(row, { onConflict: 'registration_id' });
   if (error) deps.log?.(`[cvent] ledger write failed for ${reg.registration_id}: ${error.message}`);
 
   return { success: result.success, action: result.action, error: result.error };
@@ -227,6 +256,13 @@ export async function syncEvent(deps: SyncDeps, event: CventEvent, limits: SyncL
       break;
     }
     const r = await syncOneRegistration(deps, event, reg);
+    if (r.transient) {
+      summary.aborted = r.error ?? 'Cvent unavailable';
+      summary.remaining = true;
+      summary.errors.push(`stopped: ${summary.aborted}`);
+      deps.log?.(`[cvent] ${event.event_id}: batch stopped, ${summary.aborted}`);
+      break;
+    }
     summary.attempted++;
     if (r.success) {
       if (r.action === 'already_exists') summary.alreadyExists++;
@@ -253,6 +289,11 @@ export async function pushChangedContacts(deps: SyncDeps, event: CventEvent, lim
   const { data, error } = await deps.db.rpc('cvent_changed_contacts', { p_event_id: event.id, p_limit: limits.batchSize });
   if (error) throw new Error(`[cvent] cvent_changed_contacts failed: ${error.message}`);
 
+  const setLedger = async (registrationId: string, row: Record<string, unknown>) => {
+    const { error: upErr } = await deps.db.from(LEDGER).update(row).eq('registration_id', registrationId);
+    if (upErr) deps.log?.(`[cvent] ledger update failed for ${registrationId}: ${upErr.message}`);
+  };
+
   for (const c of (data as ChangedContact[] | null) ?? []) {
     if (now() > limits.deadline) break;
     out.checked++;
@@ -261,27 +302,28 @@ export async function pushChangedContacts(deps: SyncDeps, event: CventEvent, lim
     const stamp = new Date(now()).toISOString();
 
     if (hash === c.badge_hash) {
-      await deps.db.from('cvent_registration_sync').update({ synced_at: stamp }).eq('registration_id', c.registration_id);
+      await setLedger(c.registration_id, { synced_at: stamp });
       continue;
     }
 
-    const r = await deps.cvent.updateContact(fields);
+    // The ledger knows the Cvent contact id, so a changed email still reaches
+    // the right contact instead of a lookup by the new address finding nothing.
+    const r = await deps.cvent.updateContact(fields, c.cvent_contact_id);
     if (r.success) {
       out.updated++;
-      await deps.db
-        .from('cvent_registration_sync')
-        .update({ badge_hash: hash, cvent_contact_id: r.contactId ?? null, synced_at: stamp, last_error: null })
-        .eq('registration_id', c.registration_id);
+      await setLedger(c.registration_id, { badge_hash: hash, cvent_contact_id: r.contactId ?? c.cvent_contact_id, synced_at: stamp, last_error: null });
+    } else if (r.transient) {
+      out.aborted = r.error ?? 'Cvent unavailable';
+      deps.log?.(`[cvent] ${event.event_id}: contact updates stopped, ${out.aborted}`);
+      break;
     } else {
       out.failed++;
       // Keep the row 'synced' (the attendee exists); record why the update
       // failed and move synced_at on so one bad contact is not retried every
       // minute forever.
-      await deps.db
-        .from('cvent_registration_sync')
-        .update({ last_error: (r.error ?? 'update failed').slice(0, 500), synced_at: stamp })
-        .eq('registration_id', c.registration_id);
-      deps.log?.(`[cvent] contact update failed for ${fields.email}: ${r.error}`);
+      await setLedger(c.registration_id, { last_error: (r.error ?? 'update failed').slice(0, 500), synced_at: stamp });
+      // Registration id, not email: logs should not carry registrant PII.
+      deps.log?.(`[cvent] contact update failed for registration ${c.registration_id}: ${r.error}`);
     }
     if (limits.pauseMs > 0) await sleep(limits.pauseMs);
   }

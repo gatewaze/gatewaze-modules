@@ -9,6 +9,11 @@
  *
  * Reference: https://developers.cvent.com/docs/rest-api/guides/registration-guide
  *
+ * Every failure result carries `transient`: true when the problem is Cvent or
+ * the connection (OAuth rejected, 429 after retries, 5xx, timeout) rather than
+ * this registrant. The sync lib stops the batch on a transient failure instead
+ * of recording an attempt against each registration.
+ *
  * `fetch` and `sleep` are injectable so the client is unit-testable without
  * the network. Nothing here touches the database.
  */
@@ -26,6 +31,8 @@ export interface CventClientOptions {
   log?: (msg: string) => void;
   /** Retries on HTTP 429 (default 3). */
   retries?: number;
+  /** Per-request timeout; a hung Cvent connection must not hold a worker slot (default 15s). */
+  timeoutMs?: number;
 }
 
 export interface CventAdmissionItem {
@@ -37,6 +44,8 @@ export interface CventAdmissionItem {
 export interface CventSyncResult {
   success: boolean;
   error?: string;
+  /** Failure was Cvent-wide or network, not this registrant; do not count an attempt. */
+  transient?: boolean;
   contactId?: string;
   attendeeId?: string;
   action?: 'created' | 'already_exists' | 'updated';
@@ -53,6 +62,7 @@ export interface BadgeFields {
 interface CventResponse {
   ok: boolean;
   status: number;
+  transient: boolean;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any -- Cvent payloads are untyped JSON
   data: any;
 }
@@ -66,6 +76,11 @@ export function filterLiteral(value: string): string {
   return `'${value.replace(/'/g, "''")}'`;
 }
 
+/** 429 after retries, any 5xx, or no HTTP response at all. */
+export function isTransientStatus(status: number): boolean {
+  return status === 0 || status === 429 || status >= 500;
+}
+
 function first<T>(v: T | T[]): T {
   return Array.isArray(v) ? v[0] : v;
 }
@@ -75,9 +90,10 @@ function localPart(email: string): string {
 }
 
 export interface CventClient {
-  listAdmissionItems(cventEventId: string): Promise<{ success: boolean; error?: string; items?: CventAdmissionItem[] }>;
+  listAdmissionItems(cventEventId: string): Promise<{ success: boolean; error?: string; transient?: boolean; items?: CventAdmissionItem[] }>;
   syncRegistrant(cventEventId: string, admissionItemId: string, fields: BadgeFields): Promise<CventSyncResult>;
-  updateContact(fields: BadgeFields): Promise<{ success: boolean; error?: string; contactId?: string; action?: 'updated' | 'unchanged' }>;
+  /** Pass the known Cvent contact id when the ledger has one; the email lookup is the fallback. */
+  updateContact(fields: BadgeFields, contactId?: string | null): Promise<CventSyncResult>;
 }
 
 export function createCventClient(opts: CventClientOptions): CventClient {
@@ -85,6 +101,8 @@ export function createCventClient(opts: CventClientOptions): CventClient {
   const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
   const log = opts.log ?? (() => {});
   const retries = opts.retries ?? 3;
+  const timeoutMs = opts.timeoutMs ?? 15_000;
+  const signal = () => AbortSignal.timeout(timeoutMs);
 
   // Token cache for the life of this client (one worker run / one request).
   let cachedToken: string | null = null;
@@ -102,6 +120,7 @@ export function createCventClient(opts: CventClientOptions): CventClient {
         'Content-Type': 'application/x-www-form-urlencoded',
       },
       body: `grant_type=client_credentials&client_id=${encodeURIComponent(opts.clientId)}`,
+      signal: signal(),
     });
     if (!res.ok) {
       const text = await res.text();
@@ -121,13 +140,22 @@ export function createCventClient(opts: CventClientOptions): CventClient {
     const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
     if (method !== 'GET') headers['Content-Type'] = 'application/json';
 
+    // Log the path without its query string: contact lookups filter by email.
+    const shownPath = path.split('?')[0];
     for (let attempt = 0; ; attempt++) {
-      log(`Cvent ${method} ${path}${attempt ? ` (retry ${attempt})` : ''}`);
-      const res = await fetchImpl(`${CVENT_BASE}${path}`, {
-        method,
-        headers,
-        body: body !== undefined ? JSON.stringify(body) : undefined,
-      });
+      log(`Cvent ${method} ${shownPath}${attempt ? ` (retry ${attempt})` : ''}`);
+      let res: Response;
+      try {
+        res = await fetchImpl(`${CVENT_BASE}${path}`, {
+          method,
+          headers,
+          body: body !== undefined ? JSON.stringify(body) : undefined,
+          signal: signal(),
+        });
+      } catch (err) {
+        // Timeout or network failure: no HTTP status, treated as transient.
+        return { ok: false, status: 0, transient: true, data: { raw: `request failed: ${(err as Error).message}` } };
+      }
 
       if (res.status === 429 && attempt < retries) {
         await sleep((attempt + 1) * 2000);
@@ -153,7 +181,7 @@ export function createCventClient(opts: CventClientOptions): CventClient {
         };
       }
 
-      return { ok: res.ok, status: res.status, data };
+      return { ok: res.ok, status: res.status, transient: isTransientStatus(res.status), data };
     }
   }
 
@@ -176,20 +204,28 @@ export function createCventClient(opts: CventClientOptions): CventClient {
     return body;
   }
 
-  async function findOrCreateContact(f: BadgeFields): Promise<{ success: boolean; error?: string; contactId?: string }> {
+  function fieldsChanged(existing: Record<string, unknown>, f: BadgeFields): boolean {
+    return Boolean(
+      (f.firstName && f.firstName !== existing.firstName) ||
+        (f.lastName && f.lastName !== existing.lastName) ||
+        (f.title && f.title !== existing.title) ||
+        (f.company && f.company !== existing.company),
+    );
+  }
+
+  async function findOrCreateContact(f: BadgeFields): Promise<{ success: boolean; error?: string; transient?: boolean; contactId?: string }> {
     const searchRes = await findContact(f.email);
     if (!searchRes.ok) {
-      return { success: false, error: `GET /contacts failed (${searchRes.status}): ${JSON.stringify(searchRes.data)}` };
+      return {
+        success: false,
+        transient: searchRes.transient,
+        error: `GET /contacts failed (${searchRes.status}): ${JSON.stringify(searchRes.data)}`,
+      };
     }
 
     const existing = searchRes.data?.data?.[0];
     if (existing?.id) {
-      const changed =
-        (f.firstName && f.firstName !== existing.firstName) ||
-        (f.lastName && f.lastName !== existing.lastName) ||
-        (f.title && f.title !== existing.title) ||
-        (f.company && f.company !== existing.company);
-      if (changed) {
+      if (fieldsChanged(existing, f)) {
         const upd = await call(`/contacts/${encodeURIComponent(existing.id)}`, 'PUT', contactBody(existing.id, existing, f));
         if (!upd.ok) log(`Cvent contact ${existing.id} update failed (${upd.status}); continuing with registration`);
       }
@@ -200,14 +236,25 @@ export function createCventClient(opts: CventClientOptions): CventClient {
     const createRes = await call('/contacts', 'POST', [contactBody(undefined, null, f)]);
     const created = first(createRes.data);
     if (created?.status >= 400 || (!createRes.ok && createRes.status !== 207)) {
+      const status = typeof created?.status === 'number' ? created.status : createRes.status;
       return {
         success: false,
-        error: `POST /contacts failed (${created?.status ?? createRes.status}): ${JSON.stringify(created?.data ?? createRes.data)}`,
+        transient: createRes.transient || isTransientStatus(status),
+        error: `POST /contacts failed (${status}): ${JSON.stringify(created?.data ?? createRes.data)}`,
       };
     }
     const contactId = created?.data?.id as string | undefined;
     if (!contactId) return { success: false, error: 'POST /contacts returned no contact id' };
     return { success: true, contactId };
+  }
+
+  /** True when Cvent already lists this contact as an attendee of the event. */
+  async function attendeeExists(cventEventId: string, contactId: string): Promise<boolean | null> {
+    const filter = encodeURIComponent(`event.id eq ${filterLiteral(cventEventId)} and contact.id eq ${filterLiteral(contactId)}`);
+    const res = await call(`/attendees?filter=${filter}`, 'GET');
+    if (!res.ok) return null;
+    const rows = res.data?.data ?? res.data;
+    return Array.isArray(rows) && rows.length > 0;
   }
 
   async function addAttendee(cventEventId: string, contactId: string, admissionItemId: string): Promise<CventSyncResult> {
@@ -225,17 +272,37 @@ export function createCventClient(opts: CventClientOptions): CventClient {
       return { success: true, contactId, attendeeId: item?.data?.id, action: 'created' };
     }
 
-    // Already registered comes back in several shapes; all mean "done".
-    const alreadyExists =
-      item?.status === 409 ||
-      res.status === 409 ||
-      (item?.status === 400 && (item?.data?.code === 'EntityAlreadyExists' || item?.data?.code === 'ServerError'));
-    if (alreadyExists) return { success: true, contactId, action: 'already_exists' };
+    // Already registered comes back as a 409, or a 400 EntityAlreadyExists.
+    const code = item?.data?.code;
+    if (item?.status === 409 || res.status === 409 || (item?.status === 400 && code === 'EntityAlreadyExists')) {
+      return { success: true, contactId, action: 'already_exists' };
+    }
 
+    // The old client took a 400 ServerError as "already registered" too. It
+    // usually is, but a real server error would then be recorded as synced
+    // with no badge, so confirm with a lookup before saying so.
+    if (item?.status === 400 && code === 'ServerError') {
+      const exists = await attendeeExists(cventEventId, contactId);
+      if (exists === true) return { success: true, contactId, action: 'already_exists' };
+      return {
+        success: false,
+        transient: true,
+        error: `POST /attendees returned ServerError and the attendee lookup ${exists === null ? 'failed' : 'found nothing'}: ${JSON.stringify(item?.data)}`,
+      };
+    }
+
+    const status = typeof item?.status === 'number' ? item.status : res.status;
     return {
       success: false,
-      error: `POST /attendees failed (${item?.status ?? res.status}): ${JSON.stringify(item?.data ?? res.data)}`,
+      transient: res.transient || isTransientStatus(status),
+      error: `POST /attendees failed (${status}): ${JSON.stringify(item?.data ?? res.data)}`,
     };
+  }
+
+  // Thrown errors reach here only from getToken (OAuth) or a bug; both are
+  // Cvent-wide, so they are transient from the sync's point of view.
+  function thrown(err: unknown): CventSyncResult {
+    return { success: false, transient: true, error: (err as Error).message };
   }
 
   return {
@@ -244,7 +311,7 @@ export function createCventClient(opts: CventClientOptions): CventClient {
         const filter = encodeURIComponent(`event.id eq ${filterLiteral(cventEventId)}`);
         const res = await call(`/admission-items?filter=${filter}`, 'GET');
         if (!res.ok) {
-          return { success: false, error: `Failed to list admission items (${res.status}): ${JSON.stringify(res.data)}` };
+          return { success: false, transient: res.transient, error: `Failed to list admission items (${res.status}): ${JSON.stringify(res.data)}` };
         }
         const raw = (res.data?.data ?? res.data ?? []) as Array<Record<string, unknown>>;
         const items = (Array.isArray(raw) ? raw : [])
@@ -252,35 +319,43 @@ export function createCventClient(opts: CventClientOptions): CventClient {
           .map((i) => ({ id: i.id as string, name: String(i.name ?? i.id), code: typeof i.code === 'string' ? i.code : undefined }));
         return { success: true, items };
       } catch (err) {
-        return { success: false, error: (err as Error).message };
+        return thrown(err);
       }
     },
 
     async syncRegistrant(cventEventId, admissionItemId, fields) {
       try {
         const contact = await findOrCreateContact(fields);
-        if (!contact.success || !contact.contactId) return { success: false, error: contact.error };
+        if (!contact.success || !contact.contactId) {
+          return { success: false, transient: contact.transient, error: contact.error };
+        }
         const attendee = await addAttendee(cventEventId, contact.contactId, admissionItemId);
         return { ...attendee, contactId: contact.contactId };
       } catch (err) {
-        return { success: false, error: (err as Error).message };
+        return thrown(err);
       }
     },
 
-    async updateContact(fields) {
+    async updateContact(fields, contactId) {
       try {
-        const searchRes = await findContact(fields.email);
-        const existing = searchRes.data?.data?.[0];
-        if (!searchRes.ok || !existing?.id) {
-          return { success: false, error: `Contact not found in Cvent for ${fields.email}` };
+        let id = contactId ?? null;
+        let existing: Record<string, unknown> | null = null;
+        if (!id) {
+          const searchRes = await findContact(fields.email);
+          if (!searchRes.ok) {
+            return { success: false, transient: searchRes.transient, error: `GET /contacts failed (${searchRes.status}): ${JSON.stringify(searchRes.data)}` };
+          }
+          existing = searchRes.data?.data?.[0] ?? null;
+          id = (existing?.id as string | undefined) ?? null;
+          if (!id) return { success: false, error: `Contact not found in Cvent for ${fields.email}` };
         }
-        const res = await call(`/contacts/${encodeURIComponent(existing.id)}`, 'PUT', contactBody(existing.id, existing, fields));
+        const res = await call(`/contacts/${encodeURIComponent(id)}`, 'PUT', contactBody(id, existing, fields));
         if (!res.ok) {
-          return { success: false, error: `PUT /contacts/${existing.id} failed (${res.status}): ${JSON.stringify(res.data)}` };
+          return { success: false, transient: res.transient, error: `PUT /contacts/${id} failed (${res.status}): ${JSON.stringify(res.data)}` };
         }
-        return { success: true, contactId: existing.id as string, action: 'updated' };
+        return { success: true, contactId: id, action: 'updated' };
       } catch (err) {
-        return { success: false, error: (err as Error).message };
+        return thrown(err);
       }
     },
   };
