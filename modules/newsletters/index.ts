@@ -7,7 +7,7 @@ const newslettersModule: GatewazeModule = {
   visibility: 'public',
   name: 'Newsletters',
   description: 'Create, edit, and distribute newsletters with edition management and subscriber tracking',
-  version: '1.3.7',
+  version: '1.3.8',
   features: [
     'newsletters',
     'newsletters.editor',
@@ -421,6 +421,7 @@ const newslettersModule: GatewazeModule = {
     'migrations/096_edition_approval.sql',
     // Background runs of "fill this edition from a Google Doc" (the proposal the editor merges).
     'migrations/097_gdoc_fill_jobs.sql',
+    'migrations/098_realtime_edition_approvals.sql',
   ],
 
   // Hook to register newsletters as a host-media consumer at apiRoutes
@@ -477,8 +478,9 @@ const newslettersModule: GatewazeModule = {
 
     // Newsletter detail (hero + tabs: details, template, editions, stats)
     // Approval view: a cut-down editor for an approver (deep-linked from the
-    // approval email). Static segment, so it ranks above :slug/:tab.
-    { path: 'newsletters/approve/:id', component: () => import('./admin/pages/approve/[id]'), requiredFeature: 'newsletters.approve', guard: 'none' },
+    // approval email). Static segment, so it ranks above :slug/:tab. layout:
+    // 'bare' keeps the admin sidebar and header from painting first.
+    { path: 'newsletters/approve/:id', component: () => import('./admin/pages/approve/[id]'), requiredFeature: 'newsletters.approve', guard: 'none', layout: 'bare' },
     { path: 'newsletters/:slug', component: () => import('./admin/pages/detail'), requiredFeature: 'newsletters', guard: 'none' },
     { path: 'newsletters/:slug/:tab', component: () => import('./admin/pages/detail'), requiredFeature: 'newsletters', guard: 'none' },
 
