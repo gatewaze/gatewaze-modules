@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { supabase } from '@/lib/supabase';
+import { fallbackEntityLabel, resolveEntityLabel, type EventRow } from '../../../utils/entityLabel';
 import {
   SourceCondition,
   SegmentCondition,
@@ -20,6 +21,23 @@ function humanize(key: string): string {
   return key.replace(/_/g, ' ').replace(/\b\w/g, (m) => m.toUpperCase());
 }
 
+// One lookup per stored entity, shared by every condition row on the page.
+const entityLabelCache = new Map<string, Promise<string | null>>();
+
+function storedEntityLabel(kind: string, id: string): Promise<string | null> {
+  const key = `${kind}:${id}`;
+  let hit = entityLabelCache.get(key);
+  if (!hit) {
+    hit = resolveEntityLabel(kind, id, async (column, value) => {
+      if (!supabase) return null;
+      const { data } = await supabase.from('events').select('event_title, event_start').eq(column, value).maybeSingle();
+      return (data as EventRow | null) ?? null;
+    }).catch(() => null);
+    entityLabelCache.set(key, hit);
+  }
+  return hit;
+}
+
 /**
  * Manual editor for a registry (module-contributed) condition — geo_radius,
  * event_registration, calendar_member, ambassador_application, … Driven by the
@@ -33,6 +51,19 @@ export function SourceConditionFields({ condition, source, onChange }: SourceCon
   const entityProp = Object.entries(props).find(([, d]) => d?.['x-entity-source'])?.[0] ?? null;
 
   const set = (patch: Record<string, unknown>) => onChange({ ...condition, ...patch });
+
+  // The catalog loads only the newest entities (200). A condition can still
+  // hold an older one; show it as the selection rather than "Select…", which
+  // read as if no event were chosen although the condition matches on it.
+  const storedEntity = entityProp ? ((condition[entityProp] as string) ?? '') : '';
+  const storedIsLoaded = !storedEntity || (source.entities ?? []).some((ent) => ent.id === storedEntity);
+  const [storedLabel, setStoredLabel] = useState<string | null>(null);
+  useEffect(() => {
+    if (storedIsLoaded) { setStoredLabel(null); return undefined; }
+    let cancelled = false;
+    void storedEntityLabel(source.kind, storedEntity).then((label) => { if (!cancelled) setStoredLabel(label); });
+    return () => { cancelled = true; };
+  }, [source.kind, storedEntity, storedIsLoaded]);
 
   async function geocodePlace(place: string) {
     if (!place.trim() || !supabase) { set({ lat: null, lng: null }); return; }
@@ -70,6 +101,9 @@ export function SourceConditionFields({ condition, source, onChange }: SourceCon
               className={inputCls}
             >
               <option value="">Select…</option>
+              {!storedIsLoaded && (
+                <option value={storedEntity}>{storedLabel ?? fallbackEntityLabel(source.label, storedEntity)}</option>
+              )}
               {(source.entities ?? []).map((ent) => <option key={ent.id} value={ent.id}>{ent.label}</option>)}
             </select>
             {source.entities_truncated && (
