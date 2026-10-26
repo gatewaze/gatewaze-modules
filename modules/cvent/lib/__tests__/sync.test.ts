@@ -59,9 +59,9 @@ function fakeDb(opts: { pending?: unknown[]; changed?: unknown[] } = {}): FakeDb
   return db;
 }
 
-function fakeCvent(script: Record<string, { success: boolean; action?: 'created' | 'already_exists' | 'updated'; error?: string; contactId?: string }>) {
+function fakeCvent(script: Record<string, { success: boolean; action?: 'created' | 'already_exists' | 'updated'; error?: string; contactId?: string; transient?: boolean }>) {
   const synced: string[] = [];
-  const updated: string[] = [];
+  const updated: Array<{ email: string; contactId: string | null | undefined }> = [];
   const cvent: CventClient = {
     async listAdmissionItems() {
       return { success: true, items: [] };
@@ -70,9 +70,9 @@ function fakeCvent(script: Record<string, { success: boolean; action?: 'created'
       synced.push(f.email);
       return script[f.email] ?? { success: true, action: 'created', contactId: `c-${f.email}` };
     },
-    async updateContact(f) {
-      updated.push(f.email);
-      return script[f.email] ?? { success: true, action: 'updated', contactId: `c-${f.email}` };
+    async updateContact(f, contactId) {
+      updated.push({ email: f.email, contactId });
+      return script[f.email] ?? { success: true, action: 'updated', contactId: contactId ?? `c-${f.email}` };
     },
   };
   return { cvent, synced, updated };
@@ -81,9 +81,9 @@ function fakeCvent(script: Record<string, { success: boolean; action?: 'created'
 const limits = { deadline: Number.MAX_SAFE_INTEGER, batchSize: 100, maxAttempts: 5, pauseMs: 0 };
 
 describe('badgeFields / badgeHash', () => {
-  it('reads the registration attribute keys and normalises the email', () => {
+  it('reads the registration attribute keys and trims the email without changing its case', () => {
     expect(badgeFields(' Ada@X.com ', { first_name: 'Ada', last_name: ' Lovelace ', job_title: 'CTO', company: 'Analytical' })).toEqual({
-      email: 'ada@x.com',
+      email: 'Ada@X.com',
       firstName: 'Ada',
       lastName: 'Lovelace',
       title: 'CTO',
@@ -133,6 +133,26 @@ describe('syncOneRegistration', () => {
     });
   });
 
+  it('takes the synced_at stamp before the Cvent call so a concurrent edit is not missed', async () => {
+    const db = fakeDb();
+    let t = 1_000;
+    const cvent: CventClient = {
+      async listAdmissionItems() { return { success: true, items: [] }; },
+      async syncRegistrant() { t = 5_000; return { success: true, action: 'created', contactId: 'c' }; },
+      async updateContact() { return { success: true }; },
+    };
+    await syncOneRegistration({ db, cvent, now: () => t }, event, { registration_id: 'r1', person_id: 'p1', email: 'a@x.com', attributes: null, attempts: 0 });
+    expect(db.upserts[0].synced_at).toBe(new Date(1_000).toISOString());
+  });
+
+  it('writes nothing on a transient failure and reports it, so an outage costs no attempts', async () => {
+    const db = fakeDb();
+    const { cvent } = fakeCvent({ 'a@x.com': { success: false, transient: true, error: 'Cvent OAuth failed (401)' } });
+    const r = await syncOneRegistration({ db, cvent }, event, { registration_id: 'r1', person_id: 'p1', email: 'a@x.com', attributes: null, attempts: 0 });
+    expect(r).toEqual({ success: false, transient: true, error: 'Cvent OAuth failed (401)' });
+    expect(db.upserts).toHaveLength(0);
+  });
+
   it('writes a failed row with the error and a bumped attempt count', async () => {
     const db = fakeDb();
     const { cvent } = fakeCvent({ 'bad@x.com': { success: false, error: 'POST /attendees failed (400)' } });
@@ -179,6 +199,18 @@ describe('syncEvent', () => {
     expect(s.remaining).toBe(true);
   });
 
+  it('stops the batch on a transient failure without touching the remaining registrations', async () => {
+    const db = fakeDb({ pending });
+    const { cvent, synced } = fakeCvent({ 'two@x.com': { success: false, transient: true, error: 'request failed: timeout' } });
+
+    const s = await syncEvent({ db, cvent }, event, limits);
+
+    expect(synced).toEqual(['one@x.com', 'two@x.com']);
+    expect(s).toMatchObject({ attempted: 1, created: 1, failed: 0, remaining: true, aborted: 'request failed: timeout' });
+    expect(s.errors).toEqual(['stopped: request failed: timeout']);
+    expect(db.upserts.map((u) => u.registration_id)).toEqual(['r1']);
+  });
+
   it('reports more remaining when the batch came back full', async () => {
     const db = fakeDb({ pending });
     const { cvent } = fakeCvent({});
@@ -201,28 +233,43 @@ describe('pushChangedContacts', () => {
     const same = badgeFields('same@x.com', { first_name: 'S' });
     const db = fakeDb({
       changed: [
-        { registration_id: 'r1', person_id: 'p1', email: 'same@x.com', attributes: { first_name: 'S' }, badge_hash: badgeHash(same) },
-        { registration_id: 'r2', person_id: 'p2', email: 'moved@x.com', attributes: { first_name: 'M', company: 'New' }, badge_hash: 'stale' },
+        { registration_id: 'r1', person_id: 'p1', email: 'same@x.com', attributes: { first_name: 'S' }, badge_hash: badgeHash(same), cvent_contact_id: 'c-1' },
+        { registration_id: 'r2', person_id: 'p2', email: 'moved@x.com', attributes: { first_name: 'M', company: 'New' }, badge_hash: 'stale', cvent_contact_id: 'c-2' },
       ],
     });
     const { cvent, updated } = fakeCvent({});
 
     const out = await pushChangedContacts({ db, cvent, now: () => 5_000 }, event, limits);
 
-    expect(updated).toEqual(['moved@x.com']);
+    // The ledger's contact id is passed through, so a changed email still lands on the right contact.
+    expect(updated).toEqual([{ email: 'moved@x.com', contactId: 'c-2' }]);
     expect(out).toEqual({ checked: 2, updated: 1, failed: 0 });
     const byReg = Object.fromEntries(db.updates.map((u) => [u.registration_id, u.row]));
     expect(byReg.r1).toEqual({ synced_at: new Date(5_000).toISOString() });
     expect(byReg.r2).toMatchObject({
       badge_hash: badgeHash(badgeFields('moved@x.com', { first_name: 'M', company: 'New' })),
-      cvent_contact_id: 'c-moved@x.com',
+      cvent_contact_id: 'c-2',
       last_error: null,
     });
   });
 
+  it('stops on a transient failure and leaves the row untouched', async () => {
+    const db = fakeDb({
+      changed: [
+        { registration_id: 'r1', person_id: 'p1', email: 'a@x.com', attributes: { first_name: 'A2' }, badge_hash: 'old', cvent_contact_id: 'c-1' },
+        { registration_id: 'r2', person_id: 'p2', email: 'b@x.com', attributes: { first_name: 'B2' }, badge_hash: 'old', cvent_contact_id: 'c-2' },
+      ],
+    });
+    const { cvent, updated } = fakeCvent({ 'a@x.com': { success: false, transient: true, error: 'Cvent OAuth failed (503)' } });
+    const out = await pushChangedContacts({ db, cvent }, event, limits);
+    expect(updated.map((u) => u.email)).toEqual(['a@x.com']);
+    expect(out).toEqual({ checked: 1, updated: 0, failed: 0, aborted: 'Cvent OAuth failed (503)' });
+    expect(db.updates).toHaveLength(0);
+  });
+
   it('records a failed update without demoting the row', async () => {
     const db = fakeDb({
-      changed: [{ registration_id: 'r9', person_id: 'p9', email: 'gone@x.com', attributes: { first_name: 'G' }, badge_hash: 'old' }],
+      changed: [{ registration_id: 'r9', person_id: 'p9', email: 'gone@x.com', attributes: { first_name: 'G' }, badge_hash: 'old', cvent_contact_id: null }],
     });
     const { cvent } = fakeCvent({ 'gone@x.com': { success: false, error: 'Contact not found in Cvent for gone@x.com' } });
 

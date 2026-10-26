@@ -96,7 +96,7 @@ export async function registerRoutes(app, _ctx) {
       res.json({
         settings: {
           cvent_event_id: event.cvent_event_id,
-          cvent_event_code: (event as Record<string, unknown>).cvent_event_code ?? null,
+          cvent_event_code: event.cvent_event_code ?? null,
           cvent_admission_item_id: event.cvent_admission_item_id,
           cvent_sync_enabled: event.cvent_sync_enabled === true,
         },
@@ -179,26 +179,19 @@ export async function registerRoutes(app, _ctx) {
     const safe = q.replace(/[,()*\\%_]/g, '').trim().slice(0, 100);
     if (safe.length < 2) { res.json({ registrants: [] }); return; }
     try {
-      const { data: people, error: pErr } = await service
-        .from('people')
-        .select('id, email, attributes')
-        .or(`email.ilike.%${safe}%,attributes->>first_name.ilike.%${safe}%,attributes->>last_name.ilike.%${safe}%`)
-        .limit(25);
-      if (pErr) throw new Error(pErr.message);
-      if (!people?.length) { res.json({ registrants: [] }); return; }
-
-      const byPerson = new Map(people.map((p) => [p.id, p]));
+      // Search within this event's registrations (inner join on people) so a
+      // common name cannot fill the page with people who never registered.
       const { data: regs, error: rErr } = await service
         .from('events_registrations')
-        .select('id, person_id, status')
+        .select('id, status, people!inner(email, attributes)')
         .eq('event_id', eventId)
         .in('status', [...ACTIVE_STATUSES])
-        .in('person_id', [...byPerson.keys()])
+        .or(`email.ilike.%${safe}%,attributes->>first_name.ilike.%${safe}%,attributes->>last_name.ilike.%${safe}%`, { referencedTable: 'people' })
         .limit(10);
       if (rErr) throw new Error(rErr.message);
 
       const registrants = (regs ?? []).map((r) => {
-        const p = byPerson.get(r.person_id);
+        const p = Array.isArray(r.people) ? r.people[0] : r.people;
         const f = badgeFields(p?.email ?? '', p?.attributes ?? null);
         const name = [f.firstName, f.lastName].filter(Boolean).join(' ');
         return { id: r.id, email: f.email, name, status: r.status };
@@ -207,6 +200,26 @@ export async function registerRoutes(app, _ctx) {
     } catch (e) {
       console.error('[cvent] registrant search failed:', e);
       res.status(500).json({ error: 'registrant_search_failed' });
+    }
+  });
+
+  // Give failed registrations their attempts back; the next run retries them.
+  router.post('/events/:eventId/retry-failed', async (req, res) => {
+    if (!(await requireAdmin(req, res))) return;
+    const eventId = uuidParam(req, res, 'eventId');
+    if (!eventId) return;
+    try {
+      const { data, error } = await service
+        .from('cvent_registration_sync')
+        .update({ attempts: 0, last_error: null })
+        .eq('event_id', eventId)
+        .eq('status', 'failed')
+        .select('registration_id');
+      if (error) throw new Error(error.message);
+      res.json({ reset: data?.length ?? 0 });
+    } catch (e) {
+      console.error('[cvent] retry-failed failed:', e);
+      res.status(500).json({ error: 'retry_failed_failed' });
     }
   });
 
@@ -254,6 +267,12 @@ export async function registerRoutes(app, _ctx) {
         .maybeSingle();
       if (error) throw new Error(error.message);
       if (!reg) { res.status(404).json({ error: 'registration_not_found' }); return; }
+      // The test ignores the live-sync toggle, not cancellation: a cancelled
+      // registrant must not end up with a badge.
+      if (!ACTIVE_STATUSES.includes(reg.status)) {
+        res.status(400).json({ error: 'registration_not_active', message: `Registration status is ${reg.status}; only active registrations are synced.` });
+        return;
+      }
 
       const event = await loadCventEvent(service, reg.event_id);
       if (!isEventConfigured(event)) {

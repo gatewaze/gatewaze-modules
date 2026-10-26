@@ -6,7 +6,7 @@ Pushes event registrations to Cvent so badges can be printed on site. It works f
 
 - A worker job runs every minute. For each event with live sync on, it pushes registrations that are not yet in Cvent: find or create the contact by email, then register the contact as an attendee with the event's admission item.
 - When a person's first name, last name, job title or company changes after they were synced, the next run updates the contact in Cvent, so the badge shows the new details.
-- Every attempt is recorded in `cvent_registration_sync`. Failures retry with a doubling delay (2, 4, 8 minutes, up to a day) and stop after 5 attempts; the last error shows in the admin tab.
+- Every attempt is recorded in `cvent_registration_sync`. A registration Cvent rejects retries with a doubling delay (2, 4, 8 minutes, up to a day) and stops after 5 attempts; the last error shows in the admin tab, and "Retry failed" there gives those registrations their attempts back. A Cvent-wide problem (credentials rejected, rate limited, outage, timeout) stops the run without counting an attempt against anyone.
 - Each run has a time budget (50 seconds) and a batch size (100 per event). A large backfill is spread over a few runs.
 
 Registrations with status `confirmed`, `pending`, `waitlist`, `waitlisted` or `attended` are pushed. Cancellations are not propagated to Cvent.
@@ -31,7 +31,9 @@ If Fetch fails with a header-size error, the OAuth token Cvent issued is too lar
 | `CVENT_CLIENT_ID` | string | yes | OAuth client id |
 | `CVENT_CLIENT_SECRET` | secret | yes | OAuth client secret, sealed at rest |
 | `batch_size` | number | no | Registrations per event per run (default 100) |
-| `budget_ms` | number | no | Time budget per worker run (default 50000) |
+| `budget_ms` | number | no | Time budget per worker run (default 50000, at most 55000) |
+| `max_attempts` | number | no | Attempts per registration before it is left as failed (default 5) |
+| `pause_ms` | number | no | Pause between Cvent calls (default 500) |
 
 ## Admin API
 
@@ -42,6 +44,7 @@ All routes are under `/api/modules/cvent` and require an admin bearer token.
 - `GET /events/:eventId/admission-items` — admission items from Cvent
 - `GET /events/:eventId/registrants?q=` — registrants matching a name or email
 - `POST /events/:eventId/sync-now` — one bounded sync batch
+- `POST /events/:eventId/retry-failed` — reset attempts on failed registrations
 - `POST /registrations/:registrationId/sync` — push one registration
 
 ## Features
