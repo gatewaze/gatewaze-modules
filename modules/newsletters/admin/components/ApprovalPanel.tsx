@@ -5,11 +5,12 @@
  * by the send gate until the current content is approved.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router';
 import { toast } from 'sonner';
 import { CheckBadgeIcon, ClockIcon, ExclamationTriangleIcon, PaperAirplaneIcon } from '@heroicons/react/24/outline';
 import { Badge, Button } from '@/components/ui';
+import { supabase } from '@/lib/supabase';
 import { approvalService, type ApprovalStatus } from '../utils/approvalService';
 
 interface Props {
@@ -42,6 +43,27 @@ export function ApprovalPanel({ editionId, onChanged, beforeRequest }: Props) {
     }
   }, [editionId]);
   useEffect(() => { void load(); }, [load]);
+
+  // Live updates: an approver's decision (or a new request from another
+  // editor) changes newsletters_edition_approvals; reload the status and let
+  // the Sending tab re-check the send gate, so nobody has to refresh.
+  // Migration 098 puts the table in the realtime publication; RLS limits the
+  // rows to admins.
+  const onChangedRef = useRef(onChanged);
+  onChangedRef.current = onChanged;
+  useEffect(() => {
+    if (!editionId || editionId === 'new') return undefined;
+    const channel = supabase
+      .channel(`nl-edition-approvals-${editionId}`)
+      .on(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        'postgres_changes' as any,
+        { event: '*', schema: 'public', table: 'newsletters_edition_approvals', filter: `edition_id=eq.${editionId}` },
+        () => { void load().then(() => onChangedRef.current?.()); },
+      )
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [editionId, load]);
 
   if (loading || !status || !status.required) return null;
 
