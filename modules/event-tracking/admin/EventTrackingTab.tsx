@@ -1,5 +1,4 @@
 import { AdPlatformSettings } from './components/AdPlatformSettings';
-import { CventSettings } from './components/CventSettings';
 import { ConversionLog } from './components/ConversionLog';
 
 interface EventTrackingTabProps {
@@ -15,7 +14,6 @@ export function EventTrackingTab({ eventId, event }: EventTrackingTabProps) {
         accountId={event?.accountId || undefined}
         eventSlug={event?.eventSlug}
       />
-      <CventSettings eventId={eventId} />
       <ConversionLog eventId={eventId} />
     </div>
   );
