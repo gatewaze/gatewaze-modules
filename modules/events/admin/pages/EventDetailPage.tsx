@@ -3103,7 +3103,7 @@ const EventRegistrationsTab = ({ eventId, eventUuid }: { eventId: string; eventU
         )}
 
         {/* Module-contributed status widgets (e.g. Luma upload progress) */}
-        <ModuleSlot name="event-registrations:status" props={{ eventId, brandId: getBrandId() }} />
+        <ModuleSlot name="event-registrations:status" props={{ eventId, eventUuid, brandId: getBrandId() }} />
 
         {registrations.length === 0 ? (
           <div className="text-center py-12 text-[var(--gray-a11)]">
@@ -3179,6 +3179,8 @@ const EventRegistrationsTab = ({ eventId, eventUuid }: { eventId: string; eventU
                     <Th>UTM Term</Th>
                     <Th>Registered</Th>
                     <Th>QR Code</Th>
+                    {/* Module-contributed columns (e.g. Cvent badge state); each slot renders its own <Th> */}
+                    <ModuleSlot name="event-registrations:column-header" props={{ eventId, eventUuid }} />
                     <Th data-sticky-right style={{ position: 'sticky', right: 0, zIndex: 20, background: 'var(--color-panel-solid)' }}></Th>
                   </Tr>
                 </THead>
@@ -3294,6 +3296,8 @@ const EventRegistrationsTab = ({ eventId, eventUuid }: { eventId: string; eventU
                               {!reg.qr_code_id && !reg.external_qr_code && <span className="text-[var(--gray-a9)]">-</span>}
                             </div>
                           </Td>
+                          {/* Module-contributed cells, one per column-header slot above; each renders its own <Td> */}
+                          <ModuleSlot name="event-registrations:column-cell" props={{ eventId, eventUuid, registration: { id: reg.id, status: reg.status } }} />
                           <Td data-sticky-right style={{ position: 'sticky', right: 0, zIndex: 10, background: 'var(--color-panel-solid)' }}>
                             <RowActions actions={[
                               ...(hasAnswers(reg) ? [{
