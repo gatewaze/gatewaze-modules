@@ -5,6 +5,7 @@ import {
   type RegistrationData,
   type EventData,
 } from '../_shared/lumaRegistration.ts'
+import { splitCompanyAnswer } from '../_shared/companyAnswer.ts'
 
 /**
  * Process Luma Registration Email
@@ -835,9 +836,17 @@ async function handler(req: Request) {
     // Create the registration
     console.log(`Creating registration for ${parsed.registrantEmail} at event ${event.event_id}`)
 
+    // Luma's company question carries company and job title as one
+    // "Company - Title" answer in the email; split it so both reach the
+    // person record (the shared lib only fills fields that are empty).
+    const companyAnswer = parsed.registrationAnswers.find((a) => a.question_type === 'company')
+    const { company, jobTitle } = splitCompanyAnswer(companyAnswer?.answer)
+
     const registrationData: RegistrationData = {
       email: parsed.registrantEmail,
       fullName: parsed.userName,
+      company,
+      jobTitle,
       lumaUserId: parsed.lumaUserId || undefined,
       ticketType: parsed.ticketType || undefined,
       ticketQuantity: parsed.ticketQuantity > 1 ? parsed.ticketQuantity : undefined,
