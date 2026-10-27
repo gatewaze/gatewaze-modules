@@ -94,6 +94,20 @@ How it appears in your stack:
 
 The admin event listing can show a "speakers pending" badge on rows where `speakers_extracted_at IS NULL`. (The badge UI itself is a follow-up; the column is in place to drive it.)
 
+## Job log retention
+
+Every scrape run writes its log lines to `scrapers_job_logs`. The only reader is the "view logs" modal for a single job, so the table is pruned nightly: the `scrapers-prune-job-logs` cron (03:30 UTC) enqueues a `scraper:prune-logs` job, which loops the SQL function `scrapers_prune_job_logs` until no job older than the retention window still has log lines. The `scrapers_jobs` summary rows (status, counts, duration) are kept, so dashboards and the comparison page are unaffected. Logs for runs older than the window simply show as empty in the modal.
+
+- Default window: 7 days. Override per instance with `SCRAPERS_LOG_RETENTION_DAYS` on the worker, or per run by enqueuing `scraper:prune-logs` with `{ retention_days: N }`.
+- Each function call deletes at most 20,000 rows (payload `max_rows_per_call`, hard cap 1,000,000) from up to ten of the oldest eligible jobs, in its own short transaction, so it stays inside PostgREST's 8 second statement timeout. A run stops after 10 minutes (`time_budget_ms`) and leaves the rest for the next night. Log volume per job is very skewed (a single run can write hundreds of thousands of lines), which is why the batch is counted in rows, not jobs.
+- A one-off backlog can be cleared from psql with the same function, with a bigger batch because psql is not bound by the PostgREST timeout:
+
+```sql
+SELECT * FROM scrapers_prune_job_logs(7, 200000);  -- repeat until rows_deleted = 0
+```
+
+Deleting rows does not shrink the heap file; run `VACUUM (ANALYZE) scrapers_job_logs` afterwards so the space is reused, or `VACUUM FULL` in a quiet window if you want it returned to the filesystem.
+
 ## Operating recipes
 
 ### Spot-check that the Fast variant is actually faster
