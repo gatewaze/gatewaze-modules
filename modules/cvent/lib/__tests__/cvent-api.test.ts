@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { CVENT_BASE, createCventClient, filterLiteral } from '../cvent-api';
+import { CVENT_BASE, createCventClient, createTokenCache, filterLiteral } from '../cvent-api';
 
 interface Call {
   url: string;
@@ -62,6 +62,29 @@ describe('createCventClient', () => {
     expect(api).toHaveLength(2);
     expect(api[0].headers.Authorization).toBe('Bearer tok');
     expect(api[0].url).toBe(`${CVENT_BASE}/admission-items?filter=${encodeURIComponent("event.id eq 'evt-1'")}`);
+  });
+
+  it('shares a token between clients given the same cache, but never across client ids', async () => {
+    const cache = createTokenCache();
+    const { fetchImpl, calls } = fakeFetch([token, { match: /\/admission-items\?/, status: 200, body: { data: [] } }]);
+    const a = createCventClient({ clientId: 'id', clientSecret: 'secret', fetch: fetchImpl, sleep: noSleep, tokenCache: cache });
+    const b = createCventClient({ clientId: 'id', clientSecret: 'secret', fetch: fetchImpl, sleep: noSleep, tokenCache: cache });
+    const other = createCventClient({ clientId: 'id-2', clientSecret: 'x', fetch: fetchImpl, sleep: noSleep, tokenCache: cache });
+    await a.listAdmissionItems('evt-1');
+    await b.listAdmissionItems('evt-1');
+    expect(calls.filter((x) => x.url.endsWith('/oauth2/token'))).toHaveLength(1);
+    await other.listAdmissionItems('evt-1');
+    expect(calls.filter((x) => x.url.endsWith('/oauth2/token'))).toHaveLength(2);
+  });
+
+  it('refreshes a shared token that is about to expire', async () => {
+    const cache = createTokenCache();
+    cache.set('id', { token: 'old', expiresAt: Date.now() + 10_000 });
+    const { fetchImpl, calls } = fakeFetch([token, { match: /\/admission-items\?/, status: 200, body: { data: [] } }]);
+    const c = createCventClient({ clientId: 'id', clientSecret: 'secret', fetch: fetchImpl, sleep: noSleep, tokenCache: cache });
+    await c.listAdmissionItems('evt-1');
+    expect(calls.filter((x) => x.url.endsWith('/oauth2/token'))).toHaveLength(1);
+    expect(calls.find((x) => x.url.includes('/admission-items'))?.headers.Authorization).toBe('Bearer tok');
   });
 
   it('sends the client credentials as basic auth when fetching the token', async () => {
