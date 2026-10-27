@@ -122,6 +122,92 @@ const OCCASION_FIGURES =
   'Decorations only: no skeletons, mannequins, dummies, scarecrows, Father Christmas, elves, ' +
   'or any other figure, statue or cut-out that could be taken for a person or a face.';
 
+/**
+ * The costume looks (asked 2026-10-27): Halloween in face paint, and
+ * Christmas as Father Christmas or an elf. These are the one place the
+ * booth is allowed to put something on a face, so they say exactly how:
+ * paint that follows the real features, never a mask, and a Father
+ * Christmas without the beard -- a beard over the mouth and jaw is a
+ * lost likeness, and the suit and hat say Father Christmas on their own.
+ * A costume comes with a hat, so these end in COSTUME_FRAMING, which
+ * keeps the crop and camera distance without DECADE_FRAMING's no-hats
+ * rule.
+ */
+const PAINTED_FACES =
+  'The face paint is painted directly onto their own faces and follows their own features exactly: ' +
+  'the same eyes, nose, mouth, jawline, face shape and skin tone show through it, so each person is ' +
+  'immediately recognisable as themselves wearing makeup. No masks, no prosthetics, nothing over the ' +
+  'eyes or mouth, no coloured contact lenses; costume hats, horns, ears and headbands are fine.';
+const SANTA_FACES =
+  'Their own faces and own hairline: no false beard, no moustache, no wig, no glasses that were not ' +
+  'in the input, nothing covering any part of the face. The suit and the hat do the dressing up.';
+const ELF_FACES =
+  'Their own faces, with only rosy painted cheeks and a little glitter: no masks, no prosthetic ' +
+  'noses, nothing over the eyes or mouth; pointed elf ears and a hat are fine.';
+const COSTUME_FRAMING =
+  'Keep the original framing, crop and camera distance.';
+
+/** The decade's Halloween and Christmas rooms, shared by the costume looks. */
+const HALLOWEEN_SCENES: Record<string, string> = {
+  '1940s': 'a village hall hung with cut-paper black cats and orange crepe-paper streamers, a tub of bobbing apples and a carved turnip lantern, warm tungsten light, faded 1940s colour film',
+  '1950s': 'a front room with jointed paper skeleton decorations, honeycomb tissue pumpkins and orange-and-black crepe streamers, a carved pumpkin glowing on a side table, warm saturated Kodachrome colour, soft flash, fine grain',
+  '1960s': 'a mod living room with pop-art paper pumpkins, dangling tissue ghosts and orange-and-purple colour-block decorations, crisp 1960s colour film with slightly faded tones',
+  '1970s': 'a wood-panelled room with orange shag carpet, a plastic pumpkin pail of sweets and a string of orange lights, warm faded orange-brown 1970s film colour, soft flash, heavy grain',
+  '1980s': 'a living room strung with fake cobwebs, neon green and purple fairy lights and a plastic skeleton garland, direct on-camera flash, saturated 1980s film colour',
+  '1990s': 'a house-party kitchen with a plastic cauldron of punch, foil bats taped to the cupboards and a carved pumpkin on the counter, harsh disposable-camera flash with dark surroundings, 1990s drugstore film colour and grain',
+  '2000s': 'a bar hung with fake cobwebs, orange paper lanterns and a glowing plastic pumpkin, harsh compact-digital-camera flash with slightly blown highlights, early digital noise and cool colour',
+  '2010s': 'a porch with a row of carved pumpkins, fairy lights and paper bunting of bats, a warm faded filter with lifted blacks and a soft vignette, no app interface, icons, captions or any other text',
+  '2020s': 'a party backdrop of stacked pumpkins, dried-flower garlands and an orange neon glow, smartphone portrait mode with creamy background blur, clean natural colour',
+};
+const HALLOWEEN_COSTUMES: Record<string, string> = {
+  '1940s': 'dressing-up-box costumes such as a witch\'s cloak, a sheet-free ghost in grey rags, a vampire\'s cape and a pirate\'s sash, with greasepaint face paint: a pale powdered face, dark painted eye sockets, a drawn-on widow\'s peak or a painted moustache',
+  '1950s': 'classic monster-movie costumes such as a vampire\'s cape, a mad scientist\'s white coat, a tin-foil robot and a poodle-skirt witch, with greasepaint face paint: a green monster brow, a vampire\'s pale face with dark lips, painted stitches on the cheeks',
+  '1960s': 'mod costumes such as a silver space-alien suit, a go-go witch in a mini dress and white boots, a devil in red vinyl, with bright psychedelic face paint: painted flowers, swirls and stars across the cheeks and brow in pop colours',
+  '1970s': 'glam costumes such as a disco vampire in a velvet cape, a devil in red satin, a glitter skeleton in a black catsuit, with glitter face paint: a painted lightning bolt across one eye, silver stars, glittered cheekbones',
+  '1980s': 'costumes such as a punk vampire in studded leather, a video-nasty ghoul in a ripped denim jacket, a neon witch, with UV face paint: a pale cracked face with neon green and pink painted drips and painted dark eye sockets',
+  '1990s': 'costumes such as a grunge skeleton with bones painted on a black top, a crushed-velvet witch, a vampire in a long leather coat, with cheap shop-bought face paint: a white vampire face with small painted blood drips at the mouth corners, a painted spider on one cheek',
+  '2000s': 'going-out costumes such as a red devil with sequinned horns on a headband, a cat in a black satin dress, a pirate with a bandana, with glitter-heavy face paint: painted whiskers and a black nose, red devil face paint, a painted pirate scar',
+  '2010s': 'costumes such as a sugar-skull dress with a flower crown, an airbrushed zombie in a torn shirt, a glam witch in black lace, with detailed face paint: a half-face sugar-skull design, grey zombie skin with painted cracks, glitter on the cheekbones',
+  '2020s': 'costumes such as a satin witch dress, a creepy porcelain doll in a frilled collar, a cute cat or deer in soft fur ears, with clean modern face paint: fine painted doll cracks, glossy dark vampire lips, a small painted deer nose and freckles',
+};
+const CHRISTMAS_SCENES: Record<string, string> = {
+  '1940s': 'a front room with home-made paper chains, a small tree with candles and glass baubles, holly on the mantelpiece and a wireless set, warm candle and tungsten light, faded 1940s colour film',
+  '1950s': 'a front room with a tinsel-heavy tree hung with big coloured bulbs and glass baubles, foil garlands across the ceiling and wrapped presents on the carpet, warm saturated Kodachrome colour, soft flash, fine grain',
+  '1960s': 'a living room with a silver aluminium tree lit by a rotating colour wheel, oversized pop-coloured baubles and a drinks trolley, crisp 1960s colour film with slightly faded tones',
+  '1970s': 'a wood-panelled front room with a tree smothered in fat gold and red tinsel and fairy lights, foil ceiling decorations and a plate of mince pies, warm faded orange-brown 1970s film colour, soft flash, heavy grain',
+  '1980s': 'a living room with a tree of multicoloured flashing lights and tinsel, cards on strings across the wall and a boxy television, direct on-camera flash, saturated 1980s film colour',
+  '1990s': 'a dining table of pulled crackers and paper napkins with a glowing tree behind, harsh disposable-camera flash with dark surroundings, 1990s drugstore film colour and grain',
+  '2000s': 'a function room with a fibre-optic tree, silver and blue baubles and metallic streamers, harsh compact-digital-camera flash with slightly blown highlights, early digital noise and cool colour',
+  '2010s': 'a living room with a tall tree in warm white fairy lights, wooden and copper decorations and eucalyptus on the mantelpiece, a warm faded filter with lifted blacks and a soft vignette, no app interface, icons, captions or any other text',
+  '2020s': 'a tree hung with dried oranges, velvet bows and warm micro lights, a table of candles and a wreath on the wall, smartphone portrait mode with creamy background blur, clean natural colour with a warm glow',
+};
+const DECADE_SHORT: Record<string, string> = {
+  '1940s': '40s', '1950s': '50s', '1960s': '60s', '1970s': '70s', '1980s': '80s', '1990s': '90s',
+  '2000s': '2000s', '2010s': '2010s', '2020s': '2020s',
+};
+const hair = (era: string) => `Style the existing hair into a ${era} shape but keep its colour and length.`;
+
+/** Three costume looks per decade, from the tables above. */
+const COSTUME_LOOKS: BoothEffect[] = Object.keys(HALLOWEEN_SCENES).flatMap((era): BoothEffect[] => [
+  {
+    id: `halloween-costume-${era}`, label: `${DECADE_SHORT[era]} Halloween costume`, blurb: 'Dressed up, face painted', kind: 'style',
+    style: `a ${era} Halloween fancy-dress photograph: ${HALLOWEEN_SCENES[era]}; ${era} Halloween ${HALLOWEEN_COSTUMES[era]}. ` +
+      `${PAINTED_FACES} ${hair(era)} ${OCCASION_FIGURES} ${COSTUME_FRAMING}`,
+  },
+  {
+    id: `christmas-santa-${era}`, label: `${DECADE_SHORT[era]} Santa`, blurb: 'Red suit, white trim, bobble hat', kind: 'style',
+    style: `a ${era} Christmas photograph of people dressed as Father Christmas: ${CHRISTMAS_SCENES[era]}; Father Christmas suits in the ${era} style, ` +
+      'red with white fur trim, a wide black belt with a buckle and a red hat with a white bobble, with black boots. ' +
+      `${SANTA_FACES} ${hair(era)} ${OCCASION_FIGURES} ${COSTUME_FRAMING}`,
+  },
+  {
+    id: `christmas-elf-${era}`, label: `${DECADE_SHORT[era]} Elf`, blurb: 'Green tunic, pointed ears, a hat with a bell', kind: 'style',
+    style: `a ${era} Christmas photograph of people dressed as Christmas elves: ${CHRISTMAS_SCENES[era]}; elf costumes in the ${era} style, ` +
+      'green and red tunics with wide belts, red-and-white striped stockings, pointed green hats with a bell, curled elf shoes and pointed elf ears. ' +
+      `${ELF_FACES} ${hair(era)} ${OCCASION_FIGURES} ${COSTUME_FRAMING}`,
+  },
+]);
+
 // Widened 2026-09-22 from names alone: poster looks also printed
 // invented titles and taglines ("TOP GUNS", "SUMMER SWING").
 const NO_NAMES =
@@ -1048,6 +1134,9 @@ export const BOOTH_EFFECTS: BoothEffect[] = [
     style: 'a 2020s Christmas photograph in smartphone portrait mode: a tree hung with dried oranges, velvet bows and warm micro lights, a table of candles and a wreath on the wall, creamy background blur, 2020s clothes such as oversized knitwear, satin and tailored trousers, clean natural colour with a warm glow. ' +
       'Style the existing hair into a 2020s shape but keep its colour and length. ' + OCCASION_FIGURES + ' ' + DECADE_FRAMING,
   },
+
+  // The costumes: Halloween in face paint, Father Christmas, an elf.
+  ...COSTUME_LOOKS,
 ];
 
 /**

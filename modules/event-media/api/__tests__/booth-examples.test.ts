@@ -59,7 +59,8 @@ describe('booth examples', () => {
     // Both boards: every look in Britain and in America, and the
     // occasion looks each decade carries, once per place.
     const looks = exampleWork().length;
-    expect(looks).toBe(BOOTH_ERAS.flatMap((e) => [...e.looks.uk, ...e.looks.us]).length + BOOTH_ERAS.length * 2 * 2);
+    // Five occasion looks per decade (two Halloween, three Christmas), once per place.
+    expect(looks).toBe(BOOTH_ERAS.flatMap((e) => [...e.looks.uk, ...e.looks.us]).length + BOOTH_ERAS.length * 5 * 2);
     expect(exampleWork().filter((w) => w.look === 'halloween-1950s').map((w) => w.place)).toEqual(['uk', 'us']);
     expect(calls).toHaveLength(looks);
     expect(calls[0].urls).toEqual([`https://pub.example/${dir}a.jpg`, `https://pub.example/${dir}b.jpg`, `https://pub.example/${dir}c.jpg`]);

@@ -8,12 +8,17 @@
  * that decade's ordinary looks -- they are extra choices, not a
  * replacement (asked 2026-10-27).
  *
+ * An occasion is a family of looks. Halloween is the party and the
+ * costume with face paint; Christmas is the party, Father Christmas and
+ * an elf (asked 2026-10-27). Each family member is one look per decade,
+ * under an id of `<member>-<era>` (`halloween-1950s`,
+ * `halloween-costume-1950s`), so the prompt for a 50s Halloween is
+ * written beside every other prompt in lib/booth-effects.ts and goes out
+ * wrapped in the same guard rails.
+ *
  * Which occasions an event offers is a per-event setting
  * (events_media_booth_settings.occasion, migration 031): none, one of
- * them, or every one. The looks themselves live in the catalogue
- * (lib/booth-effects.ts) under ids of the form `<occasion>-<era>`, so
- * the prompt for a 50s Halloween is written beside every other prompt
- * and goes out wrapped in the same guard rails.
+ * them, or every one. Choosing an occasion offers its whole family.
  */
 
 export interface BoothOccasion {
@@ -21,18 +26,31 @@ export interface BoothOccasion {
   label: string;
   /** One line for the admin's setting. */
   blurb: string;
+  /**
+   * The family, as look-id prefixes in board order. The first is the
+   * occasion itself; the rest are its costumes.
+   */
+  looks: readonly string[];
 }
 
 export const BOOTH_OCCASIONS: readonly BoothOccasion[] = [
-  { key: 'halloween', label: 'Halloween', blurb: 'Pumpkins, cobwebs and costumes, in every decade' },
-  { key: 'christmas', label: 'Christmas', blurb: 'Tinsel, trees and paper chains, in every decade' },
+  {
+    key: 'halloween', label: 'Halloween', blurb: 'Pumpkins, cobwebs and costumes, in every decade',
+    looks: ['halloween', 'halloween-costume'],
+  },
+  {
+    key: 'christmas', label: 'Christmas', blurb: 'Tinsel, trees, Father Christmas and elves, in every decade',
+    looks: ['christmas', 'christmas-santa', 'christmas-elf'],
+  },
 ];
 
 const OCCASION_KEYS = new Set(BOOTH_OCCASIONS.map((o) => o.key));
+/** Every look prefix, and the occasion it belongs to. */
+const PREFIX_OCCASION = new Map(BOOTH_OCCASIONS.flatMap((o) => o.looks.map((p) => [p, o.key] as const)));
 
-/** The look id for an occasion in an era: `halloween-1950s`. */
-export function occasionLookId(occasion: string, era: string): string {
-  return `${occasion}-${era}`;
+/** The look id for a family member in an era: `halloween-costume-1950s`. */
+export function occasionLookId(prefix: string, era: string): string {
+  return `${prefix}-${era}`;
 }
 
 /**
@@ -46,9 +64,9 @@ export function occasionsFor(setting: string | null | undefined): BoothOccasion[
   return one ? [one] : [];
 }
 
-/** The occasion look ids an era's board carries under a setting, in catalogue order. */
+/** The occasion look ids an era's board carries under a setting, in family order. */
 export function occasionLooks(setting: string | null | undefined, era: string): string[] {
-  return occasionsFor(setting).map((o) => occasionLookId(o.key, era));
+  return occasionsFor(setting).flatMap((o) => o.looks.map((p) => occasionLookId(p, era)));
 }
 
 /** Every occasion look an era could carry, whatever the setting. */
@@ -62,11 +80,11 @@ export function isOccasionSetting(v: unknown): v is string {
 
 /**
  * Which occasion and era a look id names, or null for an ordinary look.
- * Only ids built by `occasionLookId` match: the occasion must be one of
- * ours and the era must be a decade key.
+ * Only ids built by `occasionLookId` match: the prefix must be one of
+ * a family's and the era must be a decade key.
  */
 export function occasionOf(lookId: string): { occasion: string; era: string } | null {
-  const m = /^([a-z]+)-([0-9]{4}s)$/.exec(lookId);
-  if (!m || !OCCASION_KEYS.has(m[1]!)) return null;
-  return { occasion: m[1]!, era: m[2]! };
+  const m = /^([a-z]+(?:-[a-z]+)*)-([0-9]{4}s)$/.exec(lookId);
+  const occasion = m ? PREFIX_OCCASION.get(m[1]!) : undefined;
+  return m && occasion ? { occasion, era: m[2]! } : null;
 }
