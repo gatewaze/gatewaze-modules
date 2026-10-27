@@ -452,7 +452,7 @@ export async function createFullRegistration(
         console.log(`Enriched existing registration ${existingReg.id} with data:`, Object.keys(updates))
 
         // Apply configured field mappings (non-blocking)
-        supabase.rpc('apply_registration_mappings', {
+        supabase.rpc('events_apply_registration_mappings', {
           p_event_id: event.eventId,
           p_registration_ids: [existingReg.id],
         }).then(({ error: mappingError }) => {
@@ -548,7 +548,7 @@ export async function createFullRegistration(
     }
 
     // Apply configured field mappings (non-blocking)
-    supabase.rpc('apply_registration_mappings', {
+    supabase.rpc('events_apply_registration_mappings', {
       p_event_id: event.eventId,
       p_registration_ids: [newRegistration.id],
     }).then(({ error: mappingError }) => {
