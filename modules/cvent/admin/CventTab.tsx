@@ -7,7 +7,8 @@ import {
 } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 import { Button, Card, Input } from '@/components/ui';
-import { supabase } from '@/lib/supabase';
+import { api, eventKey, type SyncNowResult, type SyncStatus } from './api';
+import { refreshEventLedger } from './useEventLedger';
 
 /**
  * Cvent tab on the event detail page.
@@ -23,15 +24,6 @@ interface CventSettings {
   cvent_sync_enabled: boolean;
 }
 
-interface SyncStatus {
-  active?: number;
-  synced?: number;
-  failed?: number;
-  pending?: number;
-  last_synced_at?: string | null;
-  last_error?: string | null;
-}
-
 interface AdmissionItem {
   id: string;
   name: string;
@@ -43,16 +35,6 @@ interface Registrant {
   email: string;
   name: string;
   status: string;
-}
-
-interface SyncNowResult {
-  attempted: number;
-  created: number;
-  alreadyExists: number;
-  failed: number;
-  remaining: boolean;
-  aborted?: string;
-  errors: string[];
 }
 
 interface CventTabProps {
@@ -68,36 +50,8 @@ const EMPTY: CventSettings = {
   cvent_sync_enabled: false,
 };
 
-function apiUrl(): string {
-  return (import.meta as { env: Record<string, string | undefined> }).env.VITE_API_URL ?? '';
-}
-
-async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
-  const { data: session } = await supabase.auth.getSession();
-  const token = session.session?.access_token;
-  const res = await fetch(`${apiUrl()}/api/modules/cvent${path}`, {
-    ...init,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...(init.headers ?? {}),
-    },
-  });
-  if (!res.ok) {
-    let detail = `HTTP ${res.status}`;
-    try {
-      const body = (await res.json()) as { error?: string; message?: string };
-      detail = body.message || body.error || detail;
-    } catch {
-      // Non-JSON error body; keep the status text.
-    }
-    throw new Error(detail);
-  }
-  return (await res.json()) as T;
-}
-
 export function CventTab({ eventId, eventUuid }: CventTabProps) {
-  const id = eventUuid || eventId;
+  const id = eventKey(eventId, eventUuid);
 
   const [settings, setSettings] = useState<CventSettings>(EMPTY);
   const [status, setStatus] = useState<SyncStatus>({});
@@ -143,6 +97,7 @@ export function CventTab({ eventId, eventUuid }: CventTabProps) {
       await api(`/events/${id}/settings`, { method: 'PUT', body: JSON.stringify(settings) });
       toast.success('Cvent settings saved');
       await load();
+      void refreshEventLedger(id);
     } catch (err) {
       toast.error('Failed to save: ' + (err as Error).message);
     } finally {
@@ -173,7 +128,7 @@ export function CventTab({ eventId, eventUuid }: CventTabProps) {
     setSyncing(true);
     setSyncResult(null);
     try {
-      const data = await api<SyncNowResult & { status: SyncStatus }>(`/events/${id}/sync-now`, { method: 'POST' });
+      const data = await api<SyncNowResult>(`/events/${id}/sync-now`, { method: 'POST' });
       setSyncResult(data);
       setStatus(data.status ?? {});
       if (data.aborted) {
@@ -181,7 +136,7 @@ export function CventTab({ eventId, eventUuid }: CventTabProps) {
       } else {
         toast.success(
           data.remaining
-            ? `Pushed ${data.created + data.alreadyExists} so far; the worker will finish the rest within a few minutes.`
+            ? `Pushed ${data.created + data.alreadyExists} so far; the worker will finish the rest shortly.`
             : `Done: ${data.created} new, ${data.alreadyExists} already in Cvent, ${data.failed} failed`,
         );
       }
@@ -189,6 +144,7 @@ export function CventTab({ eventId, eventUuid }: CventTabProps) {
       toast.error('Sync failed: ' + (err as Error).message);
     } finally {
       setSyncing(false);
+      void refreshEventLedger(id);
     }
   }
 
@@ -234,7 +190,7 @@ export function CventTab({ eventId, eventUuid }: CventTabProps) {
         { method: 'POST' },
       );
       setTestResult(data);
-      if (data.success) toast.success(data.action === 'already_exists' ? 'Already in Cvent' : 'Synced to Cvent');
+      if (data.success) toast.success(data.action === 'already_exists' || data.action === 'already_synced' ? 'Already in Cvent' : 'Synced to Cvent');
       else toast.error(data.error || 'Sync failed');
       await load();
     } catch (err) {
@@ -350,7 +306,7 @@ export function CventTab({ eventId, eventUuid }: CventTabProps) {
             <div>
               <p className="text-sm font-medium text-gray-900 dark:text-white">Live sync</p>
               <p className="text-xs text-gray-500 dark:text-gray-400">
-                Push every new registration to Cvent within a minute, and re-push name, title and company when they change.
+                Push every new registration to Cvent within seconds, and re-push name, title and company when they change.
               </p>
             </div>
             <button
@@ -413,20 +369,28 @@ export function CventTab({ eventId, eventUuid }: CventTabProps) {
           <p className="text-xs text-red-500 dark:text-red-400 mb-3 break-words">Last error: {status.last_error}</p>
         )}
 
-        <Button
-          variant="soft"
-          onClick={syncNow}
-          loading={syncing}
-          disabled={syncing || !isConfigured || !credentialsConfigured}
-          className="w-full"
-        >
-          <ArrowPathIcon className="w-4 h-4" />
-          {syncing ? 'Syncing to Cvent…' : 'Sync now'}
-        </Button>
-        <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
-          Pushes pending registrants now (about 20 seconds per click). With live sync on, the worker does this on its own every minute.
-          Safe to run again; registrants already in Cvent are skipped.
-        </p>
+        {settings.cvent_sync_enabled ? (
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            Live sync is on: the worker pushes pending registrants within seconds, so there is nothing to run by hand.
+            Turn live sync off to run a manual pass.
+          </p>
+        ) : (
+          <>
+            <Button
+              variant="soft"
+              onClick={syncNow}
+              loading={syncing}
+              disabled={syncing || !isConfigured || !credentialsConfigured}
+              className="w-full"
+            >
+              <ArrowPathIcon className="w-4 h-4" />
+              {syncing ? 'Syncing to Cvent…' : 'Sync now'}
+            </Button>
+            <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
+              Pushes pending registrants now (about 20 seconds per click). Safe to run again; registrants already in Cvent are skipped.
+            </p>
+          </>
+        )}
         {(status.failed ?? 0) > 0 && (
           <Button variant="soft" size="sm" onClick={retryFailed} loading={retrying} disabled={retrying} className="mt-2 w-full">
             Retry failed ({status.failed})
@@ -506,7 +470,7 @@ export function CventTab({ eventId, eventUuid }: CventTabProps) {
               {testResult.success ? (
                 <>
                   <CheckCircleIcon className="w-3.5 h-3.5 flex-shrink-0" />
-                  {testResult.action === 'already_exists' ? 'Already in Cvent' : 'Synced to Cvent'}
+                  {testResult.action === 'already_exists' || testResult.action === 'already_synced' ? 'Already in Cvent' : 'Synced to Cvent'}
                 </>
               ) : (
                 <>

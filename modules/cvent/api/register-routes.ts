@@ -8,13 +8,14 @@
 //   GET  /events/:eventId/settings          settings + sync counts + configured flag
 //   PUT  /events/:eventId/settings          save the four Cvent fields on the event
 //   GET  /events/:eventId/admission-items   admission items from Cvent for the dropdown
+//   GET  /events/:eventId/ledger            per-registration sync state for the registrations table
 //   GET  /events/:eventId/registrants?q=    registrants matching q (for the test picker)
 //   POST /events/:eventId/sync-now          one bounded sync batch, right now
 //   POST /registrations/:registrationId/sync  push one registration (ignores the live-sync toggle)
 
 import { Router } from 'express';
 import { createClient } from '@supabase/supabase-js';
-import { createCventClient } from '../lib/cvent-api.js';
+import { createCventClient, createTokenCache } from '../lib/cvent-api.js';
 import { loadModuleConfig, parseCredentials, parseSyncSettings } from '../lib/config.js';
 import {
   badgeFields,
@@ -30,6 +31,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 // A manual "sync now" from the admin runs inside the request; keep it short
 // and let the worker cron finish the rest.
 const SYNC_NOW_BUDGET_MS = 20_000;
+const LEDGER_ROW_CAP = 5000;
 
 export async function registerRoutes(app, _ctx) {
   const url = process.env.SUPABASE_URL ?? '';
@@ -42,6 +44,8 @@ export async function registerRoutes(app, _ctx) {
 
   const service = createClient(url, serviceKey, { auth: { persistSession: false } });
   const router = Router();
+  // One OAuth token shared by every admin request in this process.
+  const tokenCache = createTokenCache();
 
   // Verify the caller is an active admin using their own bearer token.
   async function requireAdmin(req, res) {
@@ -82,7 +86,7 @@ export async function registerRoutes(app, _ctx) {
       res.status(409).json({ error: 'not_configured', message: 'Set CVENT_CLIENT_ID and CVENT_CLIENT_SECRET in Modules → Cvent first.' });
       return null;
     }
-    return createCventClient({ ...creds, log: (m) => console.log(`[cvent] ${m}`) });
+    return createCventClient({ ...creds, tokenCache, log: (m) => console.log(`[cvent] ${m}`) });
   }
 
   router.get('/events/:eventId/settings', async (req, res) => {
@@ -169,6 +173,48 @@ export async function registerRoutes(app, _ctx) {
     }
   });
 
+  // Everything the registrations tab needs in one call: whether the event is
+  // wired to Cvent, the counts, and one row per registration that has been
+  // pushed (or rejected). Registrations with no row are pending.
+  router.get('/events/:eventId/ledger', async (req, res) => {
+    if (!(await requireAdmin(req, res))) return;
+    const eventId = uuidParam(req, res, 'eventId');
+    if (!eventId) return;
+    try {
+      const event = await loadCventEvent(service, eventId);
+      if (!event) { res.status(404).json({ error: 'event_not_found' }); return; }
+      const configured = !!event.cvent_event_id;
+      if (!configured) {
+        res.json({ configured: false, sync_enabled: false, credentials_configured: false, status: {}, rows: [] });
+        return;
+      }
+      const [status, config, ledger] = await Promise.all([
+        eventSyncStatus(service, eventId),
+        loadModuleConfig(service),
+        service
+          .from('cvent_registration_sync')
+          .select('registration_id, status, synced_at, last_error, attempts')
+          .eq('event_id', eventId)
+          .order('registration_id')
+          .limit(LEDGER_ROW_CAP),
+      ]);
+      if (ledger.error) throw new Error(ledger.error.message);
+      const rows = ledger.data ?? [];
+      res.json({
+        configured,
+        sync_enabled: event.cvent_sync_enabled === true,
+        credentials_configured: parseCredentials(config) !== null,
+        status,
+        rows,
+        // Past the cap the table cannot tell a synced registrant from a pending one.
+        truncated: rows.length >= LEDGER_ROW_CAP,
+      });
+    } catch (e) {
+      console.error('[cvent] ledger read failed:', e);
+      res.status(500).json({ error: 'ledger_read_failed' });
+    }
+  });
+
   // Registrant search for the test-sync picker. The search term is stripped of
   // PostgREST filter metacharacters before it reaches .or().
   router.get('/events/:eventId/registrants', async (req, res) => {
@@ -234,6 +280,17 @@ export async function registerRoutes(app, _ctx) {
         res.status(400).json({ error: 'not_configured', message: 'Save a Cvent event id and an admission item first.' });
         return;
       }
+      // With live sync on, the worker is pushing every few seconds. Running a
+      // second pass here would race it: both pick the same pending rows, and
+      // the loser can record a failure over a registrant the winner just
+      // synced. So "Sync now" is only for events whose live sync is off.
+      if (event.cvent_sync_enabled === true) {
+        res.status(409).json({
+          error: 'live_sync_on',
+          message: 'Live sync is on; the worker pushes pending registrants within seconds. Turn it off to run a manual pass.',
+        });
+        return;
+      }
       const cvent = await cventClientOrNull(res);
       if (!cvent) return;
       const settings = parseSyncSettings(await loadModuleConfig(service));
@@ -287,9 +344,15 @@ export async function registerRoutes(app, _ctx) {
 
       const { data: ledger } = await service
         .from('cvent_registration_sync')
-        .select('attempts')
+        .select('attempts, status')
         .eq('registration_id', registrationId)
         .maybeSingle();
+      // Already pushed (by the worker, or an earlier test): say so without a
+      // second Cvent call, which could race a worker run on the same person.
+      if (ledger?.status === 'synced') {
+        res.json({ success: true, action: 'already_synced' });
+        return;
+      }
 
       const result = await syncOneRegistration(
         { db: service, cvent, log: (m) => console.warn(m) },

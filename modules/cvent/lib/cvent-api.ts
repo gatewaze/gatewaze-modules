@@ -33,6 +33,22 @@ export interface CventClientOptions {
   retries?: number;
   /** Per-request timeout; a hung Cvent connection must not hold a worker slot (default 15s). */
   timeoutMs?: number;
+  /**
+   * Shared token store. Pass one kept at module scope so a token outlives a
+   * single client (one worker run, one admin request); without it every
+   * client fetches its own. Keyed by client id, so two credentials never mix.
+   */
+  tokenCache?: TokenCache;
+}
+
+export interface TokenCache {
+  get(clientId: string): { token: string; expiresAt: number } | undefined;
+  set(clientId: string, entry: { token: string; expiresAt: number }): void;
+}
+
+export function createTokenCache(): TokenCache {
+  const m = new Map<string, { token: string; expiresAt: number }>();
+  return { get: (id) => m.get(id), set: (id, e) => void m.set(id, e) };
 }
 
 export interface CventAdmissionItem {
@@ -104,13 +120,13 @@ export function createCventClient(opts: CventClientOptions): CventClient {
   const timeoutMs = opts.timeoutMs ?? 15_000;
   const signal = () => AbortSignal.timeout(timeoutMs);
 
-  // Token cache for the life of this client (one worker run / one request).
-  let cachedToken: string | null = null;
-  let tokenExpiresAt = 0;
+  // Token cache: the shared one when given, else for the life of this client.
+  const tokens = opts.tokenCache ?? createTokenCache();
 
   async function getToken(): Promise<string> {
     const now = Date.now();
-    if (cachedToken && now < tokenExpiresAt - 30_000) return cachedToken;
+    const cached = tokens.get(opts.clientId);
+    if (cached && now < cached.expiresAt - 30_000) return cached.token;
 
     const credentials = Buffer.from(`${opts.clientId}:${opts.clientSecret}`).toString('base64');
     const res = await fetchImpl(TOKEN_URL, {
@@ -128,9 +144,8 @@ export function createCventClient(opts: CventClientOptions): CventClient {
     }
     const json = (await res.json()) as { access_token?: string; expires_in?: number };
     if (!json.access_token) throw new Error('Cvent OAuth response had no access_token');
-    cachedToken = json.access_token;
-    tokenExpiresAt = now + (json.expires_in ?? 3600) * 1000;
-    return cachedToken;
+    tokens.set(opts.clientId, { token: json.access_token, expiresAt: now + (json.expires_in ?? 3600) * 1000 });
+    return json.access_token;
   }
 
   async function call(path: string, method: 'GET' | 'POST' | 'PUT', body?: unknown): Promise<CventResponse> {

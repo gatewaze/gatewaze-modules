@@ -5,10 +5,11 @@ import type { GatewazeModule } from '@gatewaze/shared';
  *
  * Pushes event registrations to Cvent so on-site badge printing has every
  * registrant, whatever registered them (Luma webhook, Luma CSV, the portal).
- * A worker cron reads the ledger table every minute, pushes new registrations
- * for events with live sync on, and re-pushes badge fields when a person's
- * name, title or company changes. The admin tab on each event holds the Cvent
- * ids, the live-sync toggle, a "sync now" button and a single-registrant test.
+ * A worker cron runs every few seconds, pushes new registrations for events
+ * with live sync on, and re-pushes badge fields when a person's name, title or
+ * company changes. The admin tab on each event holds the Cvent ids, the
+ * live-sync toggle, a "sync now" button and a single-registrant test; the
+ * event's Registrations tab shows the per-registrant state in a Cvent column.
  *
  * Version 2 replaced the edge function + pg_net trigger design: those ran
  * against the pre-rename schema (customers / member_profiles), needed a
@@ -19,7 +20,7 @@ const cventModule: GatewazeModule = {
   id: 'cvent',
   name: 'Cvent',
   description: 'Sync event registrations to Cvent for on-site badge printing',
-  version: '2.0.0',
+  version: '2.1.0',
   type: 'integration',
   visibility: 'public',
   group: 'events',
@@ -42,9 +43,12 @@ const cventModule: GatewazeModule = {
     {
       name: 'cvent-sync',
       queue: 'jobs',
-      // Badges are printed from Cvent at the door, so a registration should be
-      // there within a minute. A run with no enabled events is one query.
-      schedule: { every: 60_000 },
+      // Badges are printed from Cvent at the door, so someone who registers on
+      // Luma while queueing should be printable by the time they reach the
+      // kiosk. A run with no enabled events is two queries (config, events);
+      // each enabled event with nothing pending adds two more (pending,
+      // changed contacts). The worker never overlaps runs; see workers/sync.ts.
+      schedule: { every: 5_000 },
       data: { kind: 'cvent:sync' },
     },
   ],
@@ -61,6 +65,29 @@ const cventModule: GatewazeModule = {
       order: 160,
       requiredFeature: 'cvent',
       meta: { tabId: 'cvent', label: 'Cvent', icon: 'TicketIcon' },
+    },
+    // Registrations tab: a status line above the table and a column in it.
+    // All three render nothing until the event has a Cvent event id.
+    {
+      slotName: 'event-registrations:status',
+      component: () => import('./admin/CventRegistrationsStatus'),
+      order: 20,
+      requiredFeature: 'cvent',
+      meta: { label: 'Cvent badge sync' },
+    },
+    {
+      slotName: 'event-registrations:column-header',
+      component: () => import('./admin/CventRegistrationColumnHeader'),
+      order: 20,
+      requiredFeature: 'cvent',
+      meta: { label: 'Cvent' },
+    },
+    {
+      slotName: 'event-registrations:column-cell',
+      component: () => import('./admin/CventRegistrationCell'),
+      order: 20,
+      requiredFeature: 'cvent',
+      meta: { label: 'Cvent' },
     },
   ],
 
@@ -91,7 +118,7 @@ const cventModule: GatewazeModule = {
       key: 'budget_ms',
       type: 'number',
       label: 'Time budget per run (ms)',
-      description: 'Default 50000, at most 55000 so runs never overlap. A run stops starting new work after this long; the next run continues.',
+      description: 'Default 4000 (the worker runs every 5 seconds). A run stops starting new work after this long; the next run continues.',
       required: false,
     },
     max_attempts: {

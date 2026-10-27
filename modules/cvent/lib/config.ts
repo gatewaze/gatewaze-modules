@@ -49,8 +49,11 @@ export function parseCredentials(raw: Record<string, unknown> | null | undefined
 export function parseSyncSettings(raw: Record<string, unknown> | null | undefined): CventSyncSettings {
   const r = raw ?? {};
   return {
-    // Capped below the one-minute cron so a run cannot overlap the next one.
-    budgetMs: Math.round(num(r.budget_ms, 50_000, 5_000, 55_000)),
+    // The cron fires every 5 seconds (index.ts); the default keeps a run
+    // inside that so runs rarely overlap. Overlap is safe anyway (Cvent
+    // answers "already exists"), just wasteful. A manual "sync now" passes
+    // its own longer budget.
+    budgetMs: Math.round(num(r.budget_ms, 4_000, 1_000, 55_000)),
     batchSize: Math.round(num(r.batch_size, 100, 1, 1_000)),
     maxAttempts: Math.round(num(r.max_attempts, 5, 1, 20)),
     pauseMs: Math.round(num(r.pause_ms, 500, 0, 5_000)),

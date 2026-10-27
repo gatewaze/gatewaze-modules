@@ -42,9 +42,9 @@ describe('parseCredentials', () => {
 
 describe('parseSyncSettings', () => {
   it('uses defaults and clamps out-of-range values', () => {
-    expect(parseSyncSettings(null)).toEqual({ budgetMs: 50_000, batchSize: 100, maxAttempts: 5, pauseMs: 500 });
+    expect(parseSyncSettings(null)).toEqual({ budgetMs: 4_000, batchSize: 100, maxAttempts: 5, pauseMs: 500 });
     expect(parseSyncSettings({ budget_ms: '1', batch_size: 99999, max_attempts: 'x', pause_ms: -5 })).toEqual({
-      budgetMs: 5_000,
+      budgetMs: 1_000,
       batchSize: 1_000,
       maxAttempts: 5,
       pauseMs: 0,
