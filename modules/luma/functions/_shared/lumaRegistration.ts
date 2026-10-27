@@ -62,6 +62,23 @@ export interface CancellationResult {
 }
 
 /**
+ * Apply the event's registration field mappings to one registration.
+ * Never throws: a mapping problem must not fail the registration itself.
+ */
+async function applyFieldMappings(supabase: SupabaseClient, eventId: string, registrationId: string): Promise<void> {
+  try {
+    const { error } = await supabase.rpc('events_apply_registration_mappings', {
+      p_event_id: eventId,
+      p_registration_ids: [registrationId],
+    })
+    if (error) console.error('Failed to apply field mappings:', error.message)
+    else console.log(`Applied field mappings for registration ${registrationId}`)
+  } catch (err) {
+    console.error('Failed to apply field mappings:', (err as Error).message)
+  }
+}
+
+/**
  * Map Luma approval status to our registration status
  */
 export function mapApprovalStatus(lumaStatus: string): 'pending' | 'confirmed' | 'cancelled' | 'waitlist' {
@@ -451,14 +468,10 @@ export async function createFullRegistration(
 
         console.log(`Enriched existing registration ${existingReg.id} with data:`, Object.keys(updates))
 
-        // Apply configured field mappings (non-blocking)
-        supabase.rpc('apply_registration_mappings', {
-          p_event_id: event.eventId,
-          p_registration_ids: [existingReg.id],
-        }).then(({ error: mappingError }) => {
-          if (mappingError) console.error('Failed to apply field mappings:', mappingError.message)
-          else console.log(`Applied field mappings for registration ${existingReg.id}`)
-        })
+        // Apply configured field mappings. Awaited (a failure is logged, never
+        // fatal) because the edge runtime may stop the worker once the
+        // response is sent, which would drop an un-awaited call.
+        await applyFieldMappings(supabase, event.eventId, existingReg.id)
 
         return {
           success: true,
@@ -547,14 +560,8 @@ export async function createFullRegistration(
       return { success: false, error: `Failed to create registration: ${regError.message}` }
     }
 
-    // Apply configured field mappings (non-blocking)
-    supabase.rpc('apply_registration_mappings', {
-      p_event_id: event.eventId,
-      p_registration_ids: [newRegistration.id],
-    }).then(({ error: mappingError }) => {
-      if (mappingError) console.error('Failed to apply field mappings:', mappingError.message)
-      else console.log(`Applied field mappings for registration ${newRegistration.id}`)
-    })
+    // Apply configured field mappings (see applyFieldMappings for why awaited)
+    await applyFieldMappings(supabase, event.eventId, newRegistration.id)
 
     // Notify integration modules about the new registration (fire-and-forget)
     emitIntegrationEvent(supabase, 'event.registered', {
