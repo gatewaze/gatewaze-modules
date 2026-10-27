@@ -204,6 +204,58 @@ describe('createCventClient', () => {
     expect(calls.some((x) => x.url.endsWith('/contacts') && x.method === 'POST')).toBe(false);
   });
 
+  it('skips a deleted contact in the search result and uses the live one', async () => {
+    // Cvent returns deleted contacts from the email filter, oldest first. The
+    // live contact for the same address sits behind it; registering the
+    // deleted id fails with EntityNotFound/Contact.
+    const { fetchImpl, calls } = fakeFetch([
+      token,
+      {
+        match: /\/contacts\?filter=/,
+        status: 200,
+        body: { data: [{ id: 'c-dead', firstName: 'Ada', lastName: 'Lovelace', deleted: true }, { id: 'c-live', firstName: 'Ada', lastName: 'Lovelace', deleted: false }] },
+      },
+      { match: /\/attendees$/, status: 207, body: [{ status: 201, data: { id: 'att-1' } }] },
+    ]);
+    const c = createCventClient({ clientId: 'id', clientSecret: 'secret', fetch: fetchImpl, sleep: noSleep });
+    const r = await c.syncRegistrant('evt-1', 'adm-1', { email: 'ada@x.com', firstName: 'Ada', lastName: 'Lovelace' });
+    expect(r).toEqual({ success: true, contactId: 'c-live', attendeeId: 'att-1', action: 'created' });
+    const attendee = calls.find((x) => x.url.endsWith('/attendees'))!;
+    expect(attendee.body).toEqual([{ event: { id: 'evt-1' }, contact: { id: 'c-live' }, admissionItem: { id: 'adm-1' }, status: 'Accepted' }]);
+    expect(calls.some((x) => x.url.endsWith('/contacts') && x.method === 'POST')).toBe(false);
+  });
+
+  it('creates a new contact when every search match is deleted', async () => {
+    const { fetchImpl, calls } = fakeFetch([
+      token,
+      { match: /\/contacts\?filter=/, status: 200, body: { data: [{ id: 'c-dead', deleted: true }] } },
+      { match: /\/contacts$/, status: 207, body: [{ status: 201, data: { id: 'c-new' } }] },
+      { match: /\/attendees$/, status: 207, body: [{ status: 201, data: { id: 'att-1' } }] },
+    ]);
+    const c = createCventClient({ clientId: 'id', clientSecret: 'secret', fetch: fetchImpl, sleep: noSleep });
+    const r = await c.syncRegistrant('evt-1', 'adm-1', { email: 'ada@x.com', firstName: 'Ada' });
+    expect(r).toEqual({ success: true, contactId: 'c-new', attendeeId: 'att-1', action: 'created' });
+    expect(calls.some((x) => x.method === 'PUT')).toBe(false);
+  });
+
+  it('updateContact by email ignores a deleted match', async () => {
+    const { fetchImpl, calls } = fakeFetch([
+      token,
+      { match: /\/contacts\?filter=/, status: 200, body: { data: [{ id: 'c-dead', deleted: true }, { id: 'c-live', deleted: false }] } },
+      { match: /\/contacts\/c-live$/, status: 200, body: { id: 'c-live' } },
+    ]);
+    const c = createCventClient({ clientId: 'id', clientSecret: 'secret', fetch: fetchImpl, sleep: noSleep });
+    const r = await c.updateContact({ email: 'ada@x.com', firstName: 'Ada', lastName: 'L' });
+    expect(r).toEqual({ success: true, contactId: 'c-live', action: 'updated' });
+    expect(calls.find((x) => x.method === 'PUT')!.url).toBe(`${CVENT_BASE}/contacts/c-live`);
+
+    const onlyDead = fakeFetch([token, { match: /\/contacts\?filter=/, status: 200, body: { data: [{ id: 'c-dead', deleted: true }] } }]);
+    const c2 = createCventClient({ clientId: 'id', clientSecret: 'secret', fetch: onlyDead.fetchImpl, sleep: noSleep });
+    const r2 = await c2.updateContact({ email: 'ada@x.com', firstName: 'Ada' });
+    expect(r2.success).toBe(false);
+    expect(r2.error).toContain('not found');
+  });
+
   it('does not update an existing contact whose fields already match', async () => {
     const { fetchImpl, calls } = fakeFetch([
       token,
