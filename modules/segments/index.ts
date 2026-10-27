@@ -7,7 +7,7 @@ const segmentsModule: GatewazeModule = {
   visibility: 'public',
   name: 'Segments',
   description: 'Create and manage audience segments for targeted communications and analytics',
-  version: '1.1.5',
+  version: '1.1.6',
   features: [
     'segments',
     'segments.create',
@@ -72,6 +72,10 @@ const segmentsModule: GatewazeModule = {
     'migrations/022_suppression_predicate_lookup.sql',
     // Per-person lookups marked PARALLEL SAFE so audience scans can use parallel workers.
     'migrations/023_parallel_safe_lookups.sql',
+    // Service role may recalculate, so a send refreshes its audience before fan-out.
+    'migrations/024_service_role_recalc.sql',
+    // NULL-safe guard on segments_preview_service (no JWT claims passed it).
+    'migrations/025_preview_service_null_safe_guard.sql',
   ],
 
   workers: [
