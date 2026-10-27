@@ -98,6 +98,12 @@ describe('prepareSend', () => {
     expect(d.countRecipients).not.toHaveBeenCalled()
   })
 
+  it('stores only the start of a long error', async () => {
+    const d = db({ fanout: vi.fn(async () => { throw new Error('x'.repeat(5000)) }) })
+    const prep = await prepareSend(segmentSend(), d, NOW)
+    expect(String(prep.metadata.error).length).toBeLessThan(400)
+  })
+
   it('fails an empty audience with the suppression reason', async () => {
     const d = db({ countRecipients: vi.fn(async () => 0) })
     const prep = await prepareSend(segmentSend(), d, NOW)

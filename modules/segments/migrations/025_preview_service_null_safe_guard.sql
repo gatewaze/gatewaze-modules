@@ -11,7 +11,7 @@ CREATE OR REPLACE FUNCTION public.segments_preview_service(p_definition jsonb, p
  RETURNS jsonb
  LANGUAGE plpgsql
  SECURITY DEFINER
- SET search_path = public
+ SET search_path = public, pg_temp
 AS $$
 DECLARE
   v_where  text;
