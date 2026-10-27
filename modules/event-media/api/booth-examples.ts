@@ -7,19 +7,23 @@
  *   GET  /admin/events/:eventId/booth/examples   progress
  *
  * Every look in every decade gets a new sample picture of the key people
- * (lib/booth-eras.ts decides which looks; lib/booth-effects.ts writes the
- * prompt). The finished pictures are stored beside the booth's artwork
- * under fresh names -- the CDN caches by name, so overwriting would keep
- * serving the old ones -- and theme.json is updated to point at them.
- * Looks that fail keep their previous sample.
+ * (lib/booth-eras.ts decides which looks, lib/booth-occasions.ts which
+ * occasion looks join them; lib/booth-effects.ts writes the prompt). The
+ * finished pictures are stored beside the booth's artwork under fresh
+ * names -- the CDN caches by name, so overwriting would keep serving the
+ * old ones -- and theme.json is updated to point at them. Looks that
+ * fail keep their previous sample.
  *
- * Spend: one model call per look (54 today, about $2). Admin-only, one
- * job per event at a time, and the photo paths are checked to lie inside
- * the event's own key-people folder before any of them leaves for the
- * model.
+ * Spend: one model call per look per place (about 150 today, $6 or so).
+ * A body of `{ looks: [...] }` narrows the job to those look ids -- the
+ * ones just added, say -- so a new look does not cost the whole board
+ * again. Admin-only, one job per event at a time, and the photo paths
+ * are checked to lie inside the event's own key-people folder before any
+ * of them leaves for the model.
  */
 import type { Request, Response, Router } from 'express';
 import { BOOTH_ERAS, eraLooks } from '../lib/booth-eras.js';
+import { eraOccasionLooks } from '../lib/booth-occasions.js';
 import { BOOTH_PLACES, placeRail } from '../lib/booth-places.js';
 import { boothEffect, buildSamplePrompt } from '../lib/booth-effects.js';
 import type { BoothResult } from '../lib/booth-provider.js';
@@ -43,7 +47,21 @@ export interface BoothExamplesDeps {
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const LOOK_ID_RE = /^[a-z0-9][a-z0-9-]{0,40}$/;
 const MAX_REFS = 10;
+const MAX_ONLY = 200;
+
+/**
+ * The job: every look on every board, in each place. An `only` list keeps
+ * just those look ids; unknown ids are simply absent from the result.
+ */
+export function exampleWork(only?: ReadonlySet<string> | null): Array<{ era: string; look: string; place: string }> {
+  return BOOTH_ERAS.flatMap((era) =>
+    BOOTH_PLACES.flatMap((place) =>
+      [...eraLooks(era, place.id), ...eraOccasionLooks(era.key)]
+        .filter((look) => !only || only.has(look))
+        .map((look) => ({ era: era.key, look, place: place.id }))));
+}
 
 export interface JobStatus {
   state: 'running' | 'done' | 'failed';
@@ -101,7 +119,12 @@ export function createBoothExamples(deps: BoothExamplesDeps) {
     return eventId;
   }
 
-  async function run(eventId: string, people: Array<{ name: string; photos: string[] }>, job: JobStatus) {
+  async function run(
+    eventId: string,
+    people: Array<{ name: string; photos: string[] }>,
+    job: JobStatus,
+    only: ReadonlySet<string> | null,
+  ) {
     const refs = pickReferences(people);
     const urls = refs.flatMap((p) => p.photos.map(publicUrl));
     const counts = refs.map((p) => ({ name: p.name, photos: p.photos.length }));
@@ -110,9 +133,7 @@ export function createBoothExamples(deps: BoothExamplesDeps) {
     const made: Record<string, Record<string, string>> = {};
 
     // Both boards: British and American looks are different pictures.
-    const work = BOOTH_ERAS.flatMap((era) =>
-      BOOTH_PLACES.flatMap((place) =>
-        eraLooks(era, place.id).map((look) => ({ era: era.key, look, place: place.id }))));
+    const work = exampleWork(only);
     job.total = work.length;
     let next = 0;
     const worker = async () => {
@@ -178,10 +199,24 @@ export function createBoothExamples(deps: BoothExamplesDeps) {
       sendError(res, 400, 'no_key_people', 'add at least one key person with a photo first');
       return;
     }
+    // Just these looks, when asked. Ids are checked for shape here and
+    // against the boards in `exampleWork`; an empty or absent list means
+    // every look.
+    const body = (typeof req.body === 'object' && req.body !== null ? req.body : {}) as Record<string, unknown>;
+    const rawOnly = Array.isArray(body['looks']) ? body['looks'] : [];
+    if (rawOnly.length > MAX_ONLY || rawOnly.some((v) => typeof v !== 'string' || !LOOK_ID_RE.test(v))) {
+      sendError(res, 400, 'invalid_looks', 'looks must be a list of look ids');
+      return;
+    }
+    const only = rawOnly.length > 0 ? new Set(rawOnly as string[]) : null;
+    if (only && exampleWork(only).length === 0) {
+      sendError(res, 400, 'unknown_looks', 'none of those looks is on a board');
+      return;
+    }
 
     const job: JobStatus = { state: 'running', total: 0, done: 0, failed: 0, startedAt: new Date().toISOString() };
     jobs.set(eventId, job);
-    void run(eventId, people, job)
+    void run(eventId, people, job, only)
       .then(() => { job.state = job.done > 0 ? 'done' : 'failed'; })
       .catch((err) => {
         job.state = 'failed';

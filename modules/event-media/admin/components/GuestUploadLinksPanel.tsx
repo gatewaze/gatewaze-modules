@@ -12,8 +12,9 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { QRCodeService } from '@/utils/qrCodeService';
 import { toast } from 'sonner';
-import { BOOTH_ERAS } from '../../lib/booth-eras';
+import { BOOTH_ERAS, eraAllLooks } from '../../lib/booth-eras';
 import { boothEffect } from '../../lib/booth-effects';
+import { BOOTH_OCCASIONS } from '../../lib/booth-occasions';
 import { KeyPeoplePanel } from './KeyPeoplePanel';
 
 interface GuestUploadLinksPanelProps {
@@ -252,6 +253,9 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
   // Which booth eras guests are offered: all of them (an era picker), or
   // one, for a themed party -- the booth then opens straight into it.
   const [boothEra, setBoothEra] = useState<string>('all');
+  // Occasions beside the decades: a 50s Halloween, a 70s Christmas
+  // (migration 031). 'none' is the booth as it was.
+  const [boothOccasion, setBoothOccasion] = useState('none');
   // Poses: what the booth asks people to do (migration 012).
   const [poseMode, setPoseMode] = useState<'off' | 'hour' | 'card'>('off');
   const [poseMinutes, setPoseMinutes] = useState(30);
@@ -269,16 +273,17 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
     let cancelled = false;
     void supabase
       .from('events_media_booth_settings')
-      .select('era, pose_mode, pose_minutes, ready_hours, booth_closes_hours, booth_max_per_guest, evening_from_minutes')
+      .select('era, occasion, pose_mode, pose_minutes, ready_hours, booth_closes_hours, booth_max_per_guest, evening_from_minutes')
       .eq('event_id', eventId)
       .maybeSingle()
       .then(({ data }: { data: {
-        era?: string; pose_mode?: string; pose_minutes?: number; ready_hours?: number;
+        era?: string; occasion?: string; pose_mode?: string; pose_minutes?: number; ready_hours?: number;
         booth_closes_hours?: number | null; booth_max_per_guest?: number | null;
         evening_from_minutes?: number | null;
       } | null }) => {
         if (cancelled || !data) return;
         if (data.era) setBoothEra(data.era);
+        if (data.occasion) setBoothOccasion(data.occasion);
         if (data.pose_mode === 'hour' || data.pose_mode === 'card') setPoseMode(data.pose_mode);
         if (typeof data.pose_minutes === 'number') setPoseMinutes(data.pose_minutes);
         if (typeof data.ready_hours === 'number') setReadyHours(data.ready_hours);
@@ -579,7 +584,7 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
                   if (!era) return null;
                   return (
                     <div className="mt-1 space-y-1">
-                      {[...era.looks.uk, ...era.looks.us].map((look) => (
+                      {eraAllLooks(era).map((look) => (
                         <div key={look} className="flex items-center gap-2">
                           <span>{boothEffect(look)?.label ?? look}</span>
                           <span className="flex-1" />
@@ -757,6 +762,32 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
                 {BOOTH_ERAS.map((era) => (
                   <option key={era.key} value={era.key}>{era.label} only — a themed event</option>
                 ))}
+              </select>
+            </label>
+
+            {/* Occasions sit beside the decades: each decade's board
+                gains that occasion's look (a 50s Halloween, a 70s
+                Christmas) next to its own. */}
+            <label className="flex flex-wrap items-center gap-2 text-sm mb-2">
+              Occasions
+              <select
+                value={boothOccasion}
+                onChange={(e) => {
+                  const next = e.target.value;
+                  const prev = boothOccasion;
+                  setBoothOccasion(next);
+                  void saveBooth({ occasion: next }, () => setBoothOccasion(prev),
+                    next === 'none' ? 'Just the decades'
+                      : next === 'all' ? 'Every occasion, in every decade'
+                        : `${BOOTH_OCCASIONS.find((o) => o.key === next)?.label ?? next} in every decade`);
+                }}
+                className="rounded border border-gray-300 dark:border-gray-600 bg-transparent px-2 py-1 text-sm"
+              >
+                <option value="none">None — just the decades</option>
+                {BOOTH_OCCASIONS.map((o) => (
+                  <option key={o.key} value={o.key}>{o.label} — a {o.label} look in every decade</option>
+                ))}
+                <option value="all">Every occasion — all of them, in every decade</option>
               </select>
             </label>
 
