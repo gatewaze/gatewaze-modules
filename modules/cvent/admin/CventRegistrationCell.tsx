@@ -1,5 +1,5 @@
 import { Badge, Td } from '@/components/ui';
-import { eventKey } from './api';
+import { eventKey } from './client';
 import { useEventLedger } from './useEventLedger';
 
 /**

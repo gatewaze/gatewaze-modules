@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { ArrowPathIcon, CheckCircleIcon, ExclamationCircleIcon } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui';
-import { api, eventKey, type SyncNowResult } from './api';
+import { api, eventKey, type SyncNowResult } from './client';
 import { refreshEventLedger, useEventLedger } from './useEventLedger';
 
 /**
