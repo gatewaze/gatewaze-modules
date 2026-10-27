@@ -13,6 +13,7 @@
  */
 
 import { boothEffect } from './booth-effects.js';
+import { eraOccasionLooks, occasionOf } from './booth-occasions.js';
 
 export interface BoothEra {
   key: string;
@@ -98,9 +99,25 @@ export function eraLooks(era: BoothEra, place: string | null | undefined): strin
   return place === 'us' ? era.looks.us : era.looks.uk;
 }
 
-/** Every look an era can offer, in either place. */
+/**
+ * Every look an era can offer, in either place, with the occasion looks
+ * (lib/booth-occasions.ts) that may sit on its board beside them.
+ */
 export function eraAllLooks(era: BoothEra): string[] {
-  return [...new Set([...era.looks.uk, ...era.looks.us])];
+  return [...new Set([...era.looks.uk, ...era.looks.us, ...eraOccasionLooks(era.key)])];
+}
+
+/**
+ * The decade a look belongs to, which decides which country rail
+ * applies (lib/booth-places.ts): the era whose board carries it, or
+ * for an occasion look the era in its id. Null for a look outside the
+ * decades (the reference-face effects).
+ */
+export function lookDecade(lookId: string): string | null {
+  const era = BOOTH_ERAS.find((e) => e.looks.uk.includes(lookId) || e.looks.us.includes(lookId));
+  if (era) return era.key;
+  const occ = occasionOf(lookId);
+  return occ && BOOTH_ERAS.some((e) => e.key === occ.era) ? occ.era : null;
 }
 
 /** The eras an event offers: all of them, or the one it is themed on. */
@@ -114,7 +131,10 @@ export function isEraSetting(v: unknown): v is string {
   return v === 'all' || (typeof v === 'string' && BOOTH_ERAS.some((e) => e.key === v));
 }
 
-/** Every look an era names must exist in the catalogue as a style. */
+/**
+ * Every look an era names must exist in the catalogue as a style --
+ * including the occasion look each era is promised for every occasion.
+ */
 export function eraLooksResolve(): string[] {
   const missing: string[] = [];
   for (const era of BOOTH_ERAS) {

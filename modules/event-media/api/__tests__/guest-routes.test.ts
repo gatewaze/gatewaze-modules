@@ -418,6 +418,39 @@ describe('getLink: the illustrated booth', () => {
     expect(res.body.booth.eras).toHaveLength(2);
   });
 
+  // Occasions beside the decades (migration 031): a Halloween look and a
+  // Christmas look at the end of each decade's board, in both places,
+  // with any sample the theme has for them.
+  it('puts the occasion looks on both boards after the decade looks, when asked', async () => {
+    const themed = {
+      ...THEME,
+      eras: { ...THEME.eras, '1980s': { interior: ROOM, samples: { 'halloween-1980s': 'sample-halloween-1980s.webp' } } },
+    };
+    const { res } = await get({ themeJson: themed, boothSetting: { era: 'all', occasion: 'all' } });
+    const eighties = res.body.booth.eras.find((e) => e.key === '1980s');
+    for (const place of ['uk', 'us']) {
+      expect(eighties.looks[place].slice(-2).map((l) => l.id)).toEqual(['halloween-1980s', 'christmas-1980s']);
+      expect(eighties.looks[place].length).toBeGreaterThan(2);
+    }
+    const halloween = eighties.looks.uk.find((l) => l.id === 'halloween-1980s');
+    expect(halloween.label).toBe('80s Halloween');
+    expect(halloween.sample).toContain(`/event/${EVENT_ID}/booth-theme/sample-halloween-1980s.webp`);
+    expect(eighties.looks.uk.find((l) => l.id === 'christmas-1980s').sample).toBeNull();
+    // Every era the booth offers gets its own.
+    const seventies = res.body.booth.eras.find((e) => e.key === '1970s');
+    expect(seventies.looks.uk.slice(-2).map((l) => l.id)).toEqual(['halloween-1970s', 'christmas-1970s']);
+  });
+
+  it('offers one occasion when one is set, and none by default', async () => {
+    const one = await get({ themeJson: THEME, boothSetting: { era: 'all', occasion: 'christmas' } });
+    const ids = (e) => e.looks.uk.map((l) => l.id);
+    expect(ids(one.res.body.booth.eras[0]).filter((id) => /^(halloween|christmas)-/.test(id))).toEqual(['christmas-1970s']);
+    const none = await get({ themeJson: THEME, boothSetting: { era: 'all' } });
+    expect(ids(none.res.body.booth.eras[0]).some((id) => /^(halloween|christmas)-/.test(id))).toBe(false);
+    const bad = await get({ themeJson: THEME, boothSetting: { era: 'all', occasion: 'easter' } });
+    expect(ids(bad.res.body.booth.eras[0]).some((id) => /^(halloween|christmas)-/.test(id))).toBe(false);
+  });
+
   it('serves no booth when the event has no theme', async () => {
     const { res } = await get({});
     expect(res.statusCode).toBe(200);

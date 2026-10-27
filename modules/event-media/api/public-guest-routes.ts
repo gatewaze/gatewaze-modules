@@ -42,7 +42,8 @@ import { browserObjectUrl, browserSizedUrl, type CdnConfig } from '../lib/cdn.js
 import { mayGenerate, readLimits, boothClosesAt } from '../lib/booth-limits.js';
 import { albumForUpload, boothAlbum, isView, resolveViews, tagView, type View } from '../lib/view-albums.js';
 import { parseBoothTheme, type BoothTheme } from '../lib/booth-theme.js';
-import { BOOTH_ERAS, eraAllLooks, eraLooks, erasFor, isEraSetting } from '../lib/booth-eras.js';
+import { BOOTH_ERAS, eraAllLooks, eraLooks, erasFor, isEraSetting, lookDecade } from '../lib/booth-eras.js';
+import { isOccasionSetting, occasionLooks } from '../lib/booth-occasions.js';
 import eventMediaModule from '../index.js';
 import { displayName, matchGuests, type GuestEntry } from '../lib/guest-identity.js';
 import {
@@ -443,10 +444,13 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     if (!theme) return null;
     const { data: settings } = await supabase
       .from('events_media_booth_settings')
-      .select('era, pose_mode, pose_minutes, pose_offset, booth_closes_hours, booth_max_per_guest')
+      .select('era, occasion, pose_mode, pose_minutes, pose_offset, booth_closes_hours, booth_max_per_guest')
       .eq('event_id', eventId)
       .maybeSingle();
     const setting = isEraSetting(settings?.era) ? settings!.era : 'all';
+    // Which occasions sit on the boards beside the decades' own looks
+    // (lib/booth-occasions.ts, migration 031); none unless asked.
+    const occasion = isOccasionSetting(settings?.occasion) ? settings!.occasion : 'none';
     const limits = readLimits(settings);
     // Poses (migration 012). Everything a booth or a projector needs to
     // work out for itself which pose is being asked for right now.
@@ -487,9 +491,11 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
           interiorLandscape: art.interior_landscape,
           board: art.board,
           // A board per place: a decade is not the same thing in Britain
-          // as in America, so each country has its own six looks.
+          // as in America, so each country has its own six looks. The
+          // occasion looks (a 50s Halloween) follow on both boards: the
+          // look is the same, the country rail makes it that place's.
           looks: (['uk', 'us'] as const).reduce((acc, p) => {
-            acc[p] = eraLooks(era, p)
+            acc[p] = [...eraLooks(era, p), ...occasionLooks(occasion, era.key)]
               .filter((id) => byId.has(id))
               .map((id) => ({ ...byId.get(id)!, sample: boardSized(art.samples[id] ?? null) }));
             return acc;
@@ -2118,8 +2124,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         : await runStyle(
           toPublicUrl(scratchPath),
           // The decade the look belongs to decides which rail applies.
-          buildPrompt(effect!, pose?.prompt ?? null,
-            placeRail(BOOTH_ERAS.find((e) => eraAllLooks(e).includes(effect!.id))?.key ?? null, place)),
+          buildPrompt(effect!, pose?.prompt ?? null, placeRail(lookDecade(effect!.id), place)),
         );
       if (!result.ok) {
         const status = result.error === 'no_face' ? 422 : result.error === 'timeout' ? 504 : 502;

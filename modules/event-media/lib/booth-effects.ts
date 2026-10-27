@@ -104,6 +104,24 @@ const PROPORTIONS =
   'Keep every body in natural proportion: heads the correct size for their bodies, no enlarged heads, ' +
   'no stretched or shrunken limbs.';
 
+/**
+ * Halloween without masks. A costume that covers the face is a lost
+ * likeness, and "Halloween" alone makes the model reach for masks, face
+ * paint and hoods before anything else. The costume stops at the neck.
+ */
+const OCCASION_FACES =
+  'Every face stays completely uncovered and unpainted: no masks, no face paint, no fake blood, no ' +
+  'hoods or veils over the face, no coloured contact lenses. Costume touches go on the clothes only.';
+
+/**
+ * Decorations, not company. A skeleton in a chair, a Father Christmas
+ * by the tree and a dummy in a doorway all read as another person to the
+ * people-count rule, and to the guests.
+ */
+const OCCASION_FIGURES =
+  'Decorations only: no skeletons, mannequins, dummies, scarecrows, Father Christmas, elves, ' +
+  'or any other figure, statue or cut-out that could be taken for a person or a face.';
+
 // Widened 2026-09-22 from names alone: poster looks also printed
 // invented titles and taglines ("TOP GUNS", "SUMMER SWING").
 const NO_NAMES =
@@ -923,6 +941,112 @@ export const BOOTH_EFFECTS: BoothEffect[] = [
   {
     id: 'uk-forties-tearoom', label: 'Tea room', blurb: 'China cups, a nippy, a cake stand', kind: 'style',
     style: 'a 1940s British tea room photograph: white tablecloths, a china cup and a tiered cake stand, waitresses in black and white uniforms, wood panelling and net curtains, warm indoor light, faded period colour. ' + DECADE_FRAMING,
+  },
+
+  // ── Occasions ──────────────────────────────────────────────────
+  // A second axis beside the decades (lib/booth-occasions.ts): one
+  // Halloween look and one Christmas look per decade, each written for
+  // that decade's Halloween or Christmas rather than a generic one, so
+  // a 50s Halloween is paper skeletons and Kodachrome and a 90s one is
+  // a disposable camera at a house party. Ids are `<occasion>-<era>`,
+  // which is how lib/booth-occasions.ts finds them.
+  //
+  // Halloween is the one look where the model wants to cover faces --
+  // masks, face paint, hoods -- and a covered face is a lost likeness,
+  // so OCCASION_FACES says the costume stops at the neck. Both occasions
+  // tempt it to add figures (a skeleton in a chair, a Father Christmas),
+  // which is the people-count failure by another name; OCCASION_FIGURES
+  // names that too.
+  {
+    id: 'halloween-1940s', label: '40s Halloween', blurb: 'Paper lanterns, a village hall, bobbing apples', kind: 'style',
+    style: 'a 1940s Halloween party photograph: a village hall hung with cut-paper black cats and orange crepe-paper streamers, a tub of bobbing apples and a carved turnip lantern, 1940s party clothes with simple home-made costume touches such as a cape or a paper collar, warm tungsten light, faded 1940s colour film. ' +
+      'Style the existing hair into a 1940s shape but keep its colour and length. ' + OCCASION_FACES + ' ' + OCCASION_FIGURES + ' ' + DECADE_FRAMING,
+  },
+  {
+    id: 'halloween-1950s', label: '50s Halloween', blurb: 'Paper skeletons, a carved pumpkin, Kodachrome', kind: 'style',
+    style: 'a 1950s Halloween party photograph on Kodachrome film: a front room with jointed paper skeletons, honeycomb tissue pumpkins and orange-and-black crepe streamers, a carved pumpkin glowing on a side table, 1950s party clothes with simple costume touches such as a satin cape, a witch\'s broom held in hand or a cardboard bat on the lapel, warm saturated Kodachrome colour, soft flash, fine grain. ' +
+      'Style the existing hair into a 1950s shape but keep its colour and length. ' + OCCASION_FACES + ' ' + OCCASION_FIGURES + ' ' + DECADE_FRAMING,
+  },
+  {
+    id: 'halloween-1960s', label: '60s Halloween', blurb: 'Pop-art pumpkins and a go-go ghost party', kind: 'style',
+    style: 'a 1960s Halloween party photograph: a mod living room with pop-art paper pumpkins, dangling tissue ghosts and orange-and-purple colour-block decorations, a carved pumpkin on a sideboard, 1960s clothes such as shift dresses and slim suits with simple costume touches such as a glittery cape or a toy wand, crisp 1960s colour film with slightly faded tones. ' +
+      'Style the existing hair into a 1960s shape but keep its colour and length. ' + OCCASION_FACES + ' ' + OCCASION_FIGURES + ' ' + DECADE_FRAMING,
+  },
+  {
+    id: 'halloween-1970s', label: '70s Halloween', blurb: 'Wood panelling, a plastic pumpkin pail, orange shag', kind: 'style',
+    style: 'a 1970s Halloween party photograph: a wood-panelled room with orange shag carpet, a plastic pumpkin pail of sweets, paper skeletons and a string of orange lights, 1970s clothes such as wide collars, flares and velvet with simple costume touches such as a vampire cape or a cardboard bat on a string, warm faded orange-brown 1970s film colour, soft flash, heavy grain. ' +
+      'Style the existing hair into a 1970s shape but keep its colour and length. ' + OCCASION_FACES + ' ' + OCCASION_FIGURES + ' ' + DECADE_FRAMING,
+  },
+  {
+    id: 'halloween-1980s', label: '80s Halloween', blurb: 'Neon cobwebs, a VHS horror night, hard flash', kind: 'style',
+    style: 'a 1980s Halloween party photograph: a living room strung with fake cobwebs, neon green and purple fairy lights and a plastic skeleton garland, a bowl of sweets and a pile of VHS horror tapes beside a television, 1980s clothes such as shoulder pads, denim and neon with simple costume touches such as a satin cape or a glow stick, direct on-camera flash, saturated 1980s film colour. ' +
+      'Style the existing hair into a 1980s shape but keep its colour and length. ' + OCCASION_FACES + ' ' + OCCASION_FIGURES + ' ' + DECADE_FRAMING,
+  },
+  {
+    id: 'halloween-1990s', label: '90s Halloween', blurb: 'House party, disposable flash, a plastic cauldron', kind: 'style',
+    style: 'a 1990s Halloween house party snapshot on a disposable camera: a kitchen with a plastic cauldron of punch, foil bats taped to the cupboards and a carved pumpkin on the counter, 1990s clothes such as plaid, denim and slip dresses with simple costume touches such as a cape or devil horns on a headband only if the input has a hat, harsh direct flash with dark surroundings, 1990s drugstore film colour and grain. ' +
+      'Style the existing hair into a 1990s shape but keep its colour and length. ' + OCCASION_FACES + ' ' + OCCASION_FIGURES + ' ' + DECADE_FRAMING,
+  },
+  {
+    id: 'halloween-2000s', label: '2000s Halloween', blurb: 'Digicam flash, fake cobwebs, a fancy-dress bar', kind: 'style',
+    style: 'a 2000s Halloween night-out photograph on a compact digital camera: a bar hung with fake cobwebs, orange paper lanterns and a glowing plastic pumpkin, 2000s going-out clothes such as low-rise jeans, layered tops and satin shirts with simple costume touches such as a cape, fairy wings or a feather boa, harsh built-in flash with slightly blown highlights, early digital noise and cool colour. ' +
+      'Style the existing hair into a 2000s shape but keep its colour and length. ' + OCCASION_FACES + ' ' + OCCASION_FIGURES + ' ' + DECADE_FRAMING,
+  },
+  {
+    id: 'halloween-2010s', label: '2010s Halloween', blurb: 'Fairy-lit porch, carved pumpkins, a warm filter', kind: 'style',
+    style: 'a 2010s Halloween photograph: a porch or hallway with a row of carved pumpkins, fairy lights, paper bunting of bats and a basket of sweets, 2010s clothes such as plaid, knitwear and skinny jeans with simple costume touches such as a cape or cat ears on a headband only if the input has a hat, a warm faded filter with lifted blacks and a soft vignette. No app interface, icons, captions or any other text. ' +
+      'Style the existing hair into a 2010s shape but keep its colour and length. ' + OCCASION_FACES + ' ' + OCCASION_FIGURES + ' ' + DECADE_FRAMING,
+  },
+  {
+    id: 'halloween-2020s', label: '2020s Halloween', blurb: 'Portrait mode, orange neon, a pumpkin wall', kind: 'style',
+    style: 'a 2020s Halloween photograph in smartphone portrait mode: a party backdrop of stacked pumpkins, dried-flower garlands and an orange neon glow, creamy background blur, 2020s clothes such as oversized blazers and knitwear with simple costume touches such as a satin cape or a sheer black veil behind the head, clean natural colour. ' +
+      'Style the existing hair into a 2020s shape but keep its colour and length. ' + OCCASION_FACES + ' ' + OCCASION_FIGURES + ' ' + DECADE_FRAMING,
+  },
+
+  {
+    id: 'christmas-1940s', label: '40s Christmas', blurb: 'Paper chains, a small tree, candlelight', kind: 'style',
+    style: 'a 1940s Christmas photograph: a front room with home-made paper chains, a small tree with candles and glass baubles, holly on the mantelpiece and a wireless set, 1940s best clothes such as tea dresses, knitted cardigans and tweed, warm candle and tungsten light, faded 1940s colour film. ' +
+      'Style the existing hair into a 1940s shape but keep its colour and length. ' + OCCASION_FIGURES + ' ' + DECADE_FRAMING,
+  },
+  {
+    id: 'christmas-1950s', label: '50s Christmas', blurb: 'Tinsel tree, foil garlands, Kodachrome', kind: 'style',
+    style: 'a 1950s Christmas photograph on Kodachrome film: a front room with a tinsel-heavy tree hung with big coloured bulbs and glass baubles, foil garlands across the ceiling, wrapped presents on the carpet and a bowl of nuts, 1950s best clothes such as full-skirted dresses, cardigans, sharp suits and knitted jumpers, warm saturated Kodachrome colour, soft flash, fine grain. ' +
+      'Style the existing hair into a 1950s shape but keep its colour and length. ' + OCCASION_FIGURES + ' ' + DECADE_FRAMING,
+  },
+  {
+    id: 'christmas-1960s', label: '60s Christmas', blurb: 'Aluminium tree, colour wheel, pop baubles', kind: 'style',
+    style: 'a 1960s Christmas photograph: a living room with a silver aluminium tree lit by a rotating colour wheel, oversized pop-coloured baubles, a sideboard of cards and a drinks trolley, 1960s clothes such as shift dresses, polo necks and slim suits, crisp 1960s colour film with slightly faded tones. ' +
+      'Style the existing hair into a 1960s shape but keep its colour and length. ' + OCCASION_FIGURES + ' ' + DECADE_FRAMING,
+  },
+  {
+    id: 'christmas-1970s', label: '70s Christmas', blurb: 'Wood panelling, fat tinsel, a tangerine glow', kind: 'style',
+    style: 'a 1970s Christmas photograph: a wood-panelled front room with a tree smothered in fat gold and red tinsel and fairy lights, foil ceiling decorations, a plate of mince pies and a games compendium, 1970s clothes such as wide collars, tank tops, velvet and patterned knitwear, warm faded orange-brown 1970s film colour, soft flash, heavy grain. ' +
+      'Style the existing hair into a 1970s shape but keep its colour and length. ' + OCCASION_FIGURES + ' ' + DECADE_FRAMING,
+  },
+  {
+    id: 'christmas-1980s', label: '80s Christmas', blurb: 'Knitted jumpers, a lit tree, a new video recorder', kind: 'style',
+    style: 'a 1980s Christmas photograph: a living room with a tree of multicoloured flashing lights and tinsel, cards on strings across the wall, wrapped presents and a boxy television with a new video recorder, 1980s clothes such as patterned knitted jumpers, shoulder pads and denim, direct on-camera flash, saturated 1980s film colour. ' +
+      'Style the existing hair into a 1980s shape but keep its colour and length. ' + OCCASION_FIGURES + ' ' + DECADE_FRAMING,
+  },
+  {
+    id: 'christmas-1990s', label: '90s Christmas', blurb: 'Disposable flash, paper crowns off, a crackers table', kind: 'style',
+    style: 'a 1990s Christmas dinner snapshot on a disposable camera: a dining table of pulled crackers, paper napkins and a glowing tree behind, a stack of CDs and a games console under the television, 1990s clothes such as fleeces, plaid shirts, slip dresses and novelty jumpers, harsh direct flash with dark surroundings, 1990s drugstore film colour and grain, a faint orange date stamp in one corner. ' +
+      'Style the existing hair into a 1990s shape but keep its colour and length. ' + OCCASION_FIGURES + ' ' + DECADE_FRAMING,
+  },
+  {
+    id: 'christmas-2000s', label: '2000s Christmas', blurb: 'Digicam flash, fibre-optic tree, a works do', kind: 'style',
+    style: 'a 2000s Christmas party photograph on a compact digital camera: a function room with a fibre-optic tree, silver and blue baubles, metallic streamers and a buffet table, 2000s going-out clothes such as going-out tops, satin shirts, bootcut jeans and chunky belts, harsh built-in flash with slightly blown highlights, early digital noise and cool colour. ' +
+      'Style the existing hair into a 2000s shape but keep its colour and length. ' + OCCASION_FIGURES + ' ' + DECADE_FRAMING,
+  },
+  {
+    id: 'christmas-2010s', label: '2010s Christmas', blurb: 'Fairy lights, a Scandi tree, a warm filter', kind: 'style',
+    style: 'a 2010s Christmas photograph: a living room with a tall tree in warm white fairy lights, wooden and copper decorations, eucalyptus on the mantelpiece and a stack of brown-paper presents, 2010s clothes such as chunky knits, plaid and skinny jeans, a warm faded filter with lifted blacks and a soft vignette. No app interface, icons, captions or any other text. ' +
+      'Style the existing hair into a 2010s shape but keep its colour and length. ' + OCCASION_FIGURES + ' ' + DECADE_FRAMING,
+  },
+  {
+    id: 'christmas-2020s', label: '2020s Christmas', blurb: 'Portrait mode, a dried-flower tree, candle glow', kind: 'style',
+    style: 'a 2020s Christmas photograph in smartphone portrait mode: a tree hung with dried oranges, velvet bows and warm micro lights, a table of candles and a wreath on the wall, creamy background blur, 2020s clothes such as oversized knitwear, satin and tailored trousers, clean natural colour with a warm glow. ' +
+      'Style the existing hair into a 2020s shape but keep its colour and length. ' + OCCASION_FIGURES + ' ' + DECADE_FRAMING,
   },
 ];
 

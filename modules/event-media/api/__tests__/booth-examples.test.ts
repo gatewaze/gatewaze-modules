@@ -1,7 +1,7 @@
 // @ts-nocheck — vitest harness.
 
 import { describe, it, expect, vi } from 'vitest';
-import { createBoothExamples, pickReferences } from '../booth-examples.js';
+import { createBoothExamples, exampleWork, pickReferences } from '../booth-examples.js';
 import { BOOTH_ERAS } from '../../lib/booth-eras.js';
 
 const EVENT = '99999999-8888-4777-8666-555555555555';
@@ -56,8 +56,11 @@ describe('booth examples', () => {
     await routes.start({ params: { eventId: EVENT } }, res);
     expect(res.statusCode).toBe(202);
     await flush();
-    // Both boards: every look in Britain and in America.
-    const looks = BOOTH_ERAS.flatMap((e) => [...e.looks.uk, ...e.looks.us]).length;
+    // Both boards: every look in Britain and in America, and the
+    // occasion looks each decade carries, once per place.
+    const looks = exampleWork().length;
+    expect(looks).toBe(BOOTH_ERAS.flatMap((e) => [...e.looks.uk, ...e.looks.us]).length + BOOTH_ERAS.length * 2 * 2);
+    expect(exampleWork().filter((w) => w.look === 'halloween-1950s').map((w) => w.place)).toEqual(['uk', 'us']);
     expect(calls).toHaveLength(looks);
     expect(calls[0].urls).toEqual([`https://pub.example/${dir}a.jpg`, `https://pub.example/${dir}b.jpg`, `https://pub.example/${dir}c.jpg`]);
     expect(calls[0].prompt).toMatch(/images 1 to 2 show Dan; image 3 shows Sarah/);
@@ -68,6 +71,37 @@ describe('booth examples', () => {
     const status = mockRes();
     await routes.status({ params: { eventId: EVENT } }, status);
     expect(status.body.job).toMatchObject({ state: 'done', total: looks, done: looks, failed: 0 });
+  });
+
+  // A new look should not cost the whole board again.
+  it('makes just the looks asked for, in both places', async () => {
+    const { routes, state, calls } = setup([{ name: 'Dan', photos: [`${dir}a.jpg`] }]);
+    const res = mockRes();
+    await routes.start({ params: { eventId: EVENT }, body: { looks: ['halloween-1980s', 'christmas-1980s', 'no-such-look'] } }, res);
+    expect(res.statusCode).toBe(202);
+    await flush();
+    expect(calls).toHaveLength(4);
+    expect(calls.map((c) => c.prompt).filter((p) => /1980s America/.test(p))).toHaveLength(2);
+    const theme = JSON.parse(state.uploads[`event/${EVENT}/booth-theme/theme.json`]);
+    expect(theme.eras['1980s'].samples['halloween-1980s']).toMatch(/^sample-halloween-1980s-[a-z0-9]+\.jpg$/);
+    // The samples it was not asked about are left alone.
+    expect(theme.eras['1980s'].samples['uk-decade-1980s']).toBe('old.jpg');
+  });
+
+  it('refuses a look list it cannot read, or that names nothing on a board', async () => {
+    const { routes, calls } = setup([{ name: 'Dan', photos: [`${dir}a.jpg`] }]);
+    for (const looks of [['Halloween 1980s'], ['../x'], [7], [''], Array.from({ length: 201 }, () => 'top-gun')]) {
+      const res = mockRes();
+      await routes.start({ params: { eventId: EVENT }, body: { looks } }, res);
+      expect(res.statusCode).toBe(400);
+      expect(res.body.error).toBe('invalid_looks');
+    }
+    const res = mockRes();
+    await routes.start({ params: { eventId: EVENT }, body: { looks: ['no-such-look'] } }, res);
+    expect(res.statusCode).toBe(400);
+    expect(res.body.error).toBe('unknown_looks');
+    await flush();
+    expect(calls).toHaveLength(0);
   });
 
   // Paths come from a table an admin writes; only the event's own folder
