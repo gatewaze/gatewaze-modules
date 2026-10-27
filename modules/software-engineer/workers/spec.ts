@@ -96,7 +96,7 @@ export default async function spec(job, ctx) {
       `Draft an implementation SPEC for this GitHub issue. The issue lives in a separate issues repo;`,
       `the code lives in the repos in your workspace. Explore them read-only, decide which WRITABLE`,
       `repo(s) the change belongs in, and write a clear spec: goal, approach, the repo(s) + files to`,
-      `change, test plan, risks. Do NOT implement. Follow each repo's CLAUDE.md/.claude rules.`,
+      `change, test plan, risks. Do NOT implement. Follow each repo's CLAUDE.md or AGENTS.md and .claude rules.`,
       `FIRST: use the wiki_search tool to look for existing related specs in project memory (pages`,
       `under specs/ — every past run's spec is logged there). If a prior spec covers overlapping`,
       `ground, build on it and note the relationship; do not contradict it silently.`,

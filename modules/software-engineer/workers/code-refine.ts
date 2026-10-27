@@ -75,7 +75,7 @@ export default async function codeRefine(job, ctx) {
     const prompt = [
       `The code for this work is complete and pushed, but a reviewer has asked for changes BEFORE the pull`,
       `request is opened. Address the reviewer's feedback by editing the code in the WRITABLE repo(s) in your`,
-      `workspace. Follow each repo's CLAUDE.md and .claude rules exactly, and run its own checks as those`,
+      `workspace. Follow each repo's CLAUDE.md or AGENTS.md and .claude rules exactly, and run its own checks as those`,
       `rules describe. Never use --no-verify or --force. Do NOT push or open pull requests; the system does`,
       `that.`,
       ``,
@@ -130,11 +130,16 @@ export default async function codeRefine(job, ctx) {
       return { ok: true, applied: pending.length, pushed: 0 };
     }
 
-    // Code changed → re-verify. The pipeline carries it verify → pr → ready_to_submit (manual mode), so
-    // the run only returns to a verified ready state. blast_radius is downgraded since the diff changed.
-    try { await writeMessage(supabase, run, 'agent', `${summary}\n\nRe-running the checks; the run will return to "ready to submit" once they pass.`); } catch { /* */ }
-    await supabase.from('se_runs').update({ status: 'running', current_phase: 'verify', blast_radius: 'needs_human' }).eq('id', run.id).eq('status', 'ready_to_submit');
-    await enqueuePhase(ctx, run.id, 'verify');
+    // Code changed → back through the repos' own pre-PR review round, then verify. No PR exists yet
+    // (ready_to_submit is pre-PR), so the new commits get the same round implement's did; the pipeline
+    // carries it pre-pr-review → verify → pr → ready_to_submit (manual mode), so the run only returns
+    // to a reviewed, verified ready state. blast_radius is downgraded since the diff changed.
+    const next = run.kind === 'external_pr' ? 'verify' : 'pre-pr-review';
+    try { await writeMessage(supabase, run, 'agent', `${summary}\n\nRe-running the review and checks; the run will return to "ready to submit" once they pass.`); } catch { /* */ }
+    await supabase.from('se_runs').update({ status: 'running', current_phase: next, blast_radius: 'needs_human' }).eq('id', run.id).eq('status', 'ready_to_submit');
+    // A fresh attempt number, so this round's phase row (and its cost) sits beside the first
+    // round's instead of overwriting it — the same way /resume re-drives a phase.
+    await enqueuePhase(ctx, run.id, next, { attempt: await nextPhaseAttempt(supabase, run.id, next) });
     await touchRun(supabase, run);
     return { ok: true, applied: pending.length, pushed, reverifying: true };
   } catch (e) {

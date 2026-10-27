@@ -27,8 +27,9 @@ export interface EngineModel { engine: Engine; model: string }
 
 // Phases the escalation ladder re-routes (the code-writing loop). Intentionally excludes triage/
 // reflect/review-kb (cheap, never the bottleneck) and intake/pr/merge (no model at all).
-export const ESCALATION_PHASES = new Set(['spec', 'review', 'implement', 'revise', 'verify']);
+export const ESCALATION_PHASES = new Set(['spec', 'review', 'implement', 'pre-pr-review', 'revise', 'verify']);
 // Phases the codex engine may run (repo work; everything else needs the claude noTools seam).
+// pre-pr-review stays on claude: it drives the repos' own skills through the Skill/Agent tools.
 export const CODEX_PHASES = new Set(['spec', 'review', 'implement', 'revise', 'verify']);
 
 // Conservative shape for anything that ends up as a --model / API model id. Rejects whitespace,

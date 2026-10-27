@@ -166,15 +166,25 @@ mirrored boards across instances stay consistent without renaming drift.
 
 ## 6. Phase pipeline (BUILT for single-repo; TO REWORK for multi-repo)
 
-`intake → spec → review → implement → verify → pr → watch`, plus `revise` (PR-watch loop) and
-`reflect` (memory). Each repo-touching phase runs an in-process Claude Agent SDK session
+`intake → spec → review → implement → pre-pr-review → verify → pr → watch`, plus `revise` (PR-watch
+loop) and `reflect` (memory). Each repo-touching phase runs an in-process Claude Agent SDK session
 (`lib/agent-session.ts`): string prompt, `settingSources: []`, `permissionMode: 'default'` +
-`canUseTool` allow (root-safe), CLAUDE.md/rules + project memory injected into `systemPrompt.append`,
-Bash PreToolUse guard against `--no-verify`/`--force`/`rm -rf /`, live admin steering over Redis.
+`canUseTool` allow (root-safe), the repo's working agreement (CLAUDE.md and/or AGENTS.md + rules) +
+project memory injected into `systemPrompt.append`, Bash PreToolUse guard against
+`--no-verify`/`--force`/`rm -rf /`, live admin steering over Redis.
 
-- **intake** — authorize + agent-contract precondition (CLAUDE.md present); ack the issue.
+- **intake** — authorize + agent-contract precondition (CLAUDE.md or AGENTS.md present); ack the issue.
 - **spec** — draft the implementation spec; adversarial **review** (actor ≠ judge) PASS/BLOCK loop.
-- **implement** — make the change; compute blast radius (fail-closed).
+- **implement** — make the change; commit + push the run branch; compute blast radius (fail-closed).
+- **pre-pr-review** — on the committed branch, run each changed repo's OWN pre-PR round: the review
+  skills and readiness/preflight checks its working agreement names (repo-local `.claude/skills` are
+  loaded as a `<repo>-local` plugin for this phase), landing the fixes as its rules say; a repo
+  without such a section gets a generic checks-plus-diff review. When the branch changed the repo's
+  own rules or skills (`CLAUDE.md`, `AGENTS.md`, `.claude/rules`, `.claude/skills`) the round reads
+  the BASE branch's versions, never the branch's. Pushed fixes re-classify the blast radius from the
+  real diff. The verdict comes from the main agent's final message only; an incomplete round blocks
+  the run (gate `pre_pr_review`) rather than opening a PR. Skipped for external-PR runs (the PR
+  exists). code-refine (a pre-PR rejection at `ready_to_submit`) re-enters this phase too.
 - **verify** — security + language + error-handling validation (pragma).
 - **pr** — open the PR(s); route to auto-merge (if eligible + `auto_merge_safe`) or `watching`.
 - **watch / revise** — see §8.
@@ -187,8 +197,8 @@ An issue lives on the issues repo but the work happens in the **code repos**. Ch
 
 - **Workspace**: one temp dir with each enabled code repo cloned into `<workspace>/<repo>/` on a
   fresh agent branch (`agent/se-<issue>-<runid8>`, same name across repos). Agent cwd = workspace root.
-- **Contract + memory injection**: each code repo's CLAUDE.md/rules injected, namespaced by repo;
-  the project memory injected once.
+- **Contract + memory injection**: each code repo's working agreement (CLAUDE.md and/or AGENTS.md,
+  plus `.claude/rules`) injected, namespaced by repo; the project memory injected once.
 - **spec**: agent explores across repos, writes a spec identifying target repo(s) + planned changes.
   Spec stored as a run artifact (DB) + included in each PR body — **not** committed into code repos.
 - **implement**: agent edits across `<repo>/` subdirs.

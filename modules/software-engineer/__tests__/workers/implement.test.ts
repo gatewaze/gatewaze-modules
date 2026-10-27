@@ -134,7 +134,7 @@ describe('implement worker — hasChanges + commitsAhead combine', () => {
     expect(wt.pushBranch).toHaveBeenCalledWith('/tmp/ws/widgets', 'se/issue-56');
     expect(rs.prs).toEqual([{ runId: 'run-1', repoOwner: 'acme', repoName: 'widgets', patch: { branch: 'se/issue-56', state: 'open' } }]);
     expect(rs.ends.at(-1)).toMatchObject({ phase: 'implement', status: 'passed' });
-    expect(result).toEqual({ ok: true, changedRepos: 1 });
+    expect(result).toEqual({ ok: true, changedRepos: 1, next: 'pre-pr-review' });
   });
 
   it('existing dirty-tree case keeps working: commitAndPush is used, not pushBranch', async () => {
@@ -179,6 +179,30 @@ describe('implement worker — hasChanges + commitsAhead combine', () => {
     expect(rs.prs.map((p: any) => p.repoName).sort()).toEqual(['ahead-repo', 'dirty-repo']);
   });
 
+  it('hands off to pre-pr-review once the branch is committed and pushed', async () => {
+    wt.hasChanges.mockResolvedValue(true);
+    wt.commitsAhead.mockResolvedValue(0);
+
+    const { supabase, updates } = mockSupabase();
+    const result = await implement({ data: { runId: 'run-1' } }, { supabase });
+
+    expect(result).toEqual({ ok: true, changedRepos: 1, next: 'pre-pr-review' });
+    expect(enqueue.calls).toEqual([{ runId: 'run-1', phase: 'pre-pr-review', data: undefined }]);
+    expect(updates.find((u) => u.table === 'se_runs' && u.row?.current_phase)?.row).toMatchObject({ current_phase: 'pre-pr-review' });
+  });
+
+  it('an external-PR run skips the local review round and goes straight to verify', async () => {
+    wt.hasChanges.mockResolvedValue(true);
+    wt.commitsAhead.mockResolvedValue(0);
+
+    const { supabase, run } = mockSupabase();
+    run.kind = 'external_pr';
+    const result = await implement({ data: { runId: 'run-1' } }, { supabase });
+
+    expect(result).toEqual({ ok: true, changedRepos: 1, next: 'verify' });
+    expect(enqueue.calls).toEqual([{ runId: 'run-1', phase: 'verify', data: undefined }]);
+  });
+
   it('push failure on the clean-but-ahead path records an error se_run_prs row', async () => {
     wt.hasChanges.mockResolvedValue(false);
     wt.commitsAhead.mockResolvedValue(1);
@@ -187,7 +211,7 @@ describe('implement worker — hasChanges + commitsAhead combine', () => {
     const { supabase } = mockSupabase();
     const result = await implement({ data: { runId: 'run-1' } }, { supabase });
 
-    expect(result).toEqual({ ok: true, changedRepos: 1 });
+    expect(result).toEqual({ ok: true, changedRepos: 1, next: 'pre-pr-review' });
     expect(rs.prs).toEqual([{ runId: 'run-1', repoOwner: 'acme', repoName: 'widgets', patch: { branch: 'se/issue-56', state: 'error', error: 'push rejected' } }]);
   });
 });

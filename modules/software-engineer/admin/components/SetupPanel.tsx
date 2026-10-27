@@ -404,7 +404,7 @@ export default function SetupPanel(
                     data-1p-ignore="true" data-lpignore="true" data-bwignore="true" data-form-type="other" />
                 </Field>
                 <div className="pt-1 space-y-1">
-                  {['triage', 'spec', 'review', 'implement', 'verify', 'revise', 'reflect'].map((phase) => {
+                  {['triage', 'spec', 'review', 'implement', 'pre-pr-review', 'verify', 'revise', 'reflect'].map((phase) => {
                     const pm = (s.phase_models ?? {})[phase] ?? {};
                     const setPhase = (key: string) => (e: any) => setS((prev: any) => {
                       const map = { ...(prev.phase_models ?? {}) };

@@ -7,6 +7,7 @@
 
 const SENSITIVE: Array<[RegExp, string]> = [
   [/(^|\/)\.claude\//, 'agent rules/config (.claude/**)'],
+  [/(^|\/)(CLAUDE|AGENTS)\.md$/, 'agent working agreement'],
   [/(^|\/)\.github\/workflows\//, 'CI workflow'],
   [/(^|\/)safe-exec\.ts$/, 'shell-exec allowlist'],
   [/(^|\/)Dockerfile/i, 'Dockerfile'],

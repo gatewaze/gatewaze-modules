@@ -24,7 +24,8 @@
  * also realpath-contained inside its clone, so a malicious skills repo can't symlink out to load host
  * files (or another clone) as a trusted plugin.
  */
-import { mkdtemp, realpath, rm } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, realpath, rm, stat, writeFile } from 'node:fs/promises';
+import { lstatSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, sep } from 'node:path';
 import { git, authedRemote, redactToken } from './git.js';
@@ -119,6 +120,58 @@ export async function resolveProjectSkills(project: any, token: string, logger?:
   } catch (err: any) {
     // Any unexpected failure: don't leak the temp dir.
     logger?.warn?.('se: skills resolve failed', { error: redactToken(String(err?.message ?? err), token) });
+    await cleanup();
+    return { plugins: [], cleanup: async () => {} };
+  }
+  return { plugins, cleanup };
+}
+
+/** The plugin name a repo's own skills load under: `<repo>-local`, in the plugin-name charset. */
+export const repoLocalPluginName = (repoName: string): string => `${String(repoName ?? '').replace(/[^A-Za-z0-9_-]+/g, '-').slice(0, 80)}-local`;
+
+/**
+ * Repo-local skills: a code repo's own `.claude/skills/` directory. Sessions start with
+ * `settingSources: []` (agent-session.ts), so the skills a repo's working agreement names — its
+ * pre-PR readiness, preflight and knowledge-base review skills — never load on their own. This
+ * materialises each workspace repo's `.claude/skills/` as a LOCAL plugin named `<repo>-local`: a
+ * manifest plus a copy of the skills directory and nothing else, so the Skill tool lists them as
+ * `/<repo>-local:<skill>`. No hooks, agents or MCP servers from the repo are loaded this way.
+ *
+ * Trust: the skills come from the repo the agent is already editing and running checks in with Bash,
+ * so they add no capability the session does not already have. Symlinks inside the skills directory
+ * are skipped rather than copied, so a skill cannot point the plugin at a file outside its own tree.
+ * Ephemeral like resolveProjectSkills: a fresh mkdtemp per call, and the caller MUST await the
+ * returned `cleanup()` in its finally. Best-effort, never throws.
+ */
+export async function resolveRepoLocalSkills(repos: Array<{ repoName: string; dir: string }>, logger?: any): Promise<ResolvedSkills> {
+  const candidates: Array<{ repoName: string; src: string }> = [];
+  for (const r of repos ?? []) {
+    if (!r?.dir || !r?.repoName) continue;
+    const src = join(r.dir, '.claude', 'skills');
+    try { if ((await stat(src)).isDirectory()) candidates.push({ repoName: r.repoName, src }); } catch { /* no skills dir */ }
+  }
+  if (candidates.length === 0) return { plugins: [], cleanup: async () => {} };
+  const root = await mkdtemp(join(tmpdir(), 'se-repo-skills-'));
+  const cleanup = async () => { await rm(root, { recursive: true, force: true }).catch(() => {}); };
+  const plugins: ResolvedSkills['plugins'] = [];
+  const used = new Set<string>();
+  try {
+    for (const c of candidates) {
+      const name = repoLocalPluginName(c.repoName);
+      // Two workspace repos can share a name (an upstream and its fork). Merging their skills into
+      // one plugin would silently serve the wrong repo's version, so the second one is skipped.
+      if (used.has(name)) { logger?.warn?.('se: repo-local skills plugin name collision — skipped', { repo: c.repoName, plugin: name }); continue; }
+      used.add(name);
+      const dir = join(root, name);
+      await mkdir(join(dir, '.claude-plugin'), { recursive: true });
+      await cp(c.src, join(dir, 'skills'), { recursive: true, filter: (p) => !lstatSync(p).isSymbolicLink() });
+      await writeFile(join(dir, '.claude-plugin', 'plugin.json'), JSON.stringify({
+        name, description: `Skills from the ${c.repoName} repository's own .claude/skills directory`, skills: './skills/',
+      }, null, 2));
+      plugins.push({ type: 'local', path: dir, skipMcpDiscovery: true });
+    }
+  } catch (err: any) {
+    logger?.warn?.('se: repo-local skills resolve failed', { error: String(err?.message ?? err) });
     await cleanup();
     return { plugins: [], cleanup: async () => {} };
   }
