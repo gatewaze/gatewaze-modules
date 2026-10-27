@@ -3,6 +3,7 @@
  *
  * Covers the calls needed to register an attendee for on-site badge printing:
  *   1. findOrCreateContact  – upsert a person by email via GET/POST /contacts
+ *                             (deleted contacts in the search result are skipped)
  *   2. addAttendee          – register the contact via POST /attendees
  *   3. listAdmissionItems   – populates the admin dropdown
  *   4. updateContact        – push badge-field changes for an existing contact
@@ -205,6 +206,20 @@ export function createCventClient(opts: CventClientOptions): CventClient {
     return call(`/contacts?filter=${filter}`, 'GET');
   }
 
+  /**
+   * The first usable contact in a search result. Cvent keeps deleted contacts
+   * in the address book and the email filter still returns them, oldest first,
+   * so an address that was deleted and re-added comes back as two rows with
+   * the dead one in front. Registering the dead one fails with
+   * EntityNotFound/Contact, so only a live row counts as a match.
+   */
+  function liveContact(searchData: unknown): Record<string, unknown> | null {
+    const rows = (searchData as { data?: unknown } | null)?.data;
+    if (!Array.isArray(rows)) return null;
+    const hit = rows.find((c) => c && typeof c.id === 'string' && c.deleted !== true);
+    return (hit as Record<string, unknown> | undefined) ?? null;
+  }
+
   function contactBody(contactId: string | undefined, existing: Record<string, unknown> | null, f: BadgeFields) {
     const body: Record<string, string> = {
       email: f.email,
@@ -238,13 +253,14 @@ export function createCventClient(opts: CventClientOptions): CventClient {
       };
     }
 
-    const existing = searchRes.data?.data?.[0];
-    if (existing?.id) {
+    const existing = liveContact(searchRes.data);
+    if (existing) {
+      const id = existing.id as string;
       if (fieldsChanged(existing, f)) {
-        const upd = await call(`/contacts/${encodeURIComponent(existing.id)}`, 'PUT', contactBody(existing.id, existing, f));
-        if (!upd.ok) log(`Cvent contact ${existing.id} update failed (${upd.status}); continuing with registration`);
+        const upd = await call(`/contacts/${encodeURIComponent(id)}`, 'PUT', contactBody(id, existing, f));
+        if (!upd.ok) log(`Cvent contact ${id} update failed (${upd.status}); continuing with registration`);
       }
-      return { success: true, contactId: existing.id as string };
+      return { success: true, contactId: id };
     }
 
     // Bulk endpoint: array in, 207 with per-item status out.
@@ -360,7 +376,7 @@ export function createCventClient(opts: CventClientOptions): CventClient {
           if (!searchRes.ok) {
             return { success: false, transient: searchRes.transient, error: `GET /contacts failed (${searchRes.status}): ${JSON.stringify(searchRes.data)}` };
           }
-          existing = searchRes.data?.data?.[0] ?? null;
+          existing = liveContact(searchRes.data);
           id = (existing?.id as string | undefined) ?? null;
           if (!id) return { success: false, error: `Contact not found in Cvent for ${fields.email}` };
         }
