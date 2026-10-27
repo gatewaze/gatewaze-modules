@@ -40,8 +40,13 @@ export type SendPrep =
   | { action: 'retry'; metadata: Record<string, unknown>; reason: string }
   | { action: 'fail'; metadata: Record<string, unknown>; reason: string }
 
+// Errors are stored on the send for admins to read. Postgres errors can carry
+// whole SQL fragments, so keep only the start.
+const MAX_STORED_ERROR = 300
+
 function message(err: unknown): string {
-  return err instanceof Error ? err.message : String(err)
+  const m = err instanceof Error ? err.message : String(err)
+  return m.length > MAX_STORED_ERROR ? `${m.slice(0, MAX_STORED_ERROR)}…` : m
 }
 
 export async function prepareSend(send: DueSend, db: AudienceDb, now: number = Date.now()): Promise<SendPrep> {

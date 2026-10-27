@@ -18,7 +18,7 @@ CREATE OR REPLACE FUNCTION public.segments_calculate_members(p_segment_id uuid)
 RETURNS jsonb
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+SET search_path = public, pg_temp
 AS $$
 DECLARE
   v_def   jsonb;
@@ -80,3 +80,8 @@ BEGIN
   RETURN jsonb_build_object('count', v_count, 'duration_ms', v_dur);
 END;
 $$;
+
+-- Anon never needs this; keep the body out of its reach. CREATE OR REPLACE
+-- keeps existing grants, so state them.
+REVOKE EXECUTE ON FUNCTION public.segments_calculate_members(uuid) FROM PUBLIC, anon;
+GRANT EXECUTE ON FUNCTION public.segments_calculate_members(uuid) TO authenticated, service_role;
