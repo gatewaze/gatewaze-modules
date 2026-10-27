@@ -7,7 +7,7 @@ const scrapersModule: GatewazeModule = {
   visibility: 'hidden',
   name: 'Scrapers',
   description: 'Configure and run web scraping jobs for event discovery and content aggregation',
-  version: '1.3.0',
+  version: '1.3.1',
   features: [
     'scrapers',
     'scrapers.manage',
@@ -37,6 +37,28 @@ const scrapersModule: GatewazeModule = {
       handler: './scripts/workers/speaker-extract-handler.js',
       concurrency: 1,
     },
+    {
+      // Deletes scrapers_job_logs rows for jobs older than the retention
+      // window (default 7 days) by looping the row-bounded SQL function
+      // scrapers_prune_job_logs. Concurrency 1: two pruners would only
+      // contend on the same rows.
+      name: 'scraper:prune-logs',
+      handler: './scripts/workers/prune-job-logs-handler.js',
+      concurrency: 1,
+    },
+  ],
+
+  crons: [
+    {
+      // Nightly log retention. Nothing reads scrapers_job_logs except the
+      // per-job "view logs" modal, and unpruned it grew to half of the AAIF
+      // production database. retention_days here is the default; set
+      // SCRAPERS_LOG_RETENTION_DAYS on the worker to override per instance.
+      name: 'scrapers-prune-job-logs',
+      queue: 'jobs',
+      schedule: { pattern: '30 3 * * *', tz: 'UTC' },
+      data: { kind: 'scraper:prune-logs' },
+    },
   ],
 
   migrations: [
@@ -62,6 +84,7 @@ const scrapersModule: GatewazeModule = {
     'migrations/020_event_type_manual_wins.sql',
     'migrations/021_seed_luma_pending_events_scraper.sql',
     'migrations/022_create_job_metadata.sql',
+    'migrations/023_job_logs_retention.sql',
   ],
 
   adminRoutes: [
