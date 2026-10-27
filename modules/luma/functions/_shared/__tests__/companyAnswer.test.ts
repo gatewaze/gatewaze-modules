@@ -32,5 +32,8 @@ describe('splitCompanyAnswer', () => {
     const r = splitCompanyAnswer(long)
     expect(r.company).toBe('A'.repeat(200))
     expect(r.jobTitle).toBeUndefined()
+    // The cap counts code points, so an emoji at the boundary stays whole.
+    const emoji = 'A'.repeat(199) + '🚀' + 'B'
+    expect(splitCompanyAnswer(emoji).company).toBe('A'.repeat(199) + '🚀')
   })
 })
