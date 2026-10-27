@@ -20,7 +20,7 @@ const cventModule: GatewazeModule = {
   id: 'cvent',
   name: 'Cvent',
   description: 'Sync event registrations to Cvent for on-site badge printing',
-  version: '2.1.0',
+  version: '2.1.1',
   type: 'integration',
   visibility: 'public',
   group: 'events',
