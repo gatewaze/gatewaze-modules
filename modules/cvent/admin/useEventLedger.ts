@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { api } from './api';
+import { api } from './client';
 import { createLedgerCache, type EventLedger, type LedgerPayload } from '../lib/ledger-cache';
 
 /**

@@ -4,6 +4,10 @@ import { supabase } from '@/lib/supabase';
  * Calls the module's own API (/api/modules/cvent/*) with the admin's session
  * token. Every route there checks the caller is an admin; the admin UI never
  * reads or writes the Cvent tables directly.
+ *
+ * Named client.ts on purpose: the admin bundle's module plugin treats any
+ * import path ending in `api` (./api, ./api.ts, ./api/...) as server-only and
+ * stubs it to a no-op, so an `admin/api.ts` helper silently never calls out.
  */
 
 function apiUrl(): string {

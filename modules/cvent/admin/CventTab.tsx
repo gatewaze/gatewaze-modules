@@ -7,7 +7,7 @@ import {
 } from '@heroicons/react/24/outline';
 import { toast } from 'sonner';
 import { Button, Card, Input } from '@/components/ui';
-import { api, eventKey, type SyncNowResult, type SyncStatus } from './api';
+import { api, eventKey, type SyncNowResult, type SyncStatus } from './client';
 import { refreshEventLedger } from './useEventLedger';
 
 /**
