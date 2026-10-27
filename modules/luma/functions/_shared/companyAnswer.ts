@@ -16,7 +16,9 @@ const MAX_LEN = 200
 /** Inbound email text: drop control characters and cap the length. */
 function clean(s: string): string {
   // eslint-disable-next-line no-control-regex -- stripping control characters is the point
-  return s.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, MAX_LEN).trim()
+  const t = s.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim()
+  // Cut on code points, not UTF-16 units, so the cap cannot leave half a character.
+  return Array.from(t).slice(0, MAX_LEN).join('').trim()
 }
 
 export function splitCompanyAnswer(answer: unknown): { company?: string; jobTitle?: string } {
