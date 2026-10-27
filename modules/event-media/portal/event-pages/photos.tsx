@@ -251,12 +251,17 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode, subPath }: 
   useEffect(() => {
     if (searchParams.get('tab') !== 'booth' && !searchParams.get('look')) return
     if (!urlCode) return
+    // Only from the photos page itself (an album sub-path has no booth
+    // link to honour), and never to a protocol-relative path: a leading
+    // double slash would turn the replace into a different origin.
+    const here = window.location.pathname.replace(/^\/{2,}/, '/')
+    if (!/\/photos\/?$/.test(here)) return
     const q = new URLSearchParams({ u: urlCode })
     for (const k of ['decade', 'look']) {
       const v = searchParams.get(k)
       if (v && /^[a-z0-9][a-z0-9-]{0,40}$/.test(v)) q.set(k, v)
     }
-    router.replace(`${window.location.pathname.replace(/\/photos\/?$/, '/booth')}?${q.toString()}`)
+    router.replace(`${here.replace(/\/photos\/?$/, '/booth')}?${q.toString()}`)
   }, [searchParams, urlCode, router])
   const [link, setLink] = useState<LinkInfo | null>(null)
   const [loading, setLoading] = useState(true)
