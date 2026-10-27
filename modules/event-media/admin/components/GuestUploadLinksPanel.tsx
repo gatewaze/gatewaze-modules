@@ -12,10 +12,6 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { supabase } from '@/lib/supabase';
 import { QRCodeService } from '@/utils/qrCodeService';
 import { toast } from 'sonner';
-import { BOOTH_ERAS, eraAllLooks } from '../../lib/booth-eras';
-import { boothEffect } from '../../lib/booth-effects';
-import { BOOTH_OCCASIONS } from '../../lib/booth-occasions';
-import { KeyPeoplePanel } from './KeyPeoplePanel';
 
 interface GuestUploadLinksPanelProps {
   eventId: string; // events.id uuid
@@ -34,14 +30,6 @@ interface UploadLink {
   uploads_count: number;
   logo_url: string | null;
   created_at: string;
-}
-
-interface FaceFilter {
-  id: string;
-  label: string;
-  source_path: string;
-  is_active: boolean;
-  sort_order: number;
 }
 
 interface PendingMedia {
@@ -135,107 +123,21 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
   );
 
   // Deep links for their own QR codes: the wedding-photos screen, or
-  // straight into the photo booth. Full page URLs rather than /u/<code>,
-  // whose redirect drops anything after the code.
+  // the photo booth, which is the photo-booth module's own page. Full
+  // page URLs rather than /u/<code>, whose redirect drops anything after
+  // the code.
   const sectionUrl = useCallback(
     (link: UploadLink, tab: 'photos' | 'booth') => {
       const base = customDomainUrl
-        ? `${baseUrl}/photos`
+        ? baseUrl
         : eventIdentifier
-          ? `${baseUrl}/events/${eventIdentifier}/photos`
+          ? `${baseUrl}/events/${eventIdentifier}`
           : null;
       if (!base) return null;
-      return `${base}?u=${link.short_code}${tab === 'booth' ? '&tab=booth' : ''}`;
+      return `${base}/${tab}?u=${link.short_code}`;
     },
     [baseUrl, customDomainUrl, eventIdentifier],
   );
-
-  /**
-   * A link that opens one look's booth directly -- to send round with
-   * "take a photo of yourself in this" (asked 2026-09-22).
-   */
-  const lookUrl = useCallback(
-    (link: UploadLink, decade: string, look: string) => {
-      const base = sectionUrl(link, 'booth');
-      return base ? `${base}&decade=${encodeURIComponent(decade)}&look=${encodeURIComponent(look)}` : null;
-    },
-    [sectionUrl],
-  );
-
-  // Which decade's looks the link list is showing, per link.
-  const [lookDecade, setLookDecade] = useState<Record<string, string>>({});
-
-  // ── Face filters ──────────────────────────────────────────────────
-
-  const [filters, setFilters] = useState<FaceFilter[]>([]);
-  const [provider, setProvider] = useState<{
-    configured: boolean;
-    reason?: string;
-    styles?: boolean;
-    swaps?: boolean;
-  } | null>(null);
-  const [filterLabel, setFilterLabel] = useState('');
-  const [uploadingFace, setUploadingFace] = useState(false);
-  const faceInputRef = useRef<HTMLInputElement | null>(null);
-
-  const loadFilters = useCallback(async () => {
-    try {
-      const res = await authedFetch(`/api/admin/events/${eventId}/face-filters`);
-      if (!res.ok) return;
-      const data = await res.json();
-      setFilters(data.items ?? []);
-      setProvider(data.provider ?? null);
-    } catch {
-      // panel still usable without it
-    }
-  }, [eventId]);
-
-  const addFace = useCallback(async (file: File) => {
-    const label = filterLabel.trim();
-    if (!label) { toast.error('Give the face a name first'); return; }
-    setUploadingFace(true);
-    try {
-      // Reference faces live outside the media rows: they are inputs
-      // to the swap, not gallery content.
-      const ext = (file.name.split('.').pop() || 'jpg').toLowerCase().replace(/[^a-z0-9]/g, '');
-      const path = `event/${eventId}/__faces/${crypto.randomUUID()}.${ext}`;
-      const { error: upErr } = await supabase.storage.from('media').upload(path, file, {
-        contentType: file.type || 'image/jpeg',
-        upsert: false,
-      });
-      if (upErr) { toast.error(`Upload failed: ${upErr.message}`); return; }
-
-      const res = await authedFetch(`/api/admin/events/${eventId}/face-filters`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ label, source_path: path }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => null);
-        toast.error(err?.message ?? 'Could not save that face');
-        return;
-      }
-      toast.success(`Added ${label}`);
-      setFilterLabel('');
-      await loadFilters();
-    } finally {
-      setUploadingFace(false);
-    }
-  }, [eventId, filterLabel, loadFilters]);
-
-  const toggleFilter = useCallback(async (f: FaceFilter) => {
-    const res = await authedFetch(`/api/admin/events/${eventId}/face-filters/${f.id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ is_active: !f.is_active }),
-    });
-    if (res.ok) await loadFilters(); else toast.error('Could not update that face');
-  }, [eventId, loadFilters]);
-
-  const removeFilter = useCallback(async (f: FaceFilter) => {
-    const res = await authedFetch(`/api/admin/events/${eventId}/face-filters/${f.id}`, { method: 'DELETE' });
-    if (res.ok) { toast.success('Removed'); await loadFilters(); } else toast.error('Could not remove that face');
-  }, [eventId, loadFilters]);
 
   const loadLinks = useCallback(async () => {
     try {
@@ -250,21 +152,8 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
     }
   }, [eventId]);
 
-  // Which booth eras guests are offered: all of them (an era picker), or
-  // one, for a themed party -- the booth then opens straight into it.
-  const [boothEra, setBoothEra] = useState<string>('all');
-  // Occasions beside the decades: a 50s Halloween, a 70s Christmas
-  // (migration 031). 'none' is the booth as it was.
-  const [boothOccasion, setBoothOccasion] = useState('none');
-  // Poses: what the booth asks people to do (migration 012).
-  const [poseMode, setPoseMode] = useState<'off' | 'hour' | 'card'>('off');
-  const [poseMinutes, setPoseMinutes] = useState(30);
   // How long before the event the getting-ready prompts appear.
   const [readyHours, setReadyHours] = useState(36);
-  // The organiser's budget for the booth: every picture costs money at a
-  // GPU endpoint, and a QR code outlives the party. 0 means no limit.
-  const [closesHours, setClosesHours] = useState(0);
-  const [maxPerGuest, setMaxPerGuest] = useState(0);
   // When the evening reception starts, in minutes past midnight. Photos
   // taken from then go to their own album (migration 022).
   const [eveningFrom, setEveningFrom] = useState(18 * 60 + 30);
@@ -273,28 +162,18 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
     let cancelled = false;
     void supabase
       .from('events_media_booth_settings')
-      .select('era, occasion, pose_mode, pose_minutes, ready_hours, booth_closes_hours, booth_max_per_guest, evening_from_minutes')
+      .select('ready_hours, evening_from_minutes')
       .eq('event_id', eventId)
       .maybeSingle()
-      .then(({ data }: { data: {
-        era?: string; occasion?: string; pose_mode?: string; pose_minutes?: number; ready_hours?: number;
-        booth_closes_hours?: number | null; booth_max_per_guest?: number | null;
-        evening_from_minutes?: number | null;
-      } | null }) => {
+      .then(({ data }: { data: { ready_hours?: number; evening_from_minutes?: number | null } | null }) => {
         if (cancelled || !data) return;
-        if (data.era) setBoothEra(data.era);
-        if (data.occasion) setBoothOccasion(data.occasion);
-        if (data.pose_mode === 'hour' || data.pose_mode === 'card') setPoseMode(data.pose_mode);
-        if (typeof data.pose_minutes === 'number') setPoseMinutes(data.pose_minutes);
         if (typeof data.ready_hours === 'number') setReadyHours(data.ready_hours);
-        setClosesHours(typeof data.booth_closes_hours === 'number' ? data.booth_closes_hours : 0);
-        setMaxPerGuest(typeof data.booth_max_per_guest === 'number' ? data.booth_max_per_guest : 0);
         setEveningFrom(typeof data.evening_from_minutes === 'number' ? data.evening_from_minutes : 18 * 60 + 30);
       });
     return () => { cancelled = true; };
   }, [expanded, eventId]);
 
-  /** Save one booth setting, putting it back if the write is refused. */
+  /** Save one setting, putting it back if the write is refused. */
   const saveBooth = async (
     patch: Record<string, unknown>,
     undo: () => void,
@@ -302,7 +181,7 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
   ) => {
     const { error } = await supabase
       .from('events_media_booth_settings')
-      .upsert({ event_id: eventId, era: boothEra, ...patch, updated_at: new Date().toISOString() }, { onConflict: 'event_id' });
+      .upsert({ event_id: eventId, ...patch, updated_at: new Date().toISOString() }, { onConflict: 'event_id' });
     if (error) {
       undo();
       toast.error('Could not save that booth setting');
@@ -311,22 +190,9 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
     toast.success(said);
   };
 
-  const saveBoothEra = async (era: string) => {
-    const prev = boothEra;
-    setBoothEra(era);
-    const { error } = await supabase
-      .from('events_media_booth_settings')
-      .upsert({ event_id: eventId, era, updated_at: new Date().toISOString() }, { onConflict: 'event_id' });
-    if (error) {
-      setBoothEra(prev);
-      toast.error('Could not save the booth era');
-      return;
-    }
-    toast.success(era === 'all' ? 'Guests choose from every era' : `The booth is ${era} only`);
-  };
-
   // Guests who have uploaded, from the invitation list, and who is
-  // blocked. Blocking stops a guest uploading or using the booth and takes
+  // blocked. Blocking stops a guest uploading (and the photo booth, which
+  // reads the same list) and takes
   // every photo of theirs off the projector and the gallery.
   const [uploaders, setUploaders] = useState<Array<{ memberId: string; name: string; photos: number }>>([]);
   const [blocked, setBlocked] = useState<Set<string>>(new Set());
@@ -399,7 +265,6 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
   useEffect(() => {
     if (!expanded || loaded) return;
     void loadLinks();
-    void loadFilters();
   }, [expanded, loaded, loadLinks]);
 
   const createLink = async () => {
@@ -563,51 +428,6 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
                 ))}
               </div>
 
-              {/* One look at a time: a link (and QR) that opens that
-                  booth with the camera already running. */}
-              <div className="basis-full pt-1 text-xs text-gray-600 dark:text-gray-300">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <span className="font-medium">One look:</span>
-                  <select
-                    className="rounded border border-gray-300 dark:border-gray-600 bg-transparent px-1.5 py-1 text-xs"
-                    value={lookDecade[link.id] ?? ''}
-                    onChange={(e) => setLookDecade((m) => ({ ...m, [link.id]: e.target.value }))}
-                  >
-                    <option value="">Choose a decade…</option>
-                    {BOOTH_ERAS.map((era) => (
-                      <option key={era.key} value={era.key}>{era.label}</option>
-                    ))}
-                  </select>
-                </div>
-                {(() => {
-                  const era = BOOTH_ERAS.find((e) => e.key === lookDecade[link.id]);
-                  if (!era) return null;
-                  return (
-                    <div className="mt-1 space-y-1">
-                      {eraAllLooks(era).map((look) => (
-                        <div key={look} className="flex items-center gap-2">
-                          <span>{boothEffect(look)?.label ?? look}</span>
-                          <span className="flex-1" />
-                          <button
-                            className="underline"
-                            onClick={async () => {
-                              const url = lookUrl(link, era.key, look);
-                              if (!url) { toast.error('Event identifier still loading'); return; }
-                              try { await navigator.clipboard.writeText(url); toast.success('Link copied'); }
-                              catch { toast.error('Could not copy URL'); }
-                            }}
-                          >
-                            Copy link
-                          </button>
-                          <button className="underline" onClick={() => downloadQr(link, 1200, { url: lookUrl(link, era.key, look), name: `${era.key}-${look}` })}>
-                            QR
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  );
-                })()}
-              </div>
             </div>
           ))}
 
@@ -665,7 +485,7 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
                   ['allow_video', 'Allow video'],
                   ['auto_approve', 'Auto-approve'],
                   ['show_gallery', 'Show gallery'],
-                  ['allow_face_filter', 'Face filter'],
+                  ['allow_face_filter', 'Photo booth'],
                 ] as const).map(([key, label]) => (
                   <label key={key} className="flex items-center gap-1.5">
                     <input
@@ -725,8 +545,6 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
             )}
           </div>
 
-          <KeyPeoplePanel eventId={eventId} />
-
           {claims.length > 0 && (
             <div className="pt-2 border-t border-gray-100 dark:border-gray-800">
               <p className="text-sm font-medium mb-1">Names chosen ({claims.length})</p>
@@ -746,89 +564,10 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
             </div>
           )}
 
-          {/* Photo booth. Style effects need only the provider; face
-              swaps also need the reference faces uploaded below. Both
-              are offered to guests only when the link opts in. */}
+          {/* When the day's albums start and end. The photo booth's own
+              settings live on its tab (the photo-booth module). */}
           <div className="pt-2 border-t border-gray-100 dark:border-gray-800">
-            <p className="text-sm font-medium mb-1">Photo booth</p>
-            <label className="flex flex-wrap items-center gap-2 text-sm mb-2">
-              Decades
-              <select
-                value={boothEra}
-                onChange={(e) => void saveBoothEra(e.target.value)}
-                className="rounded border border-gray-300 dark:border-gray-600 bg-transparent px-2 py-1 text-sm"
-              >
-                <option value="all">All decades — guests pick one</option>
-                {BOOTH_ERAS.map((era) => (
-                  <option key={era.key} value={era.key}>{era.label} only — a themed event</option>
-                ))}
-              </select>
-            </label>
-
-            {/* Occasions sit beside the decades: each decade's board
-                gains that occasion's look (a 50s Halloween, a 70s
-                Christmas) next to its own. */}
-            <label className="flex flex-wrap items-center gap-2 text-sm mb-2">
-              Occasions
-              <select
-                value={boothOccasion}
-                onChange={(e) => {
-                  const next = e.target.value;
-                  const prev = boothOccasion;
-                  setBoothOccasion(next);
-                  void saveBooth({ occasion: next }, () => setBoothOccasion(prev),
-                    next === 'none' ? 'Just the decades'
-                      : next === 'all' ? 'Every occasion, in every decade'
-                        : `${BOOTH_OCCASIONS.find((o) => o.key === next)?.label ?? next} in every decade`);
-                }}
-                className="rounded border border-gray-300 dark:border-gray-600 bg-transparent px-2 py-1 text-sm"
-              >
-                <option value="none">None — just the decades</option>
-                {BOOTH_OCCASIONS.map((o) => (
-                  <option key={o.key} value={o.key}>{o.label} — a {o.label} look in every decade</option>
-                ))}
-                <option value="all">Every occasion — all of them, in every decade</option>
-              </select>
-            </label>
-
-            {/* Poses: the booth asks people to do something, rather than
-                photographing them sitting still. */}
-            <label className="flex items-center gap-2 text-sm">
-              Poses
-              <select
-                value={poseMode}
-                onChange={(e) => {
-                  const next = e.target.value as 'off' | 'hour' | 'card';
-                  const prev = poseMode;
-                  setPoseMode(next);
-                  void saveBooth({ pose_mode: next }, () => setPoseMode(prev),
-                    next === 'off' ? 'The booth just takes the photo'
-                      : next === 'hour' ? 'Everyone gets the same pose, rotating'
-                        : 'The booth deals a pose each time');
-                }}
-                className="rounded border border-gray-300 dark:border-gray-600 bg-transparent px-2 py-1 text-sm"
-              >
-                <option value="off">Off — just take the photo</option>
-                <option value="hour">Pose of the hour — everyone does the same one</option>
-                <option value="card">Pose card — a different one each time</option>
-              </select>
-              {poseMode === 'hour' && (
-                <select
-                  value={String(poseMinutes)}
-                  onChange={(e) => {
-                    const next = Number(e.target.value);
-                    const prev = poseMinutes;
-                    setPoseMinutes(next);
-                    void saveBooth({ pose_minutes: next }, () => setPoseMinutes(prev), `A new pose every ${next} minutes`);
-                  }}
-                  className="rounded border border-gray-300 dark:border-gray-600 bg-transparent px-2 py-1 text-sm"
-                >
-                  {[15, 30, 45, 60].map((m) => <option key={m} value={m}>every {m} min</option>)}
-                </select>
-              )}
-            </label>
-
-
+            <p className="text-sm font-medium mb-1">Albums</p>
             {/* The morning before: prompts and a countdown, before the
                 event starts. */}
             <label className="flex items-center gap-2 text-sm">
@@ -872,116 +611,6 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
             <p className="text-xs text-gray-500">
               Photos already filed stay where they are — this decides where new ones go.
             </p>
-
-            {/* What the booth costs is bounded by these two, not by
-                hoping guests stop (migration 020). */}
-            <label className="flex items-center gap-2 text-sm">
-              The booth closes
-              <select
-                value={String(closesHours)}
-                onChange={(e) => {
-                  const next = Number(e.target.value);
-                  const prev = closesHours;
-                  setClosesHours(next);
-                  void saveBooth({ booth_closes_hours: next === 0 ? null : next }, () => setClosesHours(prev),
-                    next === 0 ? 'The booth stays open' : `The booth closes ${next} hours after the event starts`);
-                }}
-                className="rounded border border-gray-300 dark:border-gray-600 bg-transparent px-2 py-1 text-sm"
-              >
-                <option value="0">Never</option>
-                {[6, 12, 24, 48, 72, 168, 336, 720].map((h) => (
-                  <option key={h} value={h}>
-                    {h < 48 ? `${h} hours` : `${Math.round(h / 24)} days`} after the event starts
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label className="flex items-center gap-2 text-sm">
-              Each guest may have
-              <select
-                value={String(maxPerGuest)}
-                onChange={(e) => {
-                  const next = Number(e.target.value);
-                  const prev = maxPerGuest;
-                  setMaxPerGuest(next);
-                  void saveBooth({ booth_max_per_guest: next === 0 ? null : next }, () => setMaxPerGuest(prev),
-                    next === 0 ? 'Guests may have as many as they like' : `Each guest may have ${next} photos made`);
-                }}
-                className="rounded border border-gray-300 dark:border-gray-600 bg-transparent px-2 py-1 text-sm"
-              >
-                <option value="0">As many as they like</option>
-                {[5, 10, 15, 20, 30, 50, 100].map((n) => (
-                  <option key={n} value={n}>{n} photos made</option>
-                ))}
-              </select>
-            </label>
-
-            {provider && !provider.configured ? (
-              <p className="text-xs text-gray-500 mb-2">
-                Not available — {provider.reason}. Set BOOTH_PROVIDER=fal and FAL_API_KEY to
-                enable, then tick &quot;Face filter&quot; on a link.
-              </p>
-            ) : (
-              <p className="text-xs text-gray-500 mb-2">
-                {provider?.styles
-                  ? 'Guests taking a photo can pick a style effect. '
-                  : 'Style effects are off. '}
-                {provider?.swaps
-                  ? 'Add a reference face below to also let them wear it — upload a clear, front-facing photo of each person.'
-                  : 'Face swaps are off.'}
-              </p>
-            )}
-
-            {filters.length > 0 && (
-              <div className="flex flex-wrap gap-3 mb-2">
-                {filters.map((f) => (
-                  <div key={f.id} className="flex flex-col items-center gap-1 w-20">
-                    <img
-                      src={`${supabasePublicUrl}/storage/v1/object/public/media/${f.source_path}`}
-                      alt=""
-                      className={`w-16 h-16 rounded-full object-cover ring-2 ${f.is_active ? 'ring-green-500' : 'ring-gray-300 opacity-50'}`}
-                    />
-                    <span className="text-xs truncate w-full text-center">{f.label}</span>
-                    <div className="flex gap-1.5 text-[11px]">
-                      <button className="underline" onClick={() => toggleFilter(f)}>
-                        {f.is_active ? 'Off' : 'On'}
-                      </button>
-                      <button className="underline text-red-600" onClick={() => removeFilter(f)}>Remove</button>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-
-            <div className="flex flex-wrap items-center gap-2">
-              <input
-                type="text"
-                value={filterLabel}
-                onChange={(e) => setFilterLabel(e.target.value)}
-                placeholder="Name, e.g. Dan"
-                maxLength={40}
-                className="rounded border border-gray-300 dark:border-gray-600 bg-transparent px-2 py-1 text-sm w-36"
-              />
-              <button
-                className="text-sm underline disabled:opacity-50"
-                disabled={uploadingFace || !filterLabel.trim()}
-                onClick={() => faceInputRef.current?.click()}
-              >
-                {uploadingFace ? 'Uploading…' : '+ Add reference photo'}
-              </button>
-              <input
-                ref={faceInputRef}
-                type="file"
-                accept="image/jpeg,image/png,image/webp"
-                className="hidden"
-                onChange={(e) => {
-                  const f = e.target.files?.[0];
-                  if (f) void addFace(f);
-                  e.target.value = '';
-                }}
-              />
-            </div>
           </div>
           {pending.length > 0 && (
             <div className="pt-2 border-t border-gray-100 dark:border-gray-800">
