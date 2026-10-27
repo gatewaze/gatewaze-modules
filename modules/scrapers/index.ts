@@ -7,7 +7,7 @@ const scrapersModule: GatewazeModule = {
   visibility: 'hidden',
   name: 'Scrapers',
   description: 'Configure and run web scraping jobs for event discovery and content aggregation',
-  version: '1.3.1',
+  version: '1.3.2',
   features: [
     'scrapers',
     'scrapers.manage',
@@ -85,6 +85,7 @@ const scrapersModule: GatewazeModule = {
     'migrations/021_seed_luma_pending_events_scraper.sql',
     'migrations/022_create_job_metadata.sql',
     'migrations/023_job_logs_retention.sql',
+    'migrations/024_prune_job_logs_index_plan.sql',
   ],
 
   adminRoutes: [
