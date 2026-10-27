@@ -68,8 +68,10 @@ describe('booth occasions', () => {
       expect(paint).toMatch(/painted directly onto their own faces and follows their own features/);
       expect(paint).toMatch(/No masks, no prosthetics/);
       const santa = buildPrompt(boothEffect(`christmas-santa-${era.key}`));
-      expect(santa).toMatch(/no false beard/);
+      expect(santa).toMatch(/No false beard/);
       expect(santa).toMatch(/red with white fur trim/);
+      // The suit is a man's in the training data; the person must not be changed to fit it.
+      expect(santa).toMatch(/a woman is a woman in a Father Christmas suit, never redrawn as a man/);
       const elf = buildPrompt(boothEffect(`christmas-elf-${era.key}`));
       expect(elf).toMatch(/pointed elf ears/);
       expect(elf).toMatch(/no prosthetic noses/);
@@ -77,6 +79,8 @@ describe('booth occasions', () => {
       for (const p of [paint, santa, elf]) {
         expect(p).toMatch(/Keep the original framing, crop and camera distance/);
         expect(p).not.toMatch(/No hats or sunglasses that were not in the input/);
+        // Patches and badges on a costume invite invented words.
+        expect(p).toMatch(/No words, slogans, lettering, logos, badges or patches/);
       }
     }
   });

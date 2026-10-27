@@ -138,14 +138,25 @@ const PAINTED_FACES =
   'the same eyes, nose, mouth, jawline, face shape and skin tone show through it, so each person is ' +
   'immediately recognisable as themselves wearing makeup. No masks, no prosthetics, nothing over the ' +
   'eyes or mouth, no coloured contact lenses; costume hats, horns, ears and headbands are fine.';
+// "Dressed as Father Christmas" alone made the model redraw a woman as a
+// man in the suit (seen 2026-10-27): the costume is a man's in the
+// training data, so the person was changed to fit it. Say the opposite,
+// first and plainly.
 const SANTA_FACES =
-  'Their own faces and own hairline: no false beard, no moustache, no wig, no glasses that were not ' +
-  'in the input, nothing covering any part of the face. The suit and the hat do the dressing up.';
+  'Every person stays exactly who they are in the input -- the same sex, the same face, age, build, ' +
+  'hair colour, hair length and hairline -- and simply wears the suit: a woman is a woman in a Father ' +
+  'Christmas suit, never redrawn as a man, and nobody becomes a different person. No false beard, no ' +
+  'moustache, no wig, no glasses that were not in the input, nothing covering any part of the face. ' +
+  'The suit and the hat do the dressing up.';
+// Patches, badges and slogans on a costume invite invented words
+// ("ZOMBIE SLAYERS", seen 2026-10-27), which NO_NAMES alone did not stop.
+const NO_SLOGANS =
+  'No words, slogans, lettering, logos, badges or patches with text anywhere on the costumes.';
 const ELF_FACES =
   'Their own faces, with only rosy painted cheeks and a little glitter: no masks, no prosthetic ' +
   'noses, nothing over the eyes or mouth; pointed elf ears and a hat are fine.';
 const COSTUME_FRAMING =
-  'Keep the original framing, crop and camera distance.';
+  NO_SLOGANS + ' Keep the original framing, crop and camera distance.';
 
 /** The decade's Halloween and Christmas rooms, shared by the costume looks. */
 const HALLOWEEN_SCENES: Record<string, string> = {
