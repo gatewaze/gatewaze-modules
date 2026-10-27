@@ -11,9 +11,17 @@
  *
  * Pure: no Deno or Supabase imports, so it is unit-testable from the host.
  */
+const MAX_LEN = 200
+
+/** Inbound email text: drop control characters and cap the length. */
+function clean(s: string): string {
+  // eslint-disable-next-line no-control-regex -- stripping control characters is the point
+  return s.replace(/[\u0000-\u001f\u007f]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, MAX_LEN).trim()
+}
+
 export function splitCompanyAnswer(answer: unknown): { company?: string; jobTitle?: string } {
   if (typeof answer !== 'string') return {}
-  const s = answer.trim()
+  const s = clean(answer)
   if (!s) return {}
   const idx = s.indexOf(' - ')
   if (idx <= 0) return { company: s }

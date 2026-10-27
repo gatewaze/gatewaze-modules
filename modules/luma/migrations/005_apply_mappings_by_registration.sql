@@ -10,7 +10,11 @@
 --              The importers had been calling a function named
 --              apply_registration_mappings(p_event_id, p_registration_ids)
 --              that never existed, so mappings were never applied on import.
---              The body is otherwise the same as migration 002.
+--              Compared with 002 the function also checks the caller (admin
+--              or service_role), pins pg_temp in its search path, and fills
+--              each attribute in a single conditional UPDATE. The mappings
+--              table policy is narrowed from every authenticated user to
+--              admins.
 -- ============================================================================
 
 -- A function's signature cannot change under CREATE OR REPLACE, and leaving
@@ -30,7 +34,9 @@ RETURNS TABLE (
 )
 LANGUAGE plpgsql
 SECURITY DEFINER
-SET search_path = public
+-- pg_temp last, and explicit: without it a caller's temp table named
+-- events_registrations would shadow the real one inside this definer body.
+SET search_path = public, pg_temp
 AS $$
 DECLARE
   v_mapping RECORD;
@@ -39,8 +45,15 @@ DECLARE
   v_transformed text;
   v_fields text[];
   v_errors text[];
-  v_attrs jsonb;
 BEGIN
+  -- Writes people.attributes for anyone on the event, so only the importers
+  -- (service_role) and admins may call it. COALESCE: with no claims the
+  -- comparison is NULL, and NULL would pass a bare NOT.
+  IF NOT (COALESCE(auth.role() = 'service_role', false) OR COALESCE(public.is_admin(), false)) THEN
+    RAISE EXCEPTION 'events_apply_registration_mappings: admin or service role required'
+      USING ERRCODE = '42501';
+  END IF;
+
   FOR v_reg IN
     SELECT r.id AS reg_id, r.person_id, r.registration_metadata, r.sponsor_permission
     FROM events_registrations r
@@ -96,18 +109,15 @@ BEGIN
 
       BEGIN
         IF v_mapping.target_type = 'customer_attribute' THEN
-          -- Update person attributes
-          SELECT p.attributes INTO v_attrs
-          FROM people p WHERE p.id = v_reg.person_id;
+          -- Fill the attribute only when it is empty, in one statement, so a
+          -- concurrent importer write to the same row is not overwritten by
+          -- a stale read.
+          UPDATE people
+          SET attributes = COALESCE(attributes, '{}'::jsonb) || jsonb_build_object(v_mapping.target_field, v_transformed)
+          WHERE id = v_reg.person_id
+            AND COALESCE(attributes ->> v_mapping.target_field, '') = '';
 
-          IF v_attrs IS NULL THEN v_attrs := '{}'::jsonb; END IF;
-
-          -- Only set if not already present
-          IF NOT (v_attrs ? v_mapping.target_field) OR v_attrs ->> v_mapping.target_field IS NULL OR v_attrs ->> v_mapping.target_field = '' THEN
-            UPDATE people
-            SET attributes = v_attrs || jsonb_build_object(v_mapping.target_field, v_transformed)
-            WHERE id = v_reg.person_id;
-
+          IF FOUND THEN
             v_fields := array_append(v_fields, v_mapping.target_field);
           END IF;
 
@@ -141,7 +151,16 @@ $$;
 COMMENT ON FUNCTION public.events_apply_registration_mappings(uuid, uuid[])
   IS 'Applies configured field mappings to registrations for an event; p_registration_ids limits it to those registrations';
 
--- SECURITY DEFINER and it writes people.attributes: admins (authenticated,
--- behind the admin app) and the importers (service_role) only, never anon.
+-- Never anon. `authenticated` covers portal members too, which is why the
+-- body checks is_admin() as well.
 REVOKE ALL ON FUNCTION public.events_apply_registration_mappings(uuid, uuid[]) FROM PUBLIC, anon;
 GRANT EXECUTE ON FUNCTION public.events_apply_registration_mappings(uuid, uuid[]) TO authenticated, service_role;
+
+-- The mappings table had an open policy for every authenticated user, so a
+-- portal member could add a mapping with any target field and then call the
+-- function above. Admins only; the admin app reads and writes it as an admin.
+DROP POLICY IF EXISTS "auth_all_registration_field_mappings" ON public.registration_field_mappings;
+DROP POLICY IF EXISTS "admin_all_registration_field_mappings" ON public.registration_field_mappings;
+CREATE POLICY "admin_all_registration_field_mappings"
+  ON public.registration_field_mappings FOR ALL TO authenticated
+  USING (COALESCE(public.is_admin(), false)) WITH CHECK (COALESCE(public.is_admin(), false));
