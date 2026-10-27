@@ -33,7 +33,9 @@ export default async function pr(job, ctx) {
   const cred = await resolveRunCredentials(supabase, project, run);
   const ghPr = githubClient(cred.pullRequestPat ?? token);
   try {
-    const { data: gateRows } = await supabase.from('se_gates').select('gate, verdict').eq('run_id', run.id);
+    // Oldest first, so a gate recorded twice (blocked, then passed on a resumed attempt) shows its
+    // latest verdict in the body.
+    const { data: gateRows } = await supabase.from('se_gates').select('gate, verdict').eq('run_id', run.id).order('created_at', { ascending: true });
     const gate = {};
     for (const g of gateRows ?? []) gate[g.gate] = g.verdict;
     const { data: art } = await supabase.from('se_artifacts').select('content').eq('run_id', run.id).eq('kind', 'spec').order('created_at', { ascending: false }).limit(1).maybeSingle();
@@ -90,6 +92,7 @@ export default async function pr(job, ctx) {
           `Resolves ${run.repo_owner}/${run.repo_name}#${run.issue_number}`,
           ``, `### Gates`,
           `- adversarial review: ${gate['adversarial_review'] ?? 'n/a'}`,
+          `- pre-PR review: ${gate['pre_pr_review'] ?? 'n/a'}`,
           `- security: ${gate['security'] ?? 'n/a'}`,
           `- blast radius: ${run.blast_radius}`,
           ``, `### Spec`, (art?.content ?? '_(spec unavailable)_').slice(0, 18000),

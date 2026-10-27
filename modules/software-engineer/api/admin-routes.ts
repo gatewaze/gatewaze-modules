@@ -2148,7 +2148,7 @@ export function mountAdminRoutes(router, deps) {
       if (b.escalation_model && !patch.escalation_model) return res.status(400).json({ error: 'escalation_model is not a valid model id' });
     }
     if (b.phase_models !== undefined) {
-      const KNOWN_PHASES = ['triage', 'spec', 'review', 'implement', 'verify', 'revise', 'reflect', 'review_kb', 'interactive'];
+      const KNOWN_PHASES = ['triage', 'spec', 'review', 'implement', 'pre-pr-review', 'verify', 'revise', 'reflect', 'review_kb', 'interactive'];
       let cfg = b.phase_models;
       try { if (typeof cfg === 'string') cfg = cfg.trim() ? JSON.parse(cfg) : {}; } catch { return res.status(400).json({ error: 'phase_models must be valid JSON' }); }
       const clean: any = {};

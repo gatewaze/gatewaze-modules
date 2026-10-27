@@ -22,6 +22,12 @@ export async function git(
   return typeof stdout === 'string' ? stdout : stdout.toString('utf8');
 }
 
+/** Same wrapper, raw bytes out — for blob contents that must not go through a utf8 round-trip. */
+export async function gitRaw(args: string[], opts: { cwd?: string } = {}): Promise<Buffer> {
+  const { stdout } = await pexec('git', args, { cwd: opts.cwd, encoding: 'buffer', maxBuffer: 64 * 1024 * 1024 });
+  return Buffer.isBuffer(stdout) ? stdout : Buffer.from(String(stdout), 'utf8');
+}
+
 /**
  * Authenticated HTTPS remote. `x-access-token` works for both classic/fine-grained PATs
  * and GitHub App installation tokens. NOTE: the token appears in the argv here; callers

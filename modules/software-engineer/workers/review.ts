@@ -168,7 +168,7 @@ export default async function review(job, ctx) {
 
     const prompt = [
       `You are a FIXED, ADVERSARIAL SPEC REVIEWER (a skeptic). You do NOT rewrite the spec.`,
-      `Judge the SPEC below against the repos in your workspace (each repo's CLAUDE.md/.claude rules).`,
+      `Judge the SPEC below against the repos in your workspace (each repo's CLAUDE.md or AGENTS.md and .claude rules).`,
       `Try hard to REFUTE it: gaps, security holes, rule violations, unhandled edge cases, a wrong repo`,
       `target NAMED IN THE SPEC, risky assumptions. Read the repos (read-only) to check its claims.`,
       ``,

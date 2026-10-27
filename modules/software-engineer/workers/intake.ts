@@ -2,7 +2,7 @@
 /**
  * intake phase. The run's repo_owner/repo_name is the project's ISSUES repo (§2). Authorize, mark the
  * issue in-progress + claimed by this instance (§2.1/§12.5), ack it, and enqueue spec. Code-repo
- * agent-contracts (CLAUDE.md) are checked implicitly by the agent reading them in the workspace.
+ * agent-contracts (CLAUDE.md / AGENTS.md) are checked implicitly by the agent reading them in the workspace.
  *
  * Locally-authored spec handoff: an issue labelled agent:spec:provided carries its own spec in the
  * body (lib/provided-spec.ts). Intake stores it as the run's kind='spec' artifact, records the spec

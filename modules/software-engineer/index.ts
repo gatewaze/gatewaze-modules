@@ -4,8 +4,8 @@
  * Turns labelled GitHub issues into merged (or proposed) pull requests by running a
  * spec-first, adversarially-reviewed, security-gated pipeline as in-process Claude Code
  * (Agent SDK) sessions, inside isolated git worktrees of the target repo. The repo's own
- * CLAUDE.md / .claude/rules / skills drive behaviour — this module only orchestrates,
- * gates, persists, and surfaces the work.
+ * CLAUDE.md or AGENTS.md / .claude/rules / skills drive behaviour — this module only
+ * orchestrates, gates, persists, and surfaces the work.
  *
  * Multi-tenant: each brand (site_id) configures its own monitored repos and its own
  * GitHub + model credentials, and works on its own codebases. Admins watch any agent
@@ -23,8 +23,8 @@ const softwareEngineerModule: GatewazeModule = {
   visibility: 'public',
   name: 'Software Engineer',
   description:
-    'Autonomous engineering agent: labelled GitHub issues → spec → adversarial review → implement → verify → PR/merge, driven by in-process Claude Code sessions. Per-brand repos + credentials; live agent monitoring.',
-  version: '0.2.8',
+    'Autonomous engineering agent: labelled GitHub issues → spec → adversarial review → implement → pre-PR review → verify → PR/merge, driven by in-process Claude Code sessions. Per-brand repos + credentials; live agent monitoring.',
+  version: '0.3.0',
 
   features: ['software-engineer'],
 
@@ -71,6 +71,7 @@ const softwareEngineerModule: GatewazeModule = {
     'migrations/030_workspace_base.sql',
     'migrations/031_repo_merge_policy.sql',
     'migrations/032_spec_artifact_kinds.sql',
+    'migrations/033_pre_pr_review_phase.sql',
   ],
   // This array is the ONLY thing the platform runner reads. It does not glob
   // migrations/ — applyModuleMigrations() iterates these entries, so a .sql on
@@ -125,6 +126,9 @@ const softwareEngineerModule: GatewazeModule = {
         // gate (ready_to_submit), then re-verify. The reject-and-give-feedback loop. See workers/code-refine.ts.
         { name: 'software-engineer:code-refine', handler: './workers/code-refine.ts' },
         { name: 'software-engineer:implement', handler: './workers/implement.ts' },
+        // Each changed repo's OWN pre-PR review round + checks on the committed branch, before
+        // verify/pr. See workers/pre-pr-review.ts.
+        { name: 'software-engineer:pre-pr-review', handler: './workers/pre-pr-review.ts' },
         { name: 'software-engineer:verify', handler: './workers/verify.ts' },
         { name: 'software-engineer:pr', handler: './workers/pr.ts' },
         { name: 'software-engineer:merge', handler: './workers/merge.ts' },

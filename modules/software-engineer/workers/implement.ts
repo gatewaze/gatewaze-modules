@@ -4,7 +4,7 @@ import { getRunCodeRepos } from '../lib/run-code-repos.js';
  * implement phase (§7). Clones the project's code repos into a workspace (writable repos on a fresh
  * branch), has the agent implement the approved spec across them, then commits + pushes ONLY the
  * writable repos that actually changed — recording one se_run_prs row per changed repo. Enqueues
- * verify. If nothing changed, fails.
+ * pre-pr-review (verify for an external-PR run). If nothing changed, fails.
  */
 import { createClient } from '@supabase/supabase-js';
 import { getProject, getCodeRepos, resolveCommitIdentity, resolveRunCredentials } from '../lib/credentials.js';
@@ -50,7 +50,7 @@ export default async function implement(job, ctx) {
 
     const prompt = [
       `Implement the approved spec below across the WRITABLE repos in your workspace. Change only the`,
-      `repos and files the spec calls for; follow each repo's CLAUDE.md/.claude rules exactly. Make the`,
+      `repos and files the spec calls for; follow each repo's CLAUDE.md or AGENTS.md and .claude rules exactly. Make the`,
       `code changes and any tests. Do NOT push, tag, or open PRs — the system handles that. Do NOT run`,
       `git commit yourself; leave the working tree as edited/untracked files for the system to commit.`,
       ``,
@@ -113,13 +113,17 @@ export default async function implement(job, ctx) {
       : classifyBlastRadius(allFiles);
     await writeGate(supabase, run, 'blast_radius', blast.classification === 'safe' ? 'pass' : 'block', { files, lines, repos: changed });
     await recordPhaseEnd(supabase, run, 'implement', 'passed', `implemented across ${changed} repo(s)`, { model: result.modelUsed ?? project.model, engine: result.engineUsed ?? 'claude', input: result.tokensInput, output: result.tokensOutput, cacheRead: result.tokensCacheRead, cacheCreation: result.tokensCacheCreation, cost: result.costUSD, modelUsage: result.modelUsage });
+    // The committed, pushed branch now gets each repo's own pre-PR review round (workers/pre-pr-review.ts)
+    // before verify. A Connect run already has its PR, and the repos' rules forbid a local review once
+    // a PR exists, so it goes straight to verify.
+    const next = run.kind === 'external_pr' ? 'verify' : 'pre-pr-review';
     await supabase.from('se_runs').update({
-      blast_radius: blast.classification, current_phase: 'verify',
+      blast_radius: blast.classification, current_phase: next,
       tokens_input: (run.tokens_input ?? 0) + result.tokensInput,
       tokens_output: (run.tokens_output ?? 0) + result.tokensOutput,
     }).eq('id', run.id);
-    await enqueuePhase(ctx, run.id, 'verify');
-    return { ok: true, changedRepos: changed };
+    await enqueuePhase(ctx, run.id, next);
+    return { ok: true, changedRepos: changed, next };
   } catch (e) {
     const msg = redactToken(e?.message || String(e), token);
     await recordPhaseEnd(supabase, run, 'implement', 'failed', msg);
@@ -130,7 +134,9 @@ export default async function implement(job, ctx) {
   }
 }
 
-async function gitCompareCount(gh, owner, name, base, head) {
+/** Changed-file list + counts for `base...head` on GitHub — shared with pre-pr-review, which
+ *  re-classifies the blast radius after its fix commits land. */
+export async function gitCompareCount(gh, owner, name, base, head) {
   const b = base || (await gh.defaultBranch(owner, name));
   const cmp = await gh.compare(owner, name, b, head);
   const fs = cmp?.files ?? [];

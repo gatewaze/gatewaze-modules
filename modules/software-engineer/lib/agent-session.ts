@@ -37,7 +37,12 @@ export interface RunnerInput {
   onUsage?: (live: Record<string, { input: number; output: number; cacheRead: number; cacheCreation: number }>) => void;
 }
 export interface RunnerResult {
+  /** Every assistant text block of the session, main thread and subagents alike, concatenated. */
   text: string;
+  /** The text of the MAIN agent's last assistant message that carried any text — what a phase
+   *  should parse a verdict from, since `text` also holds every subagent's words. Unset by runners
+   *  that cannot tell the threads apart (codex). */
+  finalText?: string;
   tokensInput: number;
   tokensOutput: number;
   /** Prompt-cache token counts — the bulk of billed input in agentic sessions (input_tokens alone
@@ -352,10 +357,15 @@ export class InProcessRunner implements Runner {
             cur.cacheCreation += u.cache_creation_input_tokens ?? 0;
             try { input.onUsage(liveUsage); } catch { /* observer only */ }
           }
+          // finalText: the MAIN thread's latest message that said anything. A subagent's words
+          // (parent_tool_use_id set) never count, so a verdict parsed from it is the main agent's.
+          const topLevel = !msg.parent_tool_use_id;
+          let messageText = '';
           for (const b of msg.message?.content ?? []) {
             if (b?.type === 'text') {
               out.text += b.text;
               turnText += b.text;
+              if (topLevel) messageText += b.text;
               await input.onEvent?.({ kind: 'assistant', payload: { text: b.text, agent: msg.parent_tool_use_id ?? null } });
             } else if (b?.type === 'tool_use') {
               await input.onEvent?.({ kind: 'tool_use', payload: { name: b.name, input: b.input, agent: msg.parent_tool_use_id ?? null } });
@@ -366,6 +376,7 @@ export class InProcessRunner implements Runner {
               await input.onEvent?.({ kind: 'thinking', payload: { text: String(b.thinking).slice(0, 2000), agent: msg.parent_tool_use_id ?? null } });
             }
           }
+          if (topLevel && messageText.trim()) out.finalText = messageText;
         } else if (msg?.type === 'user') {
           for (const b of msg.message?.content ?? []) {
             if (b?.type === 'tool_result') {

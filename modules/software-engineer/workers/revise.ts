@@ -111,7 +111,7 @@ export default async function revise(job, ctx) {
           ...(classification ? [`CI TRIAGE NOTE (from the platform, before you start):`, classification, ``] : []),
           `The CI checks on your open pull request(s)${run.issue_number ? ` for issue #${run.issue_number}` : ''} are FAILING.`,
           `Reproduce and fix them by editing the code in the relevant WRITABLE repo(s) in your workspace.`,
-          `Run the repo's own checks (typecheck, lint, tests, security review) exactly as its CLAUDE.md`,
+          `Run the repo's own checks (typecheck, lint, tests, security review) exactly as its CLAUDE.md or AGENTS.md`,
           `and .claude rules describe, find why they fail, and fix the root cause — do not disable, skip,`,
           `or weaken a check to make it pass. If a failure is genuinely unrelated to this branch's changes`,
           `and cannot be fixed here, make no change. Do NOT push, merge, or open PRs — the system does that.`,
@@ -119,7 +119,7 @@ export default async function revise(job, ctx) {
       : [
           `A reviewer left feedback on your open pull request(s)${run.issue_number ? ` for issue #${run.issue_number}` : ''}. Address`,
           `EVERY point below by editing the code in the relevant WRITABLE repo(s) in your workspace. Follow`,
-          `each repo's CLAUDE.md/.claude rules. Do NOT push, merge, or open PRs — the system handles that.`,
+          `each repo's CLAUDE.md or AGENTS.md and .claude rules. Do NOT push, merge, or open PRs — the system handles that.`,
           ``, `--- REVIEW FEEDBACK (per repo) ---`, feedback, `--- END FEEDBACK ---`,
         ].join('\n');
     const result = await runAgentSession(supabase, ctx, run, project, 'revise', {
