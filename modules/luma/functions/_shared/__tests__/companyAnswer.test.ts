@@ -25,4 +25,12 @@ describe('splitCompanyAnswer', () => {
     expect(splitCompanyAnswer(undefined)).toEqual({})
     expect(splitCompanyAnswer(true)).toEqual({})
   })
+
+  it('strips control characters and caps the length of email-derived text', () => {
+    expect(splitCompanyAnswer('Acme\u0000Corp\r\n - CTO\u001b')).toEqual({ company: 'Acme Corp', jobTitle: 'CTO' })
+    const long = 'A'.repeat(300) + ' - ' + 'B'.repeat(50)
+    const r = splitCompanyAnswer(long)
+    expect(r.company).toBe('A'.repeat(200))
+    expect(r.jobTitle).toBeUndefined()
+  })
 })
