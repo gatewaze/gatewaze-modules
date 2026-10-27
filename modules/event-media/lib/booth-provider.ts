@@ -1,35 +1,28 @@
 /**
- * Photo-booth generation provider.
+ * The projector's models, on fal.
  *
- * Runs on hosted GPUs because the models that produce a convincing
- * result are orders of magnitude too heavy for a phone browser.
+ * Depth maps, people cutouts, background plates and the vision calls
+ * that check a plate and write a Wedflix card all run here. The photo
+ * booth itself (restyling a guest's selfie) lives in the photo-booth
+ * module now and has its own copy of the fal client; what stays here is
+ * everything the display builds for a photo once it is posted.
  *
- * fal is the primary provider, chosen after testing both it and
- * Replicate against real photos on 2026-09-20:
- *
- *   - Replicate rejects bursts with 429 at the account level. Six
- *     effects submitted one after another still tripped it, which on a
- *     wedding day — dozens of guests, one account — is the failure mode
- *     that matters. fal queues instead of rejecting.
- *   - fal's edit model preserves identity well enough to skip the
- *     restyle-then-swap-the-real-face-back chain Replicate needed, so a
- *     style is one call (~13 s) rather than two (~25-50 s).
- *
- * Replicate remains supported for the swap effects so a deployment that
- * only has a Replicate token keeps working; see `face-swap.ts`.
+ * Runs on hosted GPUs because the models are orders of magnitude too
+ * heavy for a phone browser. fal was chosen over Replicate after
+ * testing both against real photos on 2026-09-20: Replicate rejects
+ * bursts with 429 at the account level, which with a room full of
+ * guests on one account is the failure that matters; fal queues.
  *
  * Configure with:
  *   BOOTH_PROVIDER=fal
  *   FAL_API_KEY=<key>
- *   BOOTH_STYLE_MODEL=<model>   (optional override)
- *   BOOTH_SWAP_MODEL=<model>    (optional override)
+ *   BOOTH_STYLE_MODEL=<model>   (optional override; the plate uses it)
  *
- * Absent by default: with nothing configured the booth reports
- * unavailable and the guest UI never offers it. Nothing on the ordinary
+ * Absent by default: with nothing configured the layers are simply not
+ * made and the display shows the photo flat. Nothing on the ordinary
  * upload path depends on any of this.
  */
 
-import { faceSwapConfigured, faceSwapStatus, runFaceSwap } from './face-swap.js';
 import { ENHANCE_PROMPT, parseVerdict, type EnhanceVerdict } from './enhance.js';
 import { CARD_GENRES as SHARED_CARD_GENRES, cardIsSuitable } from './card-copy.js';
 
@@ -45,7 +38,6 @@ const DOWNLOAD_TIMEOUT_MS = 30_000;
 const MAX_OUTPUT_BYTES = 25 * 1024 * 1024;
 
 const DEFAULT_STYLE_MODEL = 'fal-ai/nano-banana/edit';
-const DEFAULT_SWAP_MODEL = 'fal-ai/face-swap';
 const DEFAULT_DEPTH_MODEL = 'fal-ai/image-preprocessors/depth-anything/v2';
 const DEFAULT_CUTOUT_MODEL = 'fal-ai/birefnet/v2';
 const DEFAULT_VISION_MODEL = 'fal-ai/any-llm/vision';
@@ -71,44 +63,9 @@ function model(envVar: string, fallback: string): string {
   return raw && MODEL_RE.test(raw) ? raw : fallback;
 }
 
-/** Styles need fal; swaps can run on either provider. */
-export function styleConfigured(): boolean {
+/** Whether the projector's models can be called at all. */
+export function falConfigured(): boolean {
   return falEnabled();
-}
-
-export function swapConfigured(): boolean {
-  return falEnabled() || faceSwapConfigured();
-}
-
-export function boothConfigured(): boolean {
-  return styleConfigured() || swapConfigured();
-}
-
-/** Why each half of the booth is on or off, for the admin panel. */
-export function boothStatus(): {
-  configured: boolean;
-  reason?: string;
-  styles: boolean;
-  swaps: boolean;
-} {
-  const styles = styleConfigured();
-  const swaps = swapConfigured();
-  if (styles || swaps) return { configured: true, styles, swaps };
-
-  const provider = (process.env.BOOTH_PROVIDER ?? '').toLowerCase();
-  let reason: string;
-  if (!provider) {
-    // Mention the legacy path only when it is the one half-configured.
-    const legacy = faceSwapStatus();
-    reason = legacy.reason && process.env.FACE_SWAP_PROVIDER
-      ? `BOOTH_PROVIDER is not set (and ${legacy.reason})`
-      : 'BOOTH_PROVIDER is not set';
-  } else if (provider !== 'fal') {
-    reason = `unknown provider "${provider}"`;
-  } else {
-    reason = 'FAL_API_KEY is not set';
-  }
-  return { configured: false, reason, styles, swaps };
 }
 
 async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
@@ -515,45 +472,4 @@ export async function runPlate(imageUrl: string, strict = false): Promise<BoothR
     image_urls: [imageUrl],
     output_format: 'jpeg',
   });
-}
-
-/**
- * Make a new picture from several reference photos -- the event's key
- * people -- for the booth's examples. The model takes up to ten images.
- */
-export async function runStyleRefs(imageUrls: string[], prompt: string): Promise<BoothResult> {
-  if (!styleConfigured()) return { ok: false, error: 'not_configured' };
-  if (imageUrls.length === 0) return { ok: false, error: 'provider_error', detail: 'no references' };
-  return runFal(model('BOOTH_STYLE_MODEL', DEFAULT_STYLE_MODEL), {
-    prompt,
-    image_urls: imageUrls.slice(0, 10),
-    output_format: 'jpeg',
-  });
-}
-
-/** Restyle `imageUrl` with a catalogue prompt, keeping the faces. */
-export async function runStyle(imageUrl: string, prompt: string): Promise<BoothResult> {
-  if (!styleConfigured()) return { ok: false, error: 'not_configured' };
-  return runFal(model('BOOTH_STYLE_MODEL', DEFAULT_STYLE_MODEL), {
-    prompt,
-    image_urls: [imageUrl],
-    output_format: 'jpeg',
-  });
-}
-
-/**
- * Put the face from `faceUrl` onto `targetUrl` (the guest's photo).
- * Prefers fal; falls back to a configured Replicate model.
- */
-export async function runSwap(faceUrl: string, targetUrl: string): Promise<BoothResult> {
-  if (falEnabled()) {
-    const result = await runFal(model('BOOTH_SWAP_MODEL', DEFAULT_SWAP_MODEL), {
-      base_image_url: targetUrl,
-      swap_image_url: faceUrl,
-    });
-    // Only reach for the fallback when fal could not answer at all —
-    // a "no face in that photo" verdict will not change on retry.
-    if (result.ok || result.error === 'no_face' || !faceSwapConfigured()) return result;
-  }
-  return runFaceSwap(faceUrl, targetUrl);
 }

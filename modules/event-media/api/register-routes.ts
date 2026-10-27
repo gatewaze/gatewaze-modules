@@ -225,18 +225,6 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
     logger,
   }));
 
-  // The booth's example pictures, made from the event's key people.
-  const { createBoothExamples, mountBoothExamples } = await import('./booth-examples.js');
-  const { runStyleRefs } = await import('../lib/booth-provider.js');
-  mountBoothExamples(adminRouter, createBoothExamples({
-    canAdminEvent,
-    serviceClient: serviceSupabase,
-    storageBucket: STORAGE_BUCKET,
-    publicUrl: (path) => `${publicSupabaseUrl}/storage/v1/object/public/${STORAGE_BUCKET}/${path}`,
-    runRefs: runStyleRefs,
-    logger,
-  }));
-
   // Turning a photograph that came in on its side.
   const { createRotateMedia, mountRotateMedia } = await import('./rotate-media.js');
   mountRotateMedia(adminRouter, createRotateMedia({
