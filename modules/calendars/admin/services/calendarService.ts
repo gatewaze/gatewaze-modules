@@ -21,6 +21,13 @@ export interface CalendarLocation {
   country?: string;      // Full country name
   country_code?: string; // ISO 3166-1 alpha-2 code (e.g., 'US', 'GB')
   continent?: string;    // Continent name
+  // Set by the scraper worker (calendars migration 017), not the form.
+  latitude?: number;
+  longitude?: number;
+  // Where the location came from. 'luma' and 'events' are filled
+  // automatically and replaced when better data arrives; 'manual' (an admin
+  // edit) is never overwritten. Absent on locations saved before 017.
+  source?: 'luma' | 'events' | 'manual';
 }
 
 export interface Calendar {

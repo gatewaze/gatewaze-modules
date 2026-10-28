@@ -9,6 +9,8 @@
 // requireScope, parsePagination, setCache. Typed loosely to avoid importing
 // host-only types into the module build.
 
+import { toPublicCalendarLocation } from './lib/public-location';
+
 const PUBLIC_CALENDAR_FIELDS = [
   'id',
   'calendar_id',
@@ -21,7 +23,16 @@ const PUBLIC_CALENDAR_FIELDS = [
   'external_url',
   'created_at',
   'updated_at',
+  // Only the location key of settings: the rest of settings is admin config.
+  'location:settings->location',
 ] as const;
+
+// calendar_id (CAL-…) and slug are both [A-Za-z0-9_-]. Anything else cannot
+// match, and keeping other characters out is what makes the .or() filter
+// below safe: a comma, dot or parenthesis would let a caller add conditions.
+const CALENDAR_KEY_RE = /^[A-Za-z0-9_-]{1,200}$/;
+
+const withLocation = (row: any) => ({ ...row, location: toPublicCalendarLocation(row.location) });
 
 export function registerPublicApi(router: any, ctx: any): void {
   const supabase = ctx.supabase;
@@ -65,7 +76,7 @@ export function registerPublicApi(router: any, ctx: any): void {
 
       const counts = await publishedCounts((data ?? []).map((r: any) => r.id));
       const rows = (data ?? []).map((row: any) => ({
-        ...row,
+        ...withLocation(row),
         event_count: counts.get(row.id) ?? 0,
       }));
 
@@ -86,6 +97,9 @@ export function registerPublicApi(router: any, ctx: any): void {
     try {
       const key = String(req.params.id);
       const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(key);
+      if (!isUuid && !CALENDAR_KEY_RE.test(key)) {
+        return res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Calendar not found' } });
+      }
       const { data, error } = await supabase
         .from('calendars')
         .select(cols)
@@ -98,7 +112,7 @@ export function registerPublicApi(router: any, ctx: any): void {
 
       const counts = await publishedCounts([data.id]);
       ctx.setCache(res, { kind: 'public', maxAge: 300, sMaxAge: 600 });
-      res.json({ data: { ...data, event_count: counts.get(data.id) ?? 0 } });
+      res.json({ data: { ...withLocation(data), event_count: counts.get(data.id) ?? 0 } });
     } catch (err: any) {
       res.status(500).json({ error: { code: 'INTERNAL', message: err?.message ?? 'Internal server error' } });
     }

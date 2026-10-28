@@ -7,7 +7,7 @@ const calendarsModule: GatewazeModule = {
   visibility: 'public',
   name: 'Calendars',
   description: 'Manage event calendars with discovery, CSV import, and scheduling APIs',
-  version: '1.1.1',
+  version: '1.2.0',
   features: [
     'calendars',
     'calendars.discover',
@@ -29,6 +29,7 @@ const calendarsModule: GatewazeModule = {
       '/': {
         get: {
           summary: 'List public calendars with event counts',
+          description: 'Each calendar carries `location` (city, region, country, country_code, latitude, longitude, source) or null. Locations come from the Luma calendar, else the city most of its events are in, unless an admin set one.',
           operationId: 'listCalendars',
           parameters: [
             { name: 'q', in: 'query', schema: { type: 'string' }, description: 'Filter by name (partial match)' },
@@ -96,6 +97,7 @@ const calendarsModule: GatewazeModule = {
     'migrations/014_calendars_admin_write_policies.sql',
     'migrations/015_register_pages_host.sql',
     'migrations/016_luma_sync_enabled.sql',
+    'migrations/017_calendar_location_autofill.sql',
   ],
 
   adminRoutes: [
