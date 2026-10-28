@@ -21,6 +21,15 @@ export interface CalendarLocation {
   country?: string;      // Full country name
   country_code?: string; // ISO 3166-1 alpha-2 code (e.g., 'US', 'GB')
   continent?: string;    // Continent name
+  // Set by the scraper worker (calendars migration 017), not the form.
+  latitude?: number;
+  longitude?: number;
+  // Where the location came from. 'luma' and 'events' are filled
+  // automatically, and a Luma location replaces an 'events' one; 'manual' (an
+  // admin edit) is never overwritten. Only 'manual' (or source-less) locations
+  // are copied onto people by the CSV import. Absent on locations saved
+  // before 017.
+  source?: 'luma' | 'events' | 'manual';
 }
 
 export interface Calendar {
@@ -441,6 +450,22 @@ export class CalendarService {
       console.error('Error in createCalendar:', error);
       return { success: false, error: (error as Error).message };
     }
+  }
+
+  /**
+   * Read a calendar's stored settings.location as it is now. The scraper
+   * worker can fill it while the Settings tab is open, so a save that leaves
+   * the location alone re-reads it rather than writing back the copy loaded
+   * with the page.
+   */
+  static async getStoredLocation(id: string): Promise<CalendarServiceResponse<CalendarLocation | null>> {
+    const { data, error } = await supabase
+      .from('calendars')
+      .select('location:settings->location')
+      .eq('id', id)
+      .maybeSingle();
+    if (error) return { success: false, error: error.message };
+    return { success: true, data: (data?.location as CalendarLocation | null) ?? null };
   }
 
   /**

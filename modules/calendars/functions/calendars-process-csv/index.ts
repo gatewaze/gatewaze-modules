@@ -166,6 +166,14 @@ async function getCalendarLocation(calendarId: string): Promise<CalendarLocation
     return null
   }
 
+  // Only a location an admin chose is copied onto imported people. One the
+  // scraper worker filled in (source 'luma' or 'events', calendars migration
+  // 017) describes the calendar, not its members.
+  const source = (location as { source?: unknown }).source
+  if (source !== undefined && source !== 'manual') {
+    return null
+  }
+
   return location
 }
 

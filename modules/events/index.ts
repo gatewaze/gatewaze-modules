@@ -8,7 +8,7 @@ const eventsModule: GatewazeModule = {
   group: 'events',
   name: 'Events',
   description: 'Core events management - create, manage, and run events with registrations, attendance tracking, and check-in',
-  version: '1.4.3',
+  version: '1.5.0',
   features: [
     'events',
     'events.registrations',
@@ -182,7 +182,7 @@ const eventsModule: GatewazeModule = {
             { name: 'to', in: 'query', schema: { type: 'string', format: 'date-time' }, description: 'Events starting before this date (RFC 3339)' },
             { name: 'topics', in: 'query', schema: { type: 'string' }, description: 'Comma-separated topic filter (overlap match)' },
             { name: 'calendar_id', in: 'query', schema: { type: 'string', format: 'uuid' }, description: 'Filter to events in a specific calendar' },
-            { name: 'fields', in: 'query', schema: { type: 'string' }, description: 'Comma-separated field list (sparse fieldset)' },
+            { name: 'fields', in: 'query', schema: { type: 'string' }, description: 'Comma-separated field list (sparse fieldset). Include `calendars` to keep the calendars block, which every event carries by default: a list of the public calendars it belongs to ({ id, calendar_id, name, slug }).' },
             { name: 'limit', in: 'query', schema: { type: 'integer', default: 25, minimum: 1, maximum: 100 } },
             { name: 'offset', in: 'query', schema: { type: 'integer', default: 0, minimum: 0 } },
           ],

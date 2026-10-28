@@ -123,6 +123,25 @@ export function CalendarSettingsTab({ calendar, onUpdate }: CalendarSettingsTabP
         if (data.locationContinent) locationSettings.continent = data.locationContinent;
       }
 
+      // Every card on this tab submits the whole form, so a save from the
+      // About card must not touch the location. Only a real edit becomes
+      // 'manual' (which stops the worker updating it). Otherwise keep what is
+      // stored, including the coordinates and source the worker set; and if
+      // nothing is stored, leave it unset so the worker can still fill it.
+      // "Stored" is re-read here: the worker may have filled it since the
+      // page loaded, and settings is written back whole.
+      const sameLocation = (['type', 'city', 'state', 'country', 'country_code', 'continent'] as const)
+        .every((k) => (locationSettings[k] ?? '') === ((k === 'type' ? currentLocation?.type ?? 'global' : currentLocation?.[k]) ?? ''));
+      const { location: _storedLocation, ...otherSettings } = calendar.settings ?? {};
+      let nextSettings: Record<string, unknown>;
+      if (sameLocation) {
+        const stored = await CalendarService.getStoredLocation(calendar.id);
+        if (!stored.success) throw new Error(stored.error || 'Could not read the calendar location');
+        nextSettings = stored.data ? { ...otherSettings, location: stored.data } : otherSettings;
+      } else {
+        nextSettings = { ...otherSettings, location: { ...locationSettings, source: 'manual' as const } };
+      }
+
       const updateData: UpdateCalendarInput = {
         name: data.name,
         description: data.description || undefined,
@@ -132,10 +151,7 @@ export function CalendarSettingsTab({ calendar, onUpdate }: CalendarSettingsTabP
         lumaCalendarId: data.lumaCalendarId || undefined,
         lumaWebhookSecret: data.lumaWebhookSecret || undefined,
         externalUrl: data.externalUrl || undefined,
-        settings: {
-          ...calendar.settings,
-          location: locationSettings,
-        },
+        settings: nextSettings,
         aboutOrganisers: data.aboutOrganisers || null,
         aboutFaq: data.aboutFaq || null,
         aboutSponsors: data.aboutSponsors || null,
@@ -304,6 +320,14 @@ export function CalendarSettingsTab({ calendar, onUpdate }: CalendarSettingsTabP
         <p className="text-sm text-gray-500 mb-4">
           Set a geographic location for this calendar. When importing members, their location will be set to the calendar's location if they don't already have one.
         </p>
+        {(currentLocation?.source === 'luma' || currentLocation?.source === 'events') && (
+          <p className="text-sm text-gray-500 mb-4">
+            {currentLocation.source === 'luma'
+              ? 'Filled in automatically from the Luma calendar.'
+              : 'Filled in automatically from where most of this calendar\'s events are.'}
+            {' '}Saving a change here makes it a manual location, which is not updated automatically.
+          </p>
+        )}
 
         <form onSubmit={handleSubmit(onSubmit)} className="space-y-4">
           <Select
