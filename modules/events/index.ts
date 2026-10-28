@@ -8,7 +8,7 @@ const eventsModule: GatewazeModule = {
   group: 'events',
   name: 'Events',
   description: 'Core events management - create, manage, and run events with registrations, attendance tracking, and check-in',
-  version: '1.5.0',
+  version: '1.5.1',
   features: [
     'events',
     'events.registrations',
@@ -181,7 +181,7 @@ const eventsModule: GatewazeModule = {
             { name: 'from', in: 'query', schema: { type: 'string', format: 'date-time' }, description: 'Events starting after this date (RFC 3339)' },
             { name: 'to', in: 'query', schema: { type: 'string', format: 'date-time' }, description: 'Events starting before this date (RFC 3339)' },
             { name: 'topics', in: 'query', schema: { type: 'string' }, description: 'Comma-separated topic filter (overlap match)' },
-            { name: 'calendar_id', in: 'query', schema: { type: 'string', format: 'uuid' }, description: 'Filter to events in a specific calendar' },
+            { name: 'calendar_id', in: 'query', schema: { type: 'string' }, description: 'Filter to events in a specific calendar. Takes the calendar id (UUID), its calendar_id (e.g. CAL-AAIFLONDON) or its slug, as listed by /api/v1/calendars.' },
             { name: 'fields', in: 'query', schema: { type: 'string' }, description: 'Comma-separated field list (sparse fieldset). Include `calendars` to keep the calendars block, which every event carries by default: a list of the public calendars it belongs to ({ id, calendar_id, name, slug }).' },
             { name: 'limit', in: 'query', schema: { type: 'integer', default: 25, minimum: 1, maximum: 100 } },
             { name: 'offset', in: 'query', schema: { type: 'integer', default: 0, minimum: 0 } },
@@ -200,7 +200,7 @@ const eventsModule: GatewazeModule = {
           operationId: 'listEventMetrics',
           parameters: [
             { name: 'q', in: 'query', schema: { type: 'string' }, description: 'Filter by event title (partial match)' },
-            { name: 'calendar_id', in: 'query', schema: { type: 'string', format: 'uuid' } },
+            { name: 'calendar_id', in: 'query', schema: { type: 'string' }, description: 'Calendar id (UUID), calendar_id (CAL-…) or slug.' },
             { name: 'from', in: 'query', schema: { type: 'string', format: 'date-time' } },
             { name: 'to', in: 'query', schema: { type: 'string', format: 'date-time' } },
             { name: 'limit', in: 'query', schema: { type: 'integer', default: 25, minimum: 1, maximum: 50 } },
