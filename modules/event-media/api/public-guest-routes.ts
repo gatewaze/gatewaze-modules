@@ -870,6 +870,9 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       height: r.height,
       variants,
       guest_name: meta['source'] === 'guest' && typeof meta['guest_name'] === 'string' ? meta['guest_name'] : null,
+      // Delivered through a photographer's link. The gallery leaves their
+      // credit off the thumbnails, whichever album the link delivers into.
+      photographer: meta['photographer'] === true,
       card: meta['card'] && typeof meta['card'] === 'object' ? meta['card'] : null,
       // The photograph the guest actually took, where the booth kept one
       // -- the projector has a view of its own for these.
