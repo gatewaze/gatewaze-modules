@@ -89,6 +89,11 @@ interface UploadLinkRow {
   max_video_bytes: number;
   logo_url: string | null;
   allow_face_filter: boolean;
+  role?: string | null;
+  credit_name?: string | null;
+  credit_member_id?: string | null;
+  /** Photographer links only: the registered album it delivers into (migration 032). */
+  album_id?: string | null;
 }
 
 interface EventRow {
@@ -169,7 +174,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
 
     const { data: link, error } = await supabase
       .from('events_media_upload_links')
-      .select('id, event_id, short_code, label, is_active, expires_at, require_name, allow_video, auto_approve, show_gallery, max_photo_bytes, max_video_bytes, logo_url, allow_face_filter, role, credit_name, credit_member_id')
+      .select('id, event_id, short_code, label, is_active, expires_at, require_name, allow_video, auto_approve, show_gallery, max_photo_bytes, max_video_bytes, logo_url, allow_face_filter, role, credit_name, credit_member_id, album_id')
       .eq('short_code', code)
       .maybeSingle();
     if (error) {
@@ -433,6 +438,12 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         // it will say rather than asking for a name.
         role: link.role === 'photographer' ? 'photographer' : 'guest',
         credit: link.role === 'photographer' ? (link.credit_name ?? null) : null,
+        // Where a photographer's delivery goes (migration 032), so the
+        // person sending it can see before they start. Null is the
+        // Photographer album.
+        album: link.role === 'photographer' && link.album_id
+          ? await linkAlbumName(link.event_id, link.album_id)
+          : null,
       },
       logo_url: link.logo_url && /^https?:\/\//.test(link.logo_url)
         ? link.logo_url
@@ -777,6 +788,35 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
   }
 
   /**
+   * The albums the organiser has offered as a slideshow (migration 033).
+   *
+   * A query of its own rather than one more column in albumSettings: a
+   * failed read there shows every album, hidden ones included, so it is
+   * kept to the columns that have always existed. A failed read here
+   * only means no Play button.
+   */
+  async function slideshowAlbums(eventId: string, slugOf: ReadonlyMap<string, string>): Promise<Set<string>> {
+    const out = new Set<string>();
+    try {
+      const { data, error } = await supabase
+        .from('event_media_album_settings')
+        .select('album_id, slideshow')
+        .eq('event_id', eventId)
+        .eq('slideshow', true);
+      if (error) throw new Error(error.message);
+      for (const r of (data ?? []) as Array<{ album_id: string; slideshow?: boolean }>) {
+        const slug = slugOf.get(r.album_id);
+        if (slug && r.slideshow === true) out.add(slug);
+      }
+    } catch (err) {
+      logger.warn('slideshow settings unavailable; offering none', {
+        eventId, error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    return out;
+  }
+
+  /**
    * When this event's evening reception starts, in minutes past
    * midnight, or null for the usual half past six (migration 022).
    */
@@ -1011,7 +1051,10 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     // Albums an organiser has taken off the portal (migration 016). Their
     // photographs go with them, or hiding an album would hide only its
     // heading.
-    const { hidden, enhanced, xray, relit, oldestFirst } = await albumSettings(event.id, slugOf);
+    const [{ hidden, enhanced, xray, relit, oldestFirst }, slideshow] = await Promise.all([
+      albumSettings(event.id, slugOf),
+      slideshowAlbums(event.id, slugOf),
+    ]);
     // Registered albums that are not projector views: the ingested ones,
     // in their own order, after the views (which keep the order the day
     // ran). The wedding's view albums never open the gate on their own,
@@ -1179,6 +1222,8 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         enhanced: enhanced.has(v),
         // Whether the selfies behind this album's pictures may be shown.
         xray: xray.has(v),
+        // Whether the organiser offers this album as a slideshow.
+        slideshow: slideshow.has(v),
       }));
 
     /**
@@ -1319,6 +1364,13 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
 
     const asPhotographer = link.role === 'photographer';
 
+    // A link whose album has gone is refused before anything is sent,
+    // rather than after twenty files have been uploaded for nothing.
+    if (asPhotographer && link.album_id && !(await linkAlbumSlug(link.event_id, link.album_id))) {
+      sendError(res, 409, 'album_unavailable', 'the album this link delivers into is not available');
+      return;
+    }
+
 
     // A photographer is not on the guest list and is not asked to be.
     // Their link already says who they are, and `identify` refuses any
@@ -1419,6 +1471,13 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     autoApprove: boolean,
     eventStart: string | null,
     eveningFromMinutes: number | null,
+    /**
+     * The registered album slug a photographer's link delivers into
+     * (migration 032), or null for the Photographer album. Honoured only
+     * for a photographer's ticket, so a guest's upload is still filed by
+     * the hour whatever is passed here.
+     */
+    linkAlbum: string | null = null,
   ): Record<string, unknown> {
     return {
       id: p.media_id,
@@ -1446,7 +1505,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         // Which stream this belongs to: the booth's posters on their own,
         // and a guest's photo under Getting ready until the event starts,
         // The day after. The guest never chooses.
-        album: albumForUpload({
+        album: (p.photographer === true && linkAlbum) ? linkAlbum : albumForUpload({
           photographer: p.photographer === true,
           booth: Boolean(p.booth),
           eventStart,
@@ -1463,6 +1522,37 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
           : {}),
       },
     };
+  }
+
+  /** The name of the album a photographer's link delivers into. */
+  async function linkAlbumName(eventId: string, albumId: string): Promise<string | null> {
+    const { data } = await supabase
+      .from('host_media_albums')
+      .select('name')
+      .eq('id', albumId)
+      .eq('host_kind', 'event')
+      .eq('host_id', eventId)
+      .maybeSingle();
+    const name = (data as { name?: unknown } | null)?.name;
+    return typeof name === 'string' ? name : null;
+  }
+
+  /**
+   * The gallery slug of the registered album a photographer's link
+   * delivers into, or null when it is not registered on this event. The
+   * event check matters: album_id is only ever set by the admin API, but
+   * a slug from another event's register must never be written here.
+   */
+  async function linkAlbumSlug(eventId: string, albumId: string): Promise<string | null> {
+    const { data, error } = await supabase
+      .from('event_media_view_albums')
+      .select('view')
+      .eq('album_id', albumId)
+      .eq('event_id', eventId)
+      .maybeSingle();
+    if (error || !data) return null;
+    const slug = (data as { view?: unknown }).view;
+    return typeof slug === 'string' && ALBUM_SLUG_RE.test(slug) && !isView(slug) ? slug : null;
   }
 
   async function headObject(storagePath: string): Promise<{ ok: boolean; bytes: number; contentType: string }> {
@@ -1519,6 +1609,20 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     if (!tickets || tickets.length === 0 || tickets.length > MAX_FILES_PER_MINT) {
       sendError(res, 400, 'invalid_request', `tickets must contain 1-${MAX_FILES_PER_MINT} entries`);
       return;
+    }
+
+    // A photographer's link that names an album delivers there. If that
+    // album cannot be found the delivery stops here rather than falling
+    // back to the Photographer album: the organiser asked for the two to
+    // be kept apart, and a file that is not completed can be sent again.
+    let linkAlbum: string | null = null;
+    if (link.role === 'photographer' && link.album_id) {
+      linkAlbum = await linkAlbumSlug(link.event_id, link.album_id);
+      if (!linkAlbum) {
+        logger.error('photographer link album missing', { linkId: link.id, albumId: link.album_id });
+        sendError(res, 409, 'album_unavailable', 'the album this link delivers into is not available');
+        return;
+      }
     }
 
     const items: Array<Record<string, unknown>> = [];
@@ -1585,6 +1689,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       const row = buildInsertRow(
         p, head.bytes || 0, link.auto_approve, event.event_start ?? null,
         await eveningFromFor(link.event_id),
+        linkAlbum,
       );
       (row['metadata'] as Record<string, unknown>)['upload_link_id'] = link.id;
 
@@ -1816,8 +1921,12 @@ function slugify(name: string): string {
     .slice(0, 60);
 }
 
-/** The most photographs one gallery request will consider. */
-const GALLERY_MAX = 2000;
+/**
+ * The furthest into an album a page may start. It was 2000, which a
+ * photographer's full delivery of 4,600 passes: past it every request
+ * was clamped to the same page and the gallery repeated it for ever.
+ */
+const GALLERY_MAX = 20000;
 /** The albums in the order the day ran, which is how they are offered. */
 const GALLERY_ORDER: readonly View[] = ['night', 'ready', 'day', 'evening', 'photographer', 'booth', 'elsewhere', 'seed'];
 /** Names for an event whose albums were never given one. */

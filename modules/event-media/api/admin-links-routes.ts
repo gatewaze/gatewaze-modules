@@ -65,7 +65,7 @@ export const LINK_WRITE_FIELDS = [
 ] as const;
 
 const LINK_SELECT =
-  'id, event_id, short_code, label, is_active, expires_at, require_name, allow_video, auto_approve, show_gallery, max_photo_bytes, max_video_bytes, logo_url, allow_face_filter, role, credit_name, credit_member_id, uploads_count, created_by, created_at, updated_at';
+  'id, event_id, short_code, label, is_active, expires_at, require_name, allow_video, auto_approve, show_gallery, max_photo_bytes, max_video_bytes, logo_url, allow_face_filter, role, credit_name, credit_member_id, album_id, album:host_media_albums(name), uploads_count, created_by, created_at, updated_at';
 
 /** The only two kinds of link there are. */
 const LINK_ROLES = ['guest', 'photographer'] as const;
@@ -126,6 +126,27 @@ function pickLinkFields(body: unknown): Record<string, unknown> {
   return out;
 }
 
+/**
+ * The album a photographer's link delivers into, by name (migration 032).
+ *
+ *   undefined  the body did not mention it; leave it as it is
+ *   null       the Photographer album, as before
+ *   string     an album of this event's with that name, made if need be
+ *
+ * The name is all the body may say. The album id is never taken from the
+ * request: it comes back from event_media_link_album(), which checks the
+ * caller can administer the event and makes the album on that event.
+ */
+export function pickAlbumName(body: unknown): string | null | undefined {
+  if (typeof body !== 'object' || body === null || !('album_name' in body)) return undefined;
+  const value = (body as Record<string, unknown>)['album_name'];
+  if (value === null) return null;
+  if (typeof value !== 'string') return undefined;
+  // eslint-disable-next-line no-control-regex
+  const name = value.replace(/[\x00-\x1f\x7f]/g, '').trim().slice(0, 80);
+  return name || null;
+}
+
 export function createAdminLinksRoutes(deps: AdminLinksDeps) {
   const { userClient, logger } = deps;
 
@@ -136,6 +157,26 @@ export function createAdminLinksRoutes(deps: AdminLinksDeps) {
       return null;
     }
     return eventId;
+  }
+
+  /**
+   * Turn an album name into the album id to store, as the caller. Sends
+   * the error and returns false when it cannot.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  async function albumIdFor(supabase: any, eventId: string, name: string | null, res: Response): Promise<{ ok: true; albumId: string | null } | { ok: false }> {
+    if (name === null) return { ok: true, albumId: null };
+    const { data, error } = await supabase.rpc('event_media_link_album', { p_event_id: eventId, p_name: name });
+    if (error || typeof data !== 'string' || !UUID_RE.test(data)) {
+      if (error?.code === '42501') sendError(res, 403, 'forbidden', 'not authorised to manage upload links for this event');
+      else if (error?.code === '22023') sendError(res, 400, 'invalid_album_name', 'choose another album name: that one is empty or belongs to one of the standard albums');
+      else {
+        logger.error('upload-link album failed', { error: error?.message ?? 'no album id returned' });
+        sendError(res, 500, 'album_failed', 'could not prepare the album');
+      }
+      return { ok: false };
+    }
+    return { ok: true, albumId: data };
   }
 
   function client(req: Request, res: Response) {
@@ -172,6 +213,20 @@ export function createAdminLinksRoutes(deps: AdminLinksDeps) {
     if (typeof fields['label'] !== 'string' || (fields['label'] as string).trim().length === 0) {
       sendError(res, 400, 'invalid_request', 'label is required');
       return;
+    }
+
+    // Only a photographer's link delivers into a named album. A guest's
+    // upload is filed by the hour it was taken, so a name on one would
+    // do nothing and is refused rather than quietly ignored.
+    const albumName = pickAlbumName(req.body);
+    if (albumName && fields['role'] !== 'photographer') {
+      sendError(res, 400, 'invalid_request', 'album_name is for photographer links only');
+      return;
+    }
+    if (albumName !== undefined) {
+      const album = await albumIdFor(supabase, eventId, albumName, res);
+      if (!album.ok) return;
+      fields['album_id'] = album.albumId;
     }
 
     // 3-attempt collision retry on the (unique) short_code — copies the
@@ -217,6 +272,32 @@ export function createAdminLinksRoutes(deps: AdminLinksDeps) {
     const supabase = client(req, res); if (!supabase) return;
 
     const fields = pickLinkFields(req.body);
+    const albumName = pickAlbumName(req.body);
+    if (albumName) {
+      // Naming an album makes one, so first check there is a
+      // photographer's link here to deliver into it. Otherwise a guest
+      // link, or a link that does not exist, would leave an album behind
+      // that nothing uses.
+      const { data: current } = await supabase
+        .from('events_media_upload_links')
+        .select('id, role')
+        .eq('id', linkId)
+        .eq('event_id', eventId)
+        .maybeSingle();
+      if (!current) {
+        sendError(res, 404, 'link_not_found', 'link not found');
+        return;
+      }
+      if ((fields['role'] ?? current.role) !== 'photographer') {
+        sendError(res, 400, 'invalid_request', 'album_name is for photographer links only');
+        return;
+      }
+    }
+    if (albumName !== undefined) {
+      const album = await albumIdFor(supabase, eventId, albumName, res);
+      if (!album.ok) return;
+      fields['album_id'] = album.albumId;
+    }
     if (Object.keys(fields).length === 0) {
       sendError(res, 400, 'no_fields', 'at least one allowlisted field required');
       return;

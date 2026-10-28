@@ -96,7 +96,7 @@ function makeSupabase(config) {
       // select; both are emulated well enough to be worth asserting on,
       // including the album filter and the hidden-row exclusion the real
       // query does in SQL.
-      select: (_cols, opts) => { b._selected = true; b._head = Boolean(opts && opts.head); return b; },
+      select: (cols, opts) => { b._selected = true; b._cols = cols; b._head = Boolean(opts && opts.head); return b; },
       // PostgREST hands back a filter builder only once select() has been
       // called; a filter before it is a TypeError in production, so it is
       // one here too (a page shipped 500ing on 2026-09-27 because this
@@ -117,6 +117,7 @@ function makeSupabase(config) {
         if (table === 'events_media_guest_claims' && col === 'member_id') claimMember = val;
         if (col === 'metadata->>album') b._albumEq = val;
         if (col === 'id') b._idEq = val;
+        (b._eqs ??= {})[col] = val;
         return b;
       },
       gt: () => b,
@@ -152,6 +153,17 @@ function makeSupabase(config) {
           return Promise.resolve({ data: listed ?? config.existingMedia ?? null, error: null });
         }
         if (table === 'events_media_booth_settings') return Promise.resolve({ data: config.boothSetting ?? null, error: null });
+        // The album register, matched on every filter the query applied,
+        // so a row from another event is not found any more than it
+        // would be in SQL.
+        if (table === 'host_media_albums') {
+          const hit = (config.albums ?? []).find((r) => Object.entries(b._eqs ?? {}).every(([k, v]) => r[k] === v));
+          return Promise.resolve({ data: hit ? { name: hit.name } : null, error: null });
+        }
+        if (table === 'event_media_view_albums') {
+          const hit = (config.viewAlbums ?? []).find((r) => Object.entries(b._eqs ?? {}).every(([k, v]) => r[k] === v));
+          return Promise.resolve({ data: hit ? { view: hit.view } : null, error: null });
+        }
         if (table === 'events_media_guest_claims') return Promise.resolve({ data: state.claims.has(claimMember) ? { client_id: state.claims.get(claimMember) } : null, error: null });
         return Promise.resolve({ data: null, error: null });
       },
@@ -162,7 +174,11 @@ function makeSupabase(config) {
           return resolve({ count: b._rows().length, error: null });
         }
         if (table === 'events_media_guest_claims') return resolve({ data: [...state.claims].map(([member_id, client_id]) => ({ member_id, client_id })), error: null });
-        if (config.tables && table in config.tables) return resolve(config.tables[table]);
+        // A table may answer per query, by the columns it was asked for.
+        if (config.tables && table in config.tables) {
+          const t = config.tables[table];
+          return resolve(typeof t === 'function' ? t(b._cols ?? '') : t);
+        }
         if (!isMedia(table)) return resolve({ data: [], error: null });
         return resolve({ data: config.mediaRows ?? [], error: config.mediaListError ?? null });
       },
@@ -1167,8 +1183,8 @@ describe('eventGallery', () => {
     expect(res.body.event.name).toBe('Dan & Sarah');
     // In the order the day ran, hidden photos counted in neither.
     expect(res.body.albums).toEqual([
-      { album: 'ready', slug: 'getting-ready', name: 'Getting ready', count: 2, enhanced: false, xray: false },
-      { album: 'day', slug: 'the-day', name: 'The day', count: 1, enhanced: false, xray: false },
+      { album: 'ready', slug: 'getting-ready', name: 'Getting ready', count: 2, enhanced: false, xray: false, slideshow: false },
+      { album: 'day', slug: 'the-day', name: 'The day', count: 1, enhanced: false, xray: false, slideshow: false },
     ]);
     expect(res.body.items).toHaveLength(3);
     expect(res.body.total).toBe(3);
@@ -1341,6 +1357,40 @@ describe('eventGallery', () => {
     });
   });
 
+  // An album offered as a slideshow says so (migration 033), and only
+  // that album does.
+  it('says which albums are offered as a slideshow', async () => {
+    const on = { ...TABLES, event_media_album_settings: { data: [
+      { album_id: ALBUM.day, show_on_portal: true, slideshow: true },
+      { album_id: ALBUM.ready, show_on_portal: true, slideshow: false },
+    ], error: null } };
+    const res = await gallery({}, { tables: on });
+    expect(res.body.albums.find((a) => a.album === 'day').slideshow).toBe(true);
+    expect(res.body.albums.find((a) => a.album === 'ready').slideshow).toBe(false);
+  });
+
+  // The slideshow column is read on its own. If that read fails -- a
+  // database the migration has not reached -- the albums an organiser
+  // hid must stay hidden, which they would not if it failed the main
+  // settings read.
+  it('keeps hidden albums hidden when the slideshow read fails', async () => {
+    const settings = (cols) => (cols.includes('slideshow')
+      ? { data: null, error: { message: 'column "slideshow" does not exist' } }
+      : { data: [{ album_id: ALBUM.ready, show_on_portal: false }], error: null });
+    const res = await gallery({}, { tables: { ...TABLES, event_media_album_settings: settings } });
+    expect(res.body.albums.map((a) => a.album)).toEqual(['day']);
+    expect(res.body.albums[0].slideshow).toBe(false);
+  });
+
+  // A photographer's full delivery is 4,600. The offset used to be
+  // clamped at 2000, so every page past it was the same page.
+  it('pages past the two-thousandth photograph', async () => {
+    const many = Array.from({ length: 4600 }, (_, n) => photo(`00000000-0000-4000-8000-${String(n).padStart(12, '0')}`, 'day'));
+    const res = await gallery({ album: 'day', offset: '4400', limit: '200' }, { mediaRows: many });
+    expect(res.body.items[0].id).toBe(many[4400].id);
+    expect(res.body.next_offset).toBeNull();
+  });
+
   // Enhancement is per album: an album with it on shows the enhanced
   // copy of a photograph that has one, and nothing else changes.
   it('shows the enhanced copy only where the album asks for it', async () => {
@@ -1480,8 +1530,8 @@ describe('eventGallery: ingested albums', () => {
     const res = await gallery();
     expect(res.statusCode).toBe(200);
     expect(res.body.albums).toEqual([
-      { album: 'day', slug: 'the-day', name: 'The day', count: 1, enhanced: false, xray: false },
-      { album: 'conference-photos', slug: 'conference-photos', name: 'Conference photos', count: 2, enhanced: false, xray: false },
+      { album: 'day', slug: 'the-day', name: 'The day', count: 1, enhanced: false, xray: false, slideshow: false },
+      { album: 'conference-photos', slug: 'conference-photos', name: 'Conference photos', count: 2, enhanced: false, xray: false, slideshow: false },
     ]);
     expect(res.body.total).toBe(3);
   });
@@ -1663,5 +1713,123 @@ describe('a photographer\'s link', () => {
     expect(row.metadata.album).toBe('photographer');
     expect(row.metadata.photographer).toBe(true);
     expect(row.metadata.guest_name).toBe('Hartley & Rose Photography');
+  });
+
+  // A second, fuller delivery kept apart from the first (migration 032,
+  // asked 2026-10-28): the link names an album and everything it
+  // receives goes there.
+  describe('that names an album', () => {
+    const ALBUM_ID = '99999999-8888-4777-8666-555555555555';
+    const STREAM_LINK = { ...PRO_LINK, album_id: ALBUM_ID };
+    const STREAM_ALBUM = { album_id: ALBUM_ID, event_id: EVENT_ID, view: 'photographer-stream' };
+    const proTicket = (over = {}) => ticketFor({
+      guest_name: 'Hartley & Rose Photography', photographer: true,
+      taken_at: '2026-09-25T09:14:00', max_bytes: 1000 * 2, ...over,
+    });
+    const head = () => stubHead({ ok: true, headers: { get: (k) => ({ 'content-length': '1000', 'content-type': 'image/jpeg' })[k] ?? null } });
+
+    it('files what it receives in that album', async () => {
+      const { deps, supabase } = makeDeps({ link: STREAM_LINK, event: EVENT_ROW, existingMedia: null, viewAlbums: [STREAM_ALBUM] });
+      head();
+      const res = mockRes();
+      await createGuestRoutes(deps).completeUploads(req({ body: { tickets: [proTicket()] } }), res);
+      expect(res.statusCode).toBe(200);
+      const row = supabase.state.inserted[0];
+      expect(row.metadata.album).toBe('photographer-stream');
+      expect(row.metadata.photographer).toBe(true);
+      expect(row.metadata.taken_at).toBe('2026-09-25T09:14:00');
+    });
+
+    it('stops rather than falling back to the Photographer album when the album is gone', async () => {
+      const { deps, supabase } = makeDeps({ link: STREAM_LINK, event: EVENT_ROW, existingMedia: null, viewAlbums: [] });
+      head();
+      const res = mockRes();
+      await createGuestRoutes(deps).completeUploads(req({ body: { tickets: [proTicket()] } }), res);
+      expect(res.statusCode).toBe(409);
+      expect(res.body.error).toBe('album_unavailable');
+      expect(supabase.state.inserted).toHaveLength(0);
+    });
+
+    it('does not take an album registered on another event', async () => {
+      const elsewhere = { ...STREAM_ALBUM, event_id: '00000000-0000-4000-8000-000000000000' };
+      const { deps, supabase } = makeDeps({ link: STREAM_LINK, event: EVENT_ROW, existingMedia: null, viewAlbums: [elsewhere] });
+      head();
+      const res = mockRes();
+      await createGuestRoutes(deps).completeUploads(req({ body: { tickets: [proTicket()] } }), res);
+      expect(res.statusCode).toBe(409);
+      expect(supabase.state.inserted).toHaveLength(0);
+    });
+
+    it('does not take a projector view as its album', async () => {
+      const asView = { ...STREAM_ALBUM, view: 'day' };
+      const { deps, supabase } = makeDeps({ link: STREAM_LINK, event: EVENT_ROW, existingMedia: null, viewAlbums: [asView] });
+      head();
+      const res = mockRes();
+      await createGuestRoutes(deps).completeUploads(req({ body: { tickets: [proTicket()] } }), res);
+      expect(res.statusCode).toBe(409);
+      expect(supabase.state.inserted).toHaveLength(0);
+    });
+
+    it('refuses to mint when the album has gone, before anything is uploaded', async () => {
+      const { deps, supabase } = makeDeps({ link: STREAM_LINK, event: EVENT_ROW, viewAlbums: [] });
+      const res = mockRes();
+      await createGuestRoutes(deps).mintUploads(req({ body: { client_id: CLIENT_ID, files: [file()] } }), res);
+      expect(res.statusCode).toBe(409);
+      expect(res.body.error).toBe('album_unavailable');
+      expect(supabase.state.inserted).toHaveLength(0);
+    });
+
+    it('mints as usual while the album is there', async () => {
+      const { deps } = makeDeps({ link: STREAM_LINK, event: EVENT_ROW, viewAlbums: [STREAM_ALBUM] });
+      const res = mockRes();
+      await createGuestRoutes(deps).mintUploads(req({ body: { client_id: CLIENT_ID, files: [file()] } }), res);
+      expect(res.statusCode).toBe(200);
+    });
+
+    it('does not take a registered slug of the wrong shape', async () => {
+      const bad = { ...STREAM_ALBUM, view: 'Bad Slug!' };
+      const { deps, supabase } = makeDeps({ link: STREAM_LINK, event: EVENT_ROW, existingMedia: null, viewAlbums: [bad] });
+      head();
+      const res = mockRes();
+      await createGuestRoutes(deps).completeUploads(req({ body: { tickets: [proTicket()] } }), res);
+      expect(res.statusCode).toBe(409);
+      expect(supabase.state.inserted).toHaveLength(0);
+    });
+
+    // The link decides, not the ticket: a guest link with an album on it
+    // (which the admin API refuses to make) still does not deliver there,
+    // even for a ticket that says photographer.
+    it('takes the album only from a photographer\'s link', async () => {
+      const guestLink = { ...ACTIVE_LINK, album_id: ALBUM_ID };
+      const { deps, supabase } = makeDeps({ link: guestLink, event: EVENT_ROW, existingMedia: null, viewAlbums: [STREAM_ALBUM] });
+      head();
+      await createGuestRoutes(deps).completeUploads(req({ body: { tickets: [proTicket()] } }), mockRes());
+      expect(supabase.state.inserted[0].metadata.album).toBe('photographer');
+    });
+
+    it('tells whoever opens the link which album it delivers into', async () => {
+      const albums = [{ id: ALBUM_ID, host_kind: 'event', host_id: EVENT_ID, name: 'Photographer Stream' }];
+      const open = async (link) => {
+        const { deps } = makeDeps({ link, event: EVENT_ROW, albums });
+        const res = mockRes();
+        await createGuestRoutes(deps).getLink(req(), res);
+        return res.body.settings.album;
+      };
+      expect(await open(STREAM_LINK)).toBe('Photographer Stream');
+      expect(await open(PRO_LINK)).toBeNull();
+      expect(await open({ ...ACTIVE_LINK, album_id: ALBUM_ID })).toBeNull();
+      // An album of another event is not named.
+      expect(await open({ ...STREAM_LINK, event_id: '00000000-0000-4000-8000-000000000000' })).toBeNull();
+    });
+
+    it('leaves a guest link filed by the hour even with an album on it', async () => {
+      const guestLink = { ...ACTIVE_LINK, album_id: ALBUM_ID };
+      const { deps, supabase } = makeDeps({ link: guestLink, event: EVENT_ROW, existingMedia: null, viewAlbums: [STREAM_ALBUM] });
+      head();
+      await createGuestRoutes(deps).completeUploads(
+        req({ body: { tickets: [ticketFor({ max_bytes: 1000 * 2 })] } }), mockRes(),
+      );
+      expect(supabase.state.inserted[0].metadata.album).not.toBe('photographer-stream');
+    });
   });
 });

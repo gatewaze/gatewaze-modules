@@ -24,6 +24,7 @@ import {
   type Zoom,
 } from './_lib/zoom'
 import { albumAddress, pageBaseFrom } from './_lib/album-address'
+import SlideshowPlayer from './SlideshowPlayer'
 
 const API_BASE = ''
 
@@ -157,6 +158,8 @@ interface AlbumChoice {
   enhanced?: boolean
   /** The selfies behind this album's booth pictures may be shown. */
   xray?: boolean
+  /** The organiser offers this album as a slideshow (migration 033). */
+  slideshow?: boolean
 }
 
 interface Props {
@@ -254,6 +257,8 @@ export default function AlbumGallery({
   // A photograph a link named, shown before the page it sits on has
   // loaded -- page forty of The day is still one link.
   const [focus, setFocus] = useState<GalleryItem | null>(null)
+  // The album playing as a slideshow, when one is.
+  const [slideshowOn, setSlideshowOn] = useState(false)
   const [copied, setCopied] = useState(false)
   /** 'off' | 'saving' | 'saved' — what the save button is showing. */
   const [saveState, setSaveState] = useState<'off' | 'saving' | 'saved'>('off')
@@ -676,6 +681,10 @@ export default function AlbumGallery({
     { xray: over?.xray ?? xray, enhanced: over?.enhanced ?? showEnhanced },
   )
 
+  // The chosen album, when it is one the organiser offers as a slideshow.
+  // "Everything" never is: it has no one order to play in.
+  const slideshowAlbum = albums.find((a) => chosen !== null && (a.slug === chosen || a.album === chosen) && a.slideshow) ?? null
+
   const chips = useMemo(() => [
     { album: null as string | null, name: 'Everything', count: albums.reduce((n, a) => n + a.count, 0) },
     // Chosen by slug, which is what a link carries.
@@ -716,6 +725,17 @@ export default function AlbumGallery({
           {/* What you can change about what you are looking at, beside
               the link -- not a column of worded checkboxes under the
               albums (asked 2026-09-28). */}
+          {slideshowAlbum && (
+            <button
+              onClick={() => setSlideshowOn(true)}
+              title="Play this album as a slideshow, in the order the photos were taken"
+              aria-label="Play as a slideshow"
+              className="rounded-full px-3 py-1.5 text-sm"
+              style={{ background: darkMode ? 'rgba(255,255,255,0.10)' : 'rgba(0,0,0,0.05)', color: darkMode ? 'rgba(255,255,255,0.85)' : '#374151' }}
+            >
+              ▶ Play
+            </button>
+          )}
           {albumIsEnhanced && (
             <button
               onClick={() => setShowEnhanced((v) => !v)}
@@ -803,6 +823,17 @@ export default function AlbumGallery({
       )}
       {items.length > 0 && nextOffset === null && total > 0 && (
         <p className={`text-center text-xs ${subText}`}>{total} photo{total === 1 ? '' : 's'}</p>
+      )}
+
+      {slideshowOn && slideshowAlbum && (
+        <SlideshowPlayer
+          eventIdentifier={eventIdentifier}
+          album={slideshowAlbum.slug}
+          albumName={slideshowAlbum.name}
+          total={slideshowAlbum.count}
+          enhanced={showEnhanced}
+          onClose={() => setSlideshowOn(false)}
+        />
       )}
 
       {open && (

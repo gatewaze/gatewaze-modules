@@ -23,6 +23,7 @@ import {
   type DeliveryFile,
   type DeliveryProgress,
   fileKey,
+  filedFrom,
   inBatches,
   isDeliverable,
   progressLine,
@@ -127,14 +128,18 @@ export default function PhotographerUpload({ code, credit, allowVideo, eventName
         })
         const minted = await mint.json().catch(() => null)
         if (!mint.ok || !minted?.items) {
-          setProblem(minted?.message ?? 'The upload stopped. Nothing already sent is lost; start it again to carry on.')
+          setProblem(filedFrom(mint.status, minted).stop
+            ?? minted?.message
+            ?? 'The upload stopped. Nothing already sent is lost; start it again to carry on.')
           break
         }
 
         // A few at a time: a photographer's connection is the bottleneck
         // and forty at once makes it slower, not faster.
         const tickets: string[] = []
-        const sent: string[] = []
+        // Each upload's file, by media id, so only what the server files
+        // is remembered as sent.
+        const sent = new Map<string, string>()
         for (const group of inBatches(minted.items as Minted[], IN_FLIGHT)) {
           if (stop.current) break
           await Promise.all(group.map(async (item, i) => {
@@ -148,7 +153,7 @@ export default function PhotographerUpload({ code, credit, allowVideo, eventName
               })
               if (!put.ok) throw new Error(`upload ${put.status}`)
               tickets.push(item.ticket)
-              sent.push(fileKey(file as unknown as DeliveryFile))
+              sent.set(item.media_id, fileKey(file as unknown as DeliveryFile))
               state.done += 1
             } catch {
               // One file that will not go must not stop the delivery.
@@ -159,12 +164,20 @@ export default function PhotographerUpload({ code, credit, allowVideo, eventName
         }
 
         if (tickets.length > 0) {
-          await fetch(`${API_BASE}/api/public/event-media/links/${code}/uploads/complete`, {
+          const done = await fetch(`${API_BASE}/api/public/event-media/links/${code}/uploads/complete`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ tickets }),
           }).catch(() => null)
-          remember(sent)
+          const answer = done ? await done.json().catch(() => null) : null
+          const { filed, stop } = filedFrom(done?.status ?? 0, answer)
+          // Uploaded but not filed counts as failed, and is sent again
+          // next time rather than remembered.
+          const unfiled = [...sent.keys()].filter((id) => !filed.has(id)).length
+          state.done -= unfiled
+          state.failed += unfiled
+          remember([...sent].filter(([id]) => filed.has(id)).map(([, key]) => key))
+          if (stop) { setProblem(stop); setProgress({ ...state }); break }
         }
         setProgress({ ...state })
       }
