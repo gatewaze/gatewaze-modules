@@ -8,7 +8,11 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { lumaCalendarLocation, locationNeedsAutofill } from '../luma-calendar-details.js';
+import {
+  lumaCalendarLocation,
+  locationNeedsAutofill,
+  populateLumaCalendarDetailsIfMissing,
+} from '../luma-calendar-details.js';
 
 const london = {
   coordinate: { longitude: -0.127586, latitude: 51.507218 },
@@ -78,5 +82,49 @@ describe('locationNeedsAutofill', () => {
   test('treats a legacy location an admin typed in as manual', () => {
     assert.equal(locationNeedsAutofill({ type: 'city', city: 'Berlin' }), false);
     assert.equal(locationNeedsAutofill({ type: 'global', country: 'Germany' }), false);
+    assert.equal(locationNeedsAutofill({ type: 'global', state: 'Bavaria' }), false);
+    assert.equal(locationNeedsAutofill({ type: 'global', country_code: 'DE' }), false);
+  });
+});
+
+// A supabase client that serves one calendars row and records RPC calls.
+function fakeClient(row) {
+  const rpcs = [];
+  const builder = {
+    select() { return builder; },
+    eq() { return builder; },
+    maybeSingle: async () => ({ data: row, error: null }),
+  };
+  return {
+    rpcs,
+    from: () => builder,
+    rpc: async (name, args) => { rpcs.push([name, args]); return { data: 1, error: null }; },
+  };
+}
+
+describe('populateLumaCalendarDetailsIfMissing', () => {
+  test('a calendar not on Luma gets the events fallback, without a page fetch', async () => {
+    const row = { id: 'cal-not-luma', calendar_id: 'CAL-X', slug: 'x', cover_image_url: null, luma_calendar_id: null, location: null };
+    const client = fakeClient(row);
+    const out = await populateLumaCalendarDetailsIfMissing(client, row.id);
+    assert.deepEqual(client.rpcs, [['calendars_autofill_location_from_events', { p_calendar_id: row.id }]]);
+    assert.equal(out.location.source, 'events');
+  });
+
+  test('a second call for the same calendar inside six hours does nothing', async () => {
+    const row = { id: 'cal-retry', calendar_id: 'CAL-Y', slug: 'y', cover_image_url: null, luma_calendar_id: null, location: null };
+    const client = fakeClient(row);
+    await populateLumaCalendarDetailsIfMissing(client, row.id);
+    const again = await populateLumaCalendarDetailsIfMissing(client, row.id);
+    assert.equal(again.reason, 'attempted-recently');
+    assert.equal(client.rpcs.length, 1);
+  });
+
+  test('a calendar with a cover and a manual location is left alone', async () => {
+    const row = { id: 'cal-done', calendar_id: 'CAL-Z', slug: 'z', cover_image_url: 'calendars/z.png', luma_calendar_id: 'cal-123', location: { type: 'city', city: 'Paris', source: 'manual' } };
+    const client = fakeClient(row);
+    const out = await populateLumaCalendarDetailsIfMissing(client, row.id);
+    assert.equal(out.reason, 'nothing-missing');
+    assert.equal(client.rpcs.length, 0);
   });
 });

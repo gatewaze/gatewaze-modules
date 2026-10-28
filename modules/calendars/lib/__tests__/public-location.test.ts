@@ -61,6 +61,17 @@ describe('toPublicCalendarLocation', () => {
     expect(toPublicCalendarLocation({ city: 'Paris', country_code: 'fr' })?.country_code).toBe('FR');
   });
 
+  it('keeps a stored type rather than inferring one', () => {
+    expect(toPublicCalendarLocation({ type: 'country', city: 'Lyon', country: 'France' })?.type).toBe('country');
+    expect(toPublicCalendarLocation({ type: 'region', state: 'Bavaria', source: 'manual' })?.region).toBe('Bavaria');
+  });
+
+  it('drops coordinates when only the longitude is out of range', () => {
+    const out = toPublicCalendarLocation({ city: 'Paris', latitude: 48.85, longitude: 200 });
+    expect(out?.latitude).toBeNull();
+    expect(out?.longitude).toBeNull();
+  });
+
   it('ignores an unknown source value', () => {
     expect(toPublicCalendarLocation({ city: 'Oslo', source: 'guess' })?.source).toBe('manual');
   });

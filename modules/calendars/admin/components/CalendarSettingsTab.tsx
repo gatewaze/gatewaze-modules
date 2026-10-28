@@ -128,12 +128,19 @@ export function CalendarSettingsTab({ calendar, onUpdate }: CalendarSettingsTabP
       // 'manual' (which stops the worker updating it). Otherwise keep what is
       // stored, including the coordinates and source the worker set; and if
       // nothing is stored, leave it unset so the worker can still fill it.
+      // "Stored" is re-read here: the worker may have filled it since the
+      // page loaded, and settings is written back whole.
       const sameLocation = (['type', 'city', 'state', 'country', 'country_code', 'continent'] as const)
         .every((k) => (locationSettings[k] ?? '') === ((k === 'type' ? currentLocation?.type ?? 'global' : currentLocation?.[k]) ?? ''));
       const { location: _storedLocation, ...otherSettings } = calendar.settings ?? {};
-      const nextSettings = sameLocation
-        ? (currentLocation ? { ...otherSettings, location: currentLocation } : otherSettings)
-        : { ...otherSettings, location: { ...locationSettings, source: 'manual' as const } };
+      let nextSettings: Record<string, unknown>;
+      if (sameLocation) {
+        const stored = await CalendarService.getStoredLocation(calendar.id);
+        if (!stored.success) throw new Error(stored.error || 'Could not read the calendar location');
+        nextSettings = stored.data ? { ...otherSettings, location: stored.data } : otherSettings;
+      } else {
+        nextSettings = { ...otherSettings, location: { ...locationSettings, source: 'manual' as const } };
+      }
 
       const updateData: UpdateCalendarInput = {
         name: data.name,

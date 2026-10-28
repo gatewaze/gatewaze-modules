@@ -85,10 +85,15 @@ export function lumaCalendarLocation(calendar) {
 }
 
 /**
- * Does this settings.location still want an automatic value? Mirrors
+ * Does this settings.location still want an automatic value? Close to
  * calendars_location_is_auto_writable for the 'luma' source, so the worker
  * can skip the Luma page fetch when there is nothing to fill. The RPC makes
  * the final decision.
+ *
+ * One deliberate difference: the SQL lets a Luma location be replaced by a
+ * newer Luma one, but this returns false once the location came from Luma,
+ * so the worker does not fetch every chapter's page every six hours to
+ * catch a calendar moving. Clearing settings.location makes it fetch again.
  */
 export function locationNeedsAutofill(location) {
   if (!location || typeof location !== 'object') return true;
