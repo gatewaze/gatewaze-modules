@@ -116,14 +116,16 @@ const LIGHTBOX_LOOKAHEAD = 8
  * many of them. A photographer's is not. Their whole album is theirs, so
  * the same credit under all 851 photographs is noise over the pictures
  * rather than information -- and it is on the album itself (asked
- * 2026-10-17).
+ * 2026-10-17). The same goes for any album a photographer's link
+ * delivers into (migration 032), so it is the photograph's own flag that
+ * decides, not the album's name (asked 2026-10-28, Photographer Stream).
  *
  * Written as one expression on purpose: an early `return` up here reads
  * to the portal's rules-of-hooks gate as a component bailing out before
  * its hooks, and every hook in the file below it then looks misplaced.
  */
-const creditFor = (item: { guest_name: string | null; album?: string | null }): string | null => (
-  item.album === 'photographer' ? null : (item.guest_name || null)
+const creditFor = (item: { guest_name: string | null; album?: string | null; photographer?: boolean }): string | null => (
+  item.photographer === true || item.album === 'photographer' ? null : (item.guest_name || null)
 )
 /** How long a photograph takes to leave once it has been let go. */
 const LEAVE_MS = 200
@@ -135,6 +137,8 @@ interface GalleryItem {
   variants?: Record<string, string> | null
   album?: string | null
   guest_name: string | null
+  /** Delivered through a photographer's link rather than taken by a guest. */
+  photographer?: boolean
   /** The photograph the guest actually took, where the booth kept one. */
   selfie?: string | null
   /** The album this belongs to, as a link writes it. */

@@ -407,6 +407,19 @@ describe('listMedia', () => {
     expect(res.body.items[0].kind).toBe('photo');
   });
 
+  it('says which photographs a photographer delivered, and only those', async () => {
+    const delivered = {
+      ...ROW, id: '33333333-2222-3333-4444-555555555555',
+      metadata: { source: 'guest', guest_name: 'Hartley & Rose Photography', photographer: true, album: 'photographer-stream' },
+    };
+    const claimed = { ...ROW, id: '44444444-2222-3333-4444-555555555555', metadata: { ...ROW.metadata, photographer: 'true' } };
+    const { deps } = makeDeps({ link: ACTIVE_LINK, event: EVENT_ROW, mediaRows: [ROW, delivered, claimed] });
+    const res = mockRes();
+    await createGuestRoutes(deps).listMedia(req(), res);
+    expect(res.statusCode).toBe(200);
+    expect(res.body.items.map((i: { photographer: boolean }) => i.photographer)).toEqual([false, true, false]);
+  });
+
   it('sizes photos on the fly, and never a video', async () => {
     const bare = { ...ROW, id: '33333333-2222-3333-4444-555555555555', variants: null };
     const vid = { ...ROW, id: '44444444-2222-3333-4444-555555555555', variants: null, mime_type: 'video/mp4' };
