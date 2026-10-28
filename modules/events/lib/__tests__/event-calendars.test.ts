@@ -1,15 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { attachCalendars, planCalendars } from '../event-calendars';
+import { attachCalendars, planCalendars, resolveCalendarKey } from '../event-calendars';
 
 // Records the query and resolves to a canned result, like a PostgREST builder.
 function fakeSupabase(result: { data: unknown; error: unknown }) {
   const calls: Array<[string, ...unknown[]]> = [];
   const builder: Record<string, unknown> = {};
-  for (const m of ['select', 'in', 'eq']) {
+  for (const m of ['select', 'in', 'eq', 'limit']) {
     builder[m] = (...args: unknown[]) => { calls.push([m, ...args]); return builder; };
   }
   builder.then = (resolve: (v: unknown) => void) => resolve(result);
+  builder.maybeSingle = async () => result;
   const client = { from: (t: string) => { calls.push(['from', t]); return builder; } };
   return { client: client as unknown as SupabaseClient, calls };
 }
@@ -72,5 +73,39 @@ describe('attachCalendars', () => {
     const rows: Array<Record<string, unknown>> = [{ id: 'e1' }];
     await attachCalendars(client, rows, false);
     expect(rows[0]).not.toHaveProperty('calendars');
+  });
+});
+
+describe('resolveCalendarKey', () => {
+  const uuid = '482b5a13-7e2e-42cf-a090-177ca0afa51d';
+
+  it('passes a UUID through without a query', async () => {
+    const { client, calls } = fakeSupabase({ data: null, error: null });
+    expect(await resolveCalendarKey(client, uuid)).toBe(uuid);
+    expect(calls).toEqual([]);
+  });
+
+  it('resolves a calendar_id or slug to the public calendar id', async () => {
+    const { client, calls } = fakeSupabase({ data: { id: uuid }, error: null });
+    expect(await resolveCalendarKey(client, 'CAL-AAIFLONDON')).toBe(uuid);
+    expect(calls).toContainEqual(['eq', 'calendar_id', 'CAL-AAIFLONDON']);
+    expect(calls).toContainEqual(['eq', 'is_active', true]);
+    expect(calls).toContainEqual(['eq', 'visibility', 'public']);
+    expect(await resolveCalendarKey(client, 'nyc.mlops')).toBe(uuid);
+  });
+
+  it('tries slug when calendar_id does not match, and gives null when neither does', async () => {
+    const { client, calls } = fakeSupabase({ data: null, error: null });
+    expect(await resolveCalendarKey(client, 'aaif-london')).toBeNull();
+    expect(calls).toContainEqual(['eq', 'calendar_id', 'aaif-london']);
+    expect(calls).toContainEqual(['eq', 'slug', 'aaif-london']);
+  });
+
+  it('refuses keys with filter characters, and non-strings, without a query', async () => {
+    const { client, calls } = fakeSupabase({ data: { id: uuid }, error: null });
+    for (const key of ['a,b', 'x)', 'a b', '', ['CAL-A', 'CAL-B'], undefined]) {
+      expect(await resolveCalendarKey(client, key)).toBeNull();
+    }
+    expect(calls).toEqual([]);
   });
 });

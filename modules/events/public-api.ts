@@ -1,7 +1,7 @@
 import type { PublicApiContext } from '@gatewaze/shared';
 import type { Router, Request, Response } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { planCalendars, attachCalendars } from './lib/event-calendars';
+import { planCalendars, attachCalendars, resolveCalendarKey } from './lib/event-calendars';
 
 /** Fields safe to expose via the public API — never use select('*') */
 export const PUBLIC_EVENT_FIELDS = [
@@ -87,10 +87,11 @@ export function registerPublicApi(router: Router, ctx: PublicApiContext) {
 
       // Filter by calendar via subquery — preserves all other filters
       if (req.query.calendar_id) {
-        const { data: calEvents } = await supabase
-          .from('calendars_events')
-          .select('event_id')
-          .eq('calendar_id', req.query.calendar_id);
+        // id, CAL-… calendar_id or slug; an unknown key matches no events.
+        const calendarUuid = await resolveCalendarKey(supabase, req.query.calendar_id);
+        const { data: calEvents } = calendarUuid
+          ? await supabase.from('calendars_events').select('event_id').eq('calendar_id', calendarUuid)
+          : { data: [] };
         const eventIds = ((calEvents ?? []) as Array<{ event_id: string }>).map((ce) => ce.event_id);
         if (eventIds.length === 0) {
           ctx.setCache(res, { kind: 'public', maxAge: 60, sMaxAge: 300 });
@@ -151,10 +152,11 @@ export function registerPublicApi(router: Router, ctx: PublicApiContext) {
       if (req.query.from) query = query.gte('event_start', req.query.from);
       if (req.query.to) query = query.lte('event_start', req.query.to);
       if (req.query.calendar_id) {
-        const { data: calEvents } = await supabase
-          .from('calendars_events')
-          .select('event_id')
-          .eq('calendar_id', req.query.calendar_id);
+        // id, CAL-… calendar_id or slug; an unknown key matches no events.
+        const calendarUuid = await resolveCalendarKey(supabase, req.query.calendar_id);
+        const { data: calEvents } = calendarUuid
+          ? await supabase.from('calendars_events').select('event_id').eq('calendar_id', calendarUuid)
+          : { data: [] };
         const ids = ((calEvents ?? []) as Array<{ event_id: string }>).map((ce) => ce.event_id);
         if (ids.length === 0) {
           return res.json({ data: [], pagination: { total: 0, limit: pageLimit, offset, has_more: false } });
