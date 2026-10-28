@@ -17,6 +17,31 @@ ALTER TABLE public.events_media_upload_links
   ADD COLUMN IF NOT EXISTS album_id uuid
     REFERENCES public.host_media_albums(id) ON DELETE SET NULL;
 
+-- An album an active link delivers into cannot be deleted. Without this
+-- the FK would quietly set the link back to NULL, and the rest of the
+-- delivery would land in the Photographer album, mixed with the set it
+-- was meant to be kept apart from. An inactive link does not hold the
+-- album; it reverts to the Photographer album, which the admin shows.
+CREATE OR REPLACE FUNCTION public.event_media_album_in_use()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path = public AS $$
+BEGIN
+  IF EXISTS (
+    SELECT 1 FROM public.events_media_upload_links
+     WHERE album_id = OLD.id AND is_active
+  ) THEN
+    RAISE EXCEPTION 'A photographer''s upload link delivers into this album. Turn that link off first.'
+      USING ERRCODE = '23503';
+  END IF;
+  RETURN OLD;
+END $$;
+
+REVOKE ALL ON FUNCTION public.event_media_album_in_use() FROM PUBLIC, anon, authenticated;
+
+DROP TRIGGER IF EXISTS event_media_album_in_use ON public.host_media_albums;
+CREATE TRIGGER event_media_album_in_use
+  BEFORE DELETE ON public.host_media_albums
+  FOR EACH ROW EXECUTE FUNCTION public.event_media_album_in_use();
+
 COMMENT ON COLUMN public.events_media_upload_links.album_id IS
   'Photographer links only: the registered album this link delivers into. NULL = the Photographer album. Set by the API through event_media_link_album(), never from a request body.';
 
@@ -48,10 +73,15 @@ BEGIN
 
   PERFORM pg_advisory_xact_lock(hashtextextended('event_media_link_album:' || p_event_id::text, 0));
 
-  -- A standing album's name (Photographer, The day...) is refused: its
-  -- slug is a projector view, which a link may not deliver into, so
-  -- every upload would fail without saying why.
-  IF EXISTS (
+  -- A standing album's name (Photographer, The day...) is refused, made
+  -- or not: the gallery addresses albums by a slug of their name, so a
+  -- second "Photographer" could never be opened, and a renamed standing
+  -- album would take uploads the link cannot deliver.
+  IF lower(v_name) IN (
+       'seed', 'night', 'ready', 'day', 'evening', 'booth', 'elsewhere', 'photographer',
+       'preload', 'the night before', 'getting ready', 'the day', 'evening reception',
+       'photo booth', 'photo booth elsewhere'
+     ) OR EXISTS (
     SELECT 1
       FROM public.event_media_view_albums v
       JOIN public.host_media_albums a ON a.id = v.album_id

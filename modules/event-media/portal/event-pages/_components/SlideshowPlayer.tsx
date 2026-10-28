@@ -21,7 +21,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { fullFaceOf } from './_lib/gallery-face'
 import {
-  FRAME_PAGE, SPEEDS, type Speed, DEFAULT_SPEED, frameMs, frameUrl, frameWidth, keepWindow, pageStart, playLength, speedOf,
+  FRAME_PAGE, SPEEDS, type Speed, DEFAULT_SPEED, frameMs, frameUrl, frameWidth, keepWindow, nextFrame, pageStart, playFrom, playLength, speedOf,
 } from './_lib/slideshow'
 
 const API_BASE = ''
@@ -105,10 +105,17 @@ export default function SlideshowPlayer({ eventIdentifier, album, albumName, tot
     }
   }, [album, eventIdentifier])
 
+  // The latest fill, for a page that lands after the call that asked for it.
+  const fillRef = useRef<(pos: number) => void>(() => {})
+
   // Load and decode the frames around the one showing; let go of the rest.
-  const fill = useCallback((at: number) => {
-    const { from, to } = keepWindow(at, speed, total)
-    for (const page of new Set([pageStart(from), pageStart(to)])) void loadPage(page)
+  const fill = useCallback((pos: number) => {
+    const { from, to } = keepWindow(pos, speed, total)
+    for (const page of new Set([pageStart(from), pageStart(to)])) {
+      // A page not here yet fills again when it lands. Otherwise a jump
+      // made while paused (the slider, a step back) would wait for ever.
+      if (!pagesAsked.current.has(page)) void loadPage(page).then(() => fillRef.current(at.current))
+    }
     for (let i = from; i <= to; i++) {
       const f = frames.current.get(i)
       if (!f || loaded.current.has(i)) continue
@@ -117,6 +124,8 @@ export default function SlideshowPlayer({ eventIdentifier, album, albumName, tot
       img.src = urlOf(f)
       loaded.current.set(i, img)
       img.decode().then(() => {
+        // Let go of while it was loading: nothing to do.
+        if (loaded.current.get(i) !== img) return
         ready.current.add(i)
         // The frame being waited for has arrived: show it now rather
         // than on the next tick.
@@ -131,9 +140,7 @@ export default function SlideshowPlayer({ eventIdentifier, album, albumName, tot
       if (i < from || i > to) { loaded.current.delete(i); ready.current.delete(i) }
     }
   }, [loadPage, speed, total, urlOf])
-
-  // The first page, then whatever frame is current.
-  useEffect(() => { void loadPage(0).then(() => fill(at.current)) }, [loadPage, fill])
+  fillRef.current = fill
 
   // What is on screen follows the index once its frame is ready; until
   // then the decode above puts it up when it lands.
@@ -148,13 +155,12 @@ export default function SlideshowPlayer({ eventIdentifier, album, albumName, tot
   useEffect(() => {
     if (!playing) return
     const timer = setInterval(() => {
-      let next = at.current + 1
-      while (next < total && skip.current.has(next)) next++
-      if (next >= total) { setPlaying(false); return }
-      fill(next)
-      if (!frames.current.has(next) || !ready.current.has(next)) { setWaiting(true); return }
+      const step = nextFrame(at.current, total, skip.current, (i) => frames.current.has(i) && ready.current.has(i))
+      if (step.kind === 'end') { setPlaying(false); return }
+      fill(step.index)
+      if (step.kind === 'wait') { setWaiting(true); return }
       setWaiting(false)
-      setIndex(next)
+      setIndex(step.index)
     }, frameMs(speed))
     return () => clearInterval(timer)
   }, [playing, speed, total, fill])
@@ -179,6 +185,16 @@ export default function SlideshowPlayer({ eventIdentifier, album, albumName, tot
     setIndex(Math.max(0, Math.min(total - 1, at.current + by)))
   }, [total])
 
+  // Play from where it is, or from the top once it has finished.
+  const toggle = useCallback(() => {
+    setPlaying((p) => {
+      if (p) return false
+      const from = playFrom(at.current, total)
+      if (from !== at.current) setIndex(from)
+      return true
+    })
+  }, [total])
+
   const chooseSpeed = useCallback((s: Speed) => {
     setSpeed(s)
     try { localStorage.setItem(SPEED_KEY, String(s)) } catch { /* not remembered, still set */ }
@@ -188,13 +204,13 @@ export default function SlideshowPlayer({ eventIdentifier, album, albumName, tot
     const onKey = (e: KeyboardEvent) => {
       poke()
       if (e.key === 'Escape') onClose()
-      else if (e.key === ' ') { e.preventDefault(); setPlaying((p) => !p) }
+      else if (e.key === ' ') { e.preventDefault(); toggle() }
       else if (e.key === 'ArrowRight') step(1)
       else if (e.key === 'ArrowLeft') step(-1)
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [onClose, poke, step])
+  }, [onClose, poke, step, toggle])
 
   const chip = (on: boolean) => (on
     ? { background: '#ffffff', color: '#111827', fontWeight: 600 }
@@ -208,7 +224,7 @@ export default function SlideshowPlayer({ eventIdentifier, album, albumName, tot
       className="fixed inset-0 z-50 flex items-center justify-center bg-black"
       style={{ cursor: controls ? 'default' : 'none' }}
       onPointerMove={poke}
-      onClick={() => { poke(); setPlaying((p) => !p) }}
+      onClick={() => { poke(); toggle() }}
     >
       {shown && (
         // eslint-disable-next-line @next/next/no-img-element -- frames are preloaded Image objects; next/image would refetch
@@ -238,7 +254,7 @@ export default function SlideshowPlayer({ eventIdentifier, album, albumName, tot
         />
         <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-white">
           <button
-            onClick={() => setPlaying((p) => !p)}
+            onClick={toggle}
             aria-label={playing ? 'Pause' : 'Play'}
             className="rounded-full px-3 py-1.5"
             style={chip(true)}

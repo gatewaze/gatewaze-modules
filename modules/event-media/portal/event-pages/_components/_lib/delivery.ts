@@ -86,3 +86,29 @@ export function progressLine(p: DeliveryProgress): string {
   if (p.skipped > 0) parts.push(`${p.skipped.toLocaleString()} already here`)
   return parts.join(' · ')
 }
+
+/**
+ * Which uploads the server actually filed, from its answer to complete.
+ *
+ * Only these are remembered as delivered. An upload the server did not
+ * file is sent again next time, and an answer that says the link's album
+ * has gone stops the delivery: every later batch would be refused the
+ * same way, and remembering them would lose the files for good.
+ */
+export function filedFrom(
+  status: number,
+  body: unknown,
+): { filed: Set<string>; stop: string | null } {
+  const filed = new Set<string>()
+  const b = (body && typeof body === 'object' ? body : {}) as { error?: unknown; items?: unknown }
+  if (status === 409 && b.error === 'album_unavailable') {
+    return { filed, stop: 'The album this link delivers into is not available. Ask the couple to check the link, then start again.' }
+  }
+  if ((status < 200 || status >= 300) || !Array.isArray(b.items)) return { filed, stop: null }
+  for (const item of b.items as Array<{ media_id?: unknown; status?: unknown }>) {
+    if (typeof item?.media_id === 'string' && (item.status === 'created' || item.status === 'already_created')) {
+      filed.add(item.media_id)
+    }
+  }
+  return { filed, stop: null }
+}

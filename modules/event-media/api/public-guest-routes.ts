@@ -1364,6 +1364,13 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
 
     const asPhotographer = link.role === 'photographer';
 
+    // A link whose album has gone is refused before anything is sent,
+    // rather than after twenty files have been uploaded for nothing.
+    if (asPhotographer && link.album_id && !(await linkAlbumSlug(link.event_id, link.album_id))) {
+      sendError(res, 409, 'album_unavailable', 'the album this link delivers into is not available');
+      return;
+    }
+
 
     // A photographer is not on the guest list and is not asked to be.
     // Their link already says who they are, and `identify` refuses any
@@ -1517,12 +1524,6 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     };
   }
 
-  /**
-   * The gallery slug of the registered album a photographer's link
-   * delivers into, or null when it is not registered on this event. The
-   * event check matters: album_id is only ever set by the admin API, but
-   * a slug from another event's register must never be written here.
-   */
   /** The name of the album a photographer's link delivers into. */
   async function linkAlbumName(eventId: string, albumId: string): Promise<string | null> {
     const { data } = await supabase
@@ -1536,6 +1537,12 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     return typeof name === 'string' ? name : null;
   }
 
+  /**
+   * The gallery slug of the registered album a photographer's link
+   * delivers into, or null when it is not registered on this event. The
+   * event check matters: album_id is only ever set by the admin API, but
+   * a slug from another event's register must never be written here.
+   */
   async function linkAlbumSlug(eventId: string, albumId: string): Promise<string | null> {
     const { data, error } = await supabase
       .from('event_media_view_albums')

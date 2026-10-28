@@ -156,6 +156,10 @@ function makeSupabase(config) {
         // The album register, matched on every filter the query applied,
         // so a row from another event is not found any more than it
         // would be in SQL.
+        if (table === 'host_media_albums') {
+          const hit = (config.albums ?? []).find((r) => Object.entries(b._eqs ?? {}).every(([k, v]) => r[k] === v));
+          return Promise.resolve({ data: hit ? { name: hit.name } : null, error: null });
+        }
         if (table === 'event_media_view_albums') {
           const hit = (config.viewAlbums ?? []).find((r) => Object.entries(b._eqs ?? {}).every(([k, v]) => r[k] === v));
           return Promise.resolve({ data: hit ? { view: hit.view } : null, error: null });
@@ -1356,7 +1360,10 @@ describe('eventGallery', () => {
   // An album offered as a slideshow says so (migration 033), and only
   // that album does.
   it('says which albums are offered as a slideshow', async () => {
-    const on = { ...TABLES, event_media_album_settings: { data: [{ album_id: ALBUM.day, show_on_portal: true, slideshow: true }], error: null } };
+    const on = { ...TABLES, event_media_album_settings: { data: [
+      { album_id: ALBUM.day, show_on_portal: true, slideshow: true },
+      { album_id: ALBUM.ready, show_on_portal: true, slideshow: false },
+    ], error: null } };
     const res = await gallery({}, { tables: on });
     expect(res.body.albums.find((a) => a.album === 'day').slideshow).toBe(true);
     expect(res.body.albums.find((a) => a.album === 'ready').slideshow).toBe(false);
@@ -1761,6 +1768,58 @@ describe('a photographer\'s link', () => {
       await createGuestRoutes(deps).completeUploads(req({ body: { tickets: [proTicket()] } }), res);
       expect(res.statusCode).toBe(409);
       expect(supabase.state.inserted).toHaveLength(0);
+    });
+
+    it('refuses to mint when the album has gone, before anything is uploaded', async () => {
+      const { deps, supabase } = makeDeps({ link: STREAM_LINK, event: EVENT_ROW, viewAlbums: [] });
+      const res = mockRes();
+      await createGuestRoutes(deps).mintUploads(req({ body: { client_id: CLIENT_ID, files: [file()] } }), res);
+      expect(res.statusCode).toBe(409);
+      expect(res.body.error).toBe('album_unavailable');
+      expect(supabase.state.inserted).toHaveLength(0);
+    });
+
+    it('mints as usual while the album is there', async () => {
+      const { deps } = makeDeps({ link: STREAM_LINK, event: EVENT_ROW, viewAlbums: [STREAM_ALBUM] });
+      const res = mockRes();
+      await createGuestRoutes(deps).mintUploads(req({ body: { client_id: CLIENT_ID, files: [file()] } }), res);
+      expect(res.statusCode).toBe(200);
+    });
+
+    it('does not take a registered slug of the wrong shape', async () => {
+      const bad = { ...STREAM_ALBUM, view: 'Bad Slug!' };
+      const { deps, supabase } = makeDeps({ link: STREAM_LINK, event: EVENT_ROW, existingMedia: null, viewAlbums: [bad] });
+      head();
+      const res = mockRes();
+      await createGuestRoutes(deps).completeUploads(req({ body: { tickets: [proTicket()] } }), res);
+      expect(res.statusCode).toBe(409);
+      expect(supabase.state.inserted).toHaveLength(0);
+    });
+
+    // The link decides, not the ticket: a guest link with an album on it
+    // (which the admin API refuses to make) still does not deliver there,
+    // even for a ticket that says photographer.
+    it('takes the album only from a photographer\'s link', async () => {
+      const guestLink = { ...ACTIVE_LINK, album_id: ALBUM_ID };
+      const { deps, supabase } = makeDeps({ link: guestLink, event: EVENT_ROW, existingMedia: null, viewAlbums: [STREAM_ALBUM] });
+      head();
+      await createGuestRoutes(deps).completeUploads(req({ body: { tickets: [proTicket()] } }), mockRes());
+      expect(supabase.state.inserted[0].metadata.album).toBe('photographer');
+    });
+
+    it('tells whoever opens the link which album it delivers into', async () => {
+      const albums = [{ id: ALBUM_ID, host_kind: 'event', host_id: EVENT_ID, name: 'Photographer Stream' }];
+      const open = async (link) => {
+        const { deps } = makeDeps({ link, event: EVENT_ROW, albums });
+        const res = mockRes();
+        await createGuestRoutes(deps).getLink(req(), res);
+        return res.body.settings.album;
+      };
+      expect(await open(STREAM_LINK)).toBe('Photographer Stream');
+      expect(await open(PRO_LINK)).toBeNull();
+      expect(await open({ ...ACTIVE_LINK, album_id: ALBUM_ID })).toBeNull();
+      // An album of another event is not named.
+      expect(await open({ ...STREAM_LINK, event_id: '00000000-0000-4000-8000-000000000000' })).toBeNull();
     });
 
     it('leaves a guest link filed by the hour even with an album on it', async () => {

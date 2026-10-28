@@ -82,6 +82,29 @@ export function keepWindow(index: number, speed: Speed, total: number): { from: 
   return { from, to }
 }
 
+/**
+ * What the next tick of a playing slideshow does, from the frame on
+ * screen. Positions in `skip` are not frames (a video, or a photograph
+ * that would not load) and are stepped over. A frame that is not loaded
+ * yet is waited for, not skipped, so the order is never broken.
+ */
+export function nextFrame(
+  at: number,
+  total: number,
+  skip: ReadonlySet<number>,
+  isReady: (index: number) => boolean,
+): { kind: 'end' } | { kind: 'wait'; index: number } | { kind: 'show'; index: number } {
+  let next = at + 1
+  while (next < total && skip.has(next)) next++
+  if (next >= total) return { kind: 'end' }
+  return isReady(next) ? { kind: 'show', index: next } : { kind: 'wait', index: next }
+}
+
+/** Where pressing Play starts: from the top again once the album has finished. */
+export function playFrom(at: number, total: number): number {
+  return at >= total - 1 ? 0 : at
+}
+
 /** "1:05" for a number of seconds: how long the album takes to play. */
 export function playLength(frames: number, speed: Speed): string {
   const secs = Math.max(0, Math.round(frames / speed))

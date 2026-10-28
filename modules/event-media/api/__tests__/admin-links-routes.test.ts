@@ -20,11 +20,18 @@ function mockRes() {
 function makeUserClient(config = {}) {
   const state = { inserted: [], updated: [], deleted: 0 };
   function builder() {
+    const eqs = {};
     const b = {
       select: () => b,
-      eq: () => b,
+      eq: (col, val) => { eqs[col] = val; return b; },
       order: () => b,
-      maybeSingle: () => Promise.resolve({ data: config.existing ?? null, error: null }),
+      // A row is found only by the filters it matches, so a link on
+      // another event is not found any more than it would be in SQL.
+      maybeSingle: () => {
+        const row = config.existing ?? null;
+        const matches = row && Object.entries(eqs).every(([k, v]) => !(k in row) || row[k] === v);
+        return Promise.resolve({ data: matches ? row : null, error: null });
+      },
       then: (resolve) => resolve({ data: config.listData ?? [], error: null }),
       insert: (row) => {
         state.inserted.push(row);
@@ -241,6 +248,64 @@ describe('admin links routes', () => {
       await routes.createLink(req({ body: { label: 'Pro', role: 'photographer', album_name: 'Photographer' } }), res);
       expect(res.statusCode).toBe(400);
       expect(res.body.error).toBe('invalid_album_name');
+    });
+
+    it('patch judges by the role the link will have', async () => {
+      const toGuest = makeRoutes({ existing: { id: LINK_ID, event_id: EVENT_ID, role: 'photographer' }, albumId: ALBUM_ID });
+      const res = mockRes();
+      await toGuest.routes.patchLink(req({ params: { eventId: EVENT_ID, id: LINK_ID }, body: { role: 'guest', album_name: 'Stream' } }), res);
+      expect(res.statusCode).toBe(400);
+      expect(toGuest.state.rpcCalls).toHaveLength(0);
+      expect(toGuest.state.updated).toHaveLength(0);
+
+      const toPro = makeRoutes({ existing: { id: LINK_ID, event_id: EVENT_ID, role: 'guest' }, albumId: ALBUM_ID });
+      const res2 = mockRes();
+      await toPro.routes.patchLink(req({ params: { eventId: EVENT_ID, id: LINK_ID }, body: { role: 'photographer', album_name: 'Stream' } }), res2);
+      expect(res2.statusCode).toBe(200);
+      expect(toPro.state.updated[0].album_id).toBe(ALBUM_ID);
+    });
+
+    it('patch will not touch a link on another event', async () => {
+      const elsewhere = makeRoutes({ existing: { id: LINK_ID, event_id: '00000000-0000-4000-8000-000000000000', role: 'photographer' }, albumId: ALBUM_ID });
+      const res = mockRes();
+      await elsewhere.routes.patchLink(req({ params: { eventId: EVENT_ID, id: LINK_ID }, body: { album_name: 'Stream' } }), res);
+      expect(res.statusCode).toBe(404);
+      expect(elsewhere.state.rpcCalls).toHaveLength(0);
+    });
+
+    it('patch changes nothing when the album cannot be made', async () => {
+      const { routes, state } = makeRoutes({
+        existing: { id: LINK_ID, event_id: EVENT_ID, role: 'photographer' },
+        rpcResult: { data: null, error: { code: '42501', message: 'no' } },
+      });
+      const res = mockRes();
+      await routes.patchLink(req({ params: { eventId: EVENT_ID, id: LINK_ID }, body: { album_name: 'X', label: 'New' } }), res);
+      expect(res.statusCode).toBe(403);
+      expect(state.updated).toHaveLength(0);
+    });
+
+    it('refuses an answer from the database that is not an album id', async () => {
+      const { routes, state } = makeRoutes({ albumId: 'not-a-uuid' });
+      const res = mockRes();
+      await routes.createLink(req({ body: { label: 'S', role: 'photographer', album_name: 'S' } }), res);
+      expect(res.statusCode).toBe(500);
+      expect(res.body.error).toBe('album_failed');
+      expect(state.inserted).toHaveLength(0);
+    });
+
+    it('cleans the name before the database sees it', async () => {
+      const { routes, state } = makeRoutes({ albumId: ALBUM_ID });
+      await routes.createLink(req({ body: { label: 'S', role: 'photographer', album_name: 'A\u0000B\nC' + 'x'.repeat(100) } }), mockRes());
+      expect(state.rpcCalls[0].args.p_name).toBe('ABC' + 'x'.repeat(77));
+    });
+
+    it('ignores an album name that is not text', async () => {
+      const { routes, state } = makeRoutes({ albumId: ALBUM_ID });
+      const res = mockRes();
+      await routes.createLink(req({ body: { label: 'S', role: 'photographer', album_name: 42 } }), res);
+      expect(res.statusCode).toBe(201);
+      expect(state.inserted[0].album_id).toBeUndefined();
+      expect(state.rpcCalls).toHaveLength(0);
     });
 
     it('patch can move a link to an album and back', async () => {

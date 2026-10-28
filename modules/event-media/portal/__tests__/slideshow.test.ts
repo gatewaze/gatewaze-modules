@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import {
-  DEFAULT_SPEED, FRAME_PAGE, SPEEDS, frameMs, frameUrl, frameWidth, keepWindow, lookahead, pageStart, playLength, speedOf,
+  DEFAULT_SPEED, FRAME_PAGE, SPEEDS, frameMs, frameUrl, frameWidth, keepWindow, lookahead, nextFrame, pageStart, playFrom, playLength, speedOf,
 } from '../event-pages/_components/_lib/slideshow';
 
 describe('the speed', () => {
@@ -69,6 +69,39 @@ describe('finding a frame', () => {
     expect(keepWindow(0, 2, 4600)).toEqual({ from: 0, to: 6 });
     expect(keepWindow(4598, 5, 4600)).toEqual({ from: 4597, to: 4599 });
     expect(keepWindow(0, 2, 0)).toEqual({ from: 0, to: 0 });
+  });
+});
+
+describe('each tick', () => {
+  const all = () => true;
+  const none = () => false;
+
+  it('moves on to the next frame when it is ready', () => {
+    expect(nextFrame(4, 10, new Set(), all)).toEqual({ kind: 'show', index: 5 });
+  });
+
+  it('waits for a frame that is not loaded yet rather than skipping it', () => {
+    expect(nextFrame(4, 10, new Set(), none)).toEqual({ kind: 'wait', index: 5 });
+  });
+
+  it('steps over what is not a frame', () => {
+    expect(nextFrame(4, 10, new Set([5, 6]), all)).toEqual({ kind: 'show', index: 7 });
+  });
+
+  it('ends at the last frame, and when only skipped ones are left', () => {
+    expect(nextFrame(9, 10, new Set(), all)).toEqual({ kind: 'end' });
+    expect(nextFrame(7, 10, new Set([8, 9]), all)).toEqual({ kind: 'end' });
+    expect(nextFrame(0, 1, new Set(), all)).toEqual({ kind: 'end' });
+  });
+});
+
+describe('pressing Play', () => {
+  it('carries on from where it is', () => {
+    expect(playFrom(10, 100)).toBe(10);
+  });
+
+  it('starts again from the top once it has finished', () => {
+    expect(playFrom(99, 100)).toBe(0);
   });
 });
 

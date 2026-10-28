@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { fileKey, inBatches, isDeliverable, progressLine, toDeliver } from '../event-pages/_components/_lib/delivery';
+import { fileKey, filedFrom, inBatches, isDeliverable, progressLine, toDeliver } from '../event-pages/_components/_lib/delivery';
 
 const f = (name: string, size = 12_000_000, type = 'image/jpeg') => ({ name, size, type });
 
@@ -58,5 +58,29 @@ describe('batching', () => {
     expect(inBatches([], 20)).toEqual([]);
     // A nonsense size is one at a time rather than an endless loop.
     expect(inBatches([1, 2], 0)).toEqual([[1], [2]]);
+  });
+});
+
+describe('what the server filed', () => {
+  it('remembers only the uploads the server filed', () => {
+    const { filed, stop } = filedFrom(207, { items: [
+      { media_id: 'a', status: 'created' },
+      { media_id: 'b', status: 'already_created' },
+      { media_id: 'c', status: 'failed', error: 'object_missing' },
+    ] });
+    expect([...filed].sort()).toEqual(['a', 'b']);
+    expect(stop).toBeNull();
+  });
+
+  it('stops when the link\'s album has gone, and remembers nothing', () => {
+    const { filed, stop } = filedFrom(409, { error: 'album_unavailable' });
+    expect(filed.size).toBe(0);
+    expect(stop).toMatch(/album/);
+  });
+
+  it('remembers nothing from an error or no answer', () => {
+    expect(filedFrom(500, { items: [{ media_id: 'a', status: 'created' }] }).filed.size).toBe(0);
+    expect(filedFrom(0, null).filed.size).toBe(0);
+    expect(filedFrom(429, {}).stop).toBeNull();
   });
 });
