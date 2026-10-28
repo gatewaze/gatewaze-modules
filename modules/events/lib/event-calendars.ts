@@ -3,6 +3,36 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js';
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const CALENDAR_KEY_RE = /^[A-Za-z0-9._-]{1,200}$/;
+
+/**
+ * Turn `?calendar_id=` into the calendar's UUID, which is what
+ * calendars_events stores. Callers see three keys for a calendar on
+ * /api/v1/calendars (id, calendar_id like CAL-AAIFLONDON, and slug), so all
+ * three are accepted. A UUID is passed through as before. A calendar_id or
+ * slug only resolves for an active public calendar, the ones the calendars
+ * API lists. Returns null when nothing matches.
+ */
+export async function resolveCalendarKey(supabase: SupabaseClient, key: unknown): Promise<string | null> {
+  if (typeof key !== 'string') return null;
+  const k = key.trim();
+  if (UUID_RE.test(k)) return k;
+  if (!CALENDAR_KEY_RE.test(k)) return null;
+  for (const column of ['calendar_id', 'slug']) {
+    const { data } = await supabase
+      .from('calendars')
+      .select('id')
+      .eq(column, k)
+      .eq('is_active', true)
+      .eq('visibility', 'public')
+      .limit(1)
+      .maybeSingle();
+    if (data?.id) return data.id as string;
+  }
+  return null;
+}
+
 /**
  * `?fields=` can name `calendars` alongside the column names; it is not a
  * column, so it is stripped before the select and attached afterwards. With
