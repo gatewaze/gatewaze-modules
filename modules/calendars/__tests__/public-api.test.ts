@@ -51,7 +51,7 @@ const storedRow = {
 describe('GET /:id', () => {
   it('returns 404 without querying for a key that could change the .or() filter', async () => {
     const { routes, calls } = mount({});
-    for (const key of ['aaif,id.neq.0', 'aaif.london', 'x)', 'a b']) {
+    for (const key of ['aaif,id.neq.0', 'or(id.neq.0)', 'x)', 'a b']) {
       const res = fakeRes();
       await routes.get('/:id')!({ params: { id: key } }, res);
       expect(res.statusCode).toBe(404);
@@ -63,8 +63,13 @@ describe('GET /:id', () => {
     const { routes, calls } = mount({ calendars: { data: storedRow, error: null } });
     await routes.get('/:id')!({ params: { id: 'aaif-london' } }, fakeRes());
     await routes.get('/:id')!({ params: { id: storedRow.id } }, fakeRes());
+    await routes.get('/:id')!({ params: { id: 'nyc.mlops' } }, fakeRes());
     const ors = calls.filter((c) => c[0] === 'or').map((c) => c[1]);
-    expect(ors).toEqual(['calendar_id.eq.aaif-london,slug.eq.aaif-london', `id.eq.${storedRow.id}`]);
+    expect(ors).toEqual([
+      'calendar_id.eq.aaif-london,slug.eq.aaif-london',
+      `id.eq.${storedRow.id}`,
+      'calendar_id.eq.nyc.mlops,slug.eq.nyc.mlops',
+    ]);
   });
 
   it('selects only the location key of settings and serves the public shape', async () => {
