@@ -27,10 +27,12 @@ const PUBLIC_CALENDAR_FIELDS = [
   'location:settings->location',
 ] as const;
 
-// calendar_id (CAL-…) and slug are both [A-Za-z0-9_-]. Anything else cannot
-// match, and keeping other characters out is what makes the .or() filter
-// below safe: a comma, dot or parenthesis would let a caller add conditions.
-const CALENDAR_KEY_RE = /^[A-Za-z0-9_-]{1,200}$/;
+// calendar_id (CAL-…) and slug are [A-Za-z0-9_-], plus dots: some slugs come
+// from Luma as-is (nyc.mlops). Anything else cannot match, and keeping other
+// characters out is what makes the .or() filter below safe: a comma or
+// parenthesis would let a caller add conditions. A dot cannot, because
+// PostgREST reads everything after `slug.eq.` as the value.
+const CALENDAR_KEY_RE = /^[A-Za-z0-9._-]{1,200}$/;
 
 const withLocation = (row: any) => ({ ...row, location: toPublicCalendarLocation(row.location) });
 
