@@ -39,7 +39,7 @@ const warehouseSyncModule: GatewazeModule = {
   name: 'Warehouse Sync',
   description:
     'Replicates a curated, governed subset of the Gatewaze Supabase Postgres into a data warehouse (Snowflake, BigQuery, Redshift, …) via Airbyte, with replication-slot safety monitoring, PII masking, delete/erasure propagation, and reconciliation tests. Snowflake is the first destination.',
-  version: '0.2.5',
+  version: '0.3.0',
 
   features: [
     'warehouse-sync',
@@ -272,7 +272,15 @@ const warehouseSyncModule: GatewazeModule = {
       required: false,
       label: 'Alert webhook URL',
       description:
-        'Optional. Slack/PagerDuty-compatible incoming webhook the slot-monitor POSTs threshold breaches to. Leave blank to record alerts to OPERATIONS only.',
+        'Optional. Slack/PagerDuty-compatible incoming webhook the slot-monitor POSTs threshold breaches to. Takes precedence over the Slack channel below.',
+    },
+    alertSlackChannel: {
+      key: 'alertSlackChannel',
+      type: 'string',
+      required: false,
+      label: 'Alert Slack channel or user',
+      description:
+        'Used when no webhook URL is set. A channel id, #channel-name, or a user id (which sends a DM). Posted via the slack module\'s existing SLACK_BOT_TOKEN, so nothing new needs provisioning. SET ONE OF THESE: with neither, a §10.4 alert is recorded to OPERATIONS and reaches nobody — which is how the slot stayed lost from 22 to 28 Oct 2026.',
     },
   },
 
