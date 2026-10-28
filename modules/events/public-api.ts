@@ -1,6 +1,7 @@
 import type { PublicApiContext } from '@gatewaze/shared';
 import type { Router, Request, Response } from 'express';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { planCalendars, attachCalendars } from './lib/event-calendars';
 
 /** Fields safe to expose via the public API — never use select('*') */
 export const PUBLIC_EVENT_FIELDS = [
@@ -63,11 +64,12 @@ export function registerPublicApi(router: Router, ctx: PublicApiContext) {
     try {
       const { limit, offset } = ctx.parsePagination(req.query);
       const fields = ctx.parseFields(req.query.fields, [...PUBLIC_EVENT_FIELDS], [...PUBLIC_EVENT_FIELDS]);
+      const cal = planCalendars(req.query.fields, fields);
 
       let query = publicOnly(
         supabase
           .from('events')
-          .select(fields.join(','), { count: 'exact' }),
+          .select(cal.select.join(','), { count: 'exact' }),
       )
         .order('event_start', { ascending: true })
         .range(offset, offset + limit - 1);
@@ -103,6 +105,7 @@ export function registerPublicApi(router: Router, ctx: PublicApiContext) {
 
       const { data, count, error } = await query;
       if (error) return res.status(500).json({ error: { code: 'QUERY_ERROR', message: error.message } });
+      if (cal.include) await attachCalendars(supabase, (data ?? []) as Array<Record<string, unknown>>, cal.dropId);
 
       ctx.setCache(res, { kind: 'public', maxAge: 60, sMaxAge: 300 });
       const hasMore = offset + limit < (count || 0);
@@ -610,8 +613,9 @@ export function registerPublicApi(router: Router, ctx: PublicApiContext) {
   router.get('/:id', ctx.requireScope('read'), async (req: Request, res: Response) => {
     try {
       const fields = ctx.parseFields(req.query.fields, [...PUBLIC_EVENT_FIELDS], [...PUBLIC_EVENT_FIELDS]);
+      const cal = planCalendars(req.query.fields, fields);
       const { data, error } = await byIdOrSlug(
-        publicOnly(supabase.from('events').select(fields.join(','))),
+        publicOnly(supabase.from('events').select(cal.select.join(','))),
         req.params.id,
       ).single();
 
@@ -661,6 +665,8 @@ export function registerPublicApi(router: Router, ctx: PublicApiContext) {
       } catch {
         // gating infra absent/unreachable — treat registration as open
       }
+
+      if (cal.include) await attachCalendars(supabase, [data as Record<string, unknown>], cal.dropId);
 
       ctx.setCache(res, { kind: 'public', maxAge: 60, sMaxAge: 600 });
       res.json({

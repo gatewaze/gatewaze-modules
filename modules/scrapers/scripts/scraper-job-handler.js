@@ -34,7 +34,7 @@ import {
   upsertHosts,
 } from './lib/luma-extractor.js';
 import { processLumaContentInline } from './lib/luma-content-processor.js';
-import { populateLumaCalendarCoverIfMissing } from './lib/luma-calendar-cover.js';
+import { populateLumaCalendarDetailsIfMissing } from './lib/luma-calendar-details.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -103,10 +103,10 @@ async function findOrCreateCalendarForScraper(scraperId) {
     .eq('default_scraper_id', scraperId)
     .maybeSingle();
   if (existing?.id) {
-    // Best-effort backfill of the calendar header image from the Luma page.
-    // No-op if cover_image_url is already set or the calendar isn't a Luma
-    // calendar; per-process cached so a 100-event scrape only fetches once.
-    populateLumaCalendarCoverIfMissing(getSupabase(), existing.id).catch(() => {});
+    // Best-effort backfill of the calendar header image and location from
+    // the Luma page (location falls back to the events). No-op once both are
+    // filled; per-process cached so a 100-event scrape only fetches once.
+    populateLumaCalendarDetailsIfMissing(getSupabase(), existing.id).catch(() => {});
     return existing.id;
   }
 
@@ -143,7 +143,7 @@ async function findOrCreateCalendarForScraper(scraperId) {
     { source: 'lazy-on-first-event' },
   );
   if (result?.calendarId) {
-    populateLumaCalendarCoverIfMissing(getSupabase(), result.calendarId, { slug: calendarInfo.slug }).catch(() => {});
+    populateLumaCalendarDetailsIfMissing(getSupabase(), result.calendarId, { slug: calendarInfo.slug }).catch(() => {});
   }
   return result?.calendarId ?? null;
 }
