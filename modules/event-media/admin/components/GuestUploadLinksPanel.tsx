@@ -29,6 +29,9 @@ interface UploadLink {
   show_gallery: boolean;
   uploads_count: number;
   logo_url: string | null;
+  role?: string;
+  /** The album a photographer's link delivers into (migration 032). */
+  album?: { name: string | null } | null;
   created_at: string;
 }
 
@@ -63,6 +66,9 @@ const DEFAULT_FORM = {
   // delivering into their own album (migration 021).
   role: 'guest',
   credit_name: '',
+  // A photographer's link can deliver into an album of its own, e.g. a
+  // second, fuller delivery. Empty means the Photographer album.
+  album_name: '',
   require_name: true,
   allow_video: true,
   auto_approve: true,
@@ -274,7 +280,11 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
       const res = await authedFetch(`/api/admin/events/${eventId}/media-upload-links`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(form),
+        body: JSON.stringify(
+          form.role === 'photographer'
+            ? form
+            : (({ album_name: _album, ...rest }) => rest)(form),
+        ),
       });
       if (!res.ok) {
         const err = await res.json().catch(() => null);
@@ -386,6 +396,9 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
                 {link.is_active ? 'active' : 'inactive'}
               </span>
               <span className="text-xs text-gray-500">{link.uploads_count} uploads</span>
+              {link.role === 'photographer' && (
+                <span className="text-xs text-gray-500">into {link.album?.name ?? 'Photographer'}</span>
+              )}
               <span className="flex-1" />
               <button className="text-xs underline" onClick={() => copyUrl(link)}>Copy URL</button>
               <button
@@ -468,6 +481,18 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
                   <p className="text-xs text-gray-500">
                     A person or a company. Everything sent through this link is filed under this name,
                     in a Photographer album that stays off the portal until you turn it on.
+                  </p>
+                  <input
+                    type="text"
+                    value={form.album_name}
+                    onChange={(e) => setForm({ ...form, album_name: e.target.value })}
+                    placeholder="Album, e.g. Photographer Stream (leave empty for Photographer)"
+                    maxLength={80}
+                    className="w-full rounded border border-gray-300 dark:border-gray-600 bg-transparent px-2 py-1.5 text-sm"
+                  />
+                  <p className="text-xs text-gray-500">
+                    Name an album to keep this delivery apart from the others. It is made if it does not
+                    exist yet, and stays off the portal until you turn it on.
                   </p>
                 </>
               )}

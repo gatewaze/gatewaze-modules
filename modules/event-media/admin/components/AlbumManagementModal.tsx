@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { PlusIcon, PencilIcon, TrashIcon, FolderIcon, ChevronUpIcon, ChevronDownIcon, EyeIcon, EyeSlashIcon, SparklesIcon, ViewfinderCircleIcon, SunIcon, ScissorsIcon, CameraIcon } from '@heroicons/react/24/outline';
+import { PlusIcon, PencilIcon, TrashIcon, FolderIcon, ChevronUpIcon, ChevronDownIcon, EyeIcon, EyeSlashIcon, SparklesIcon, ViewfinderCircleIcon, SunIcon, ScissorsIcon, CameraIcon, PlayIcon } from '@heroicons/react/24/outline';
 import { Button, Modal, Input, ConfirmModal } from '@/components/ui';
 import { createAlbum, updateAlbum, deleteAlbum, errorMessage } from '@gatewaze-modules/host-media/admin';
 import {
@@ -40,7 +40,7 @@ export function AlbumManagementModal({ eventId, albums, albumCounts, mediaIdsIn,
   const stopRef = useRef(false);
 
   const settingFor = useCallback((id: string): AlbumSetting => (
-    settings.get(id) ?? { show_on_portal: true, enhance: false, xray: false, enhance_source: 'standard' as const, frame: 'as-shot' as const, focus: 'off' as const }
+    settings.get(id) ?? { show_on_portal: true, enhance: false, xray: false, enhance_source: 'standard' as const, frame: 'as-shot' as const, focus: 'off' as const, slideshow: false }
   ), [settings]);
 
   useEffect(() => {
@@ -236,6 +236,7 @@ export function AlbumManagementModal({ eventId, albums, albumCounts, mediaIdsIn,
                     {settingFor(album.id).frame === 'classic' ? ' · 3:2'
                       : settingFor(album.id).frame === 'expand' ? ' · 3:2 expanded' : ''}
                     {settingFor(album.id).focus !== 'off' ? ` · ${settingFor(album.id).focus} focus` : ''}
+                    {settingFor(album.id).slideshow ? ' · slideshow' : ''}
                     {running === album.id && aiProgress
                       ? ` · relighting ${aiProgress.done} of ${aiProgress.total}…`
                       : running === album.id && progress
@@ -296,6 +297,25 @@ export function AlbumManagementModal({ eventId, albums, albumCounts, mediaIdsIn,
                     }`}
                   >
                     <ViewfinderCircleIcon className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    title={settingFor(album.id).slideshow
+                      ? 'Guests can play this album as a slideshow — click to turn it off'
+                      : 'Let guests play this album as a slideshow, in the order the photos were taken'}
+                    disabled={toggling === album.id}
+                    onClick={() => void change(
+                      album,
+                      { slideshow: !settingFor(album.id).slideshow },
+                      settingFor(album.id).slideshow
+                        ? `"${album.name}" is no longer a slideshow`
+                        : `Guests can play "${album.name}" as a slideshow`,
+                    )}
+                    className={`rounded p-1 hover:bg-[var(--gray-a3)] disabled:opacity-30 ${
+                      settingFor(album.id).slideshow ? 'text-[var(--accent-11)]' : 'text-[var(--gray-a8)]'
+                    }`}
+                  >
+                    <PlayIcon className="h-4 w-4" />
                   </button>
                   {mediaIdsIn && (
                     <button

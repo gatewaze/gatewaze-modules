@@ -89,6 +89,8 @@ export interface AlbumSetting {
   frame: 'as-shot' | 'classic' | 'expand';
   /** Depth of field put in front of this album's improved copies. */
   focus: 'off' | 'gentle' | 'medium' | 'strong';
+  /** The portal offers this album as a slideshow (migration 033). */
+  slideshow: boolean;
 }
 
 export async function loadAlbumSettings(eventId: string): Promise<Map<string, AlbumSetting>> {
@@ -99,7 +101,7 @@ export async function loadAlbumSettings(eventId: string): Promise<Map<string, Al
   // A settings table that cannot be read must not fail the whole tab;
   // every album simply reads as its default, which is what it was.
   if (error) return new Map();
-  return new Map((data ?? []).map((r: {
+  const out = new Map<string, AlbumSetting>((data ?? []).map((r: {
     album_id: string; show_on_portal: boolean; enhance: boolean; xray: boolean;
     enhance_source?: string | null; frame?: string | null; focus?: string | null;
   }) => (
@@ -113,8 +115,21 @@ export async function loadAlbumSettings(eventId: string): Promise<Map<string, Al
       focus: r.focus === 'gentle' ? 'gentle' as const
         : r.focus === 'medium' ? 'medium' as const
           : r.focus === 'strong' ? 'strong' as const : 'off' as const,
+      slideshow: false,
     }]
   )));
+  // Read on its own, like the gallery does, so a database without
+  // migration 033 yet still loads every other setting.
+  const { data: shows } = await supabase
+    .from('event_media_album_settings')
+    .select('album_id, slideshow')
+    .eq('event_id', eventId)
+    .eq('slideshow', true);
+  for (const r of (shows ?? []) as Array<{ album_id: string }>) {
+    const s = out.get(r.album_id);
+    if (s) s.slideshow = true;
+  }
+  return out;
 }
 
 export async function saveAlbumSetting(
@@ -135,6 +150,9 @@ export async function saveAlbumSetting(
         enhance_source: patch.enhance_source ?? current.enhance_source,
         frame: patch.frame ?? current.frame,
         focus: patch.focus ?? current.focus,
+        // Only sent when it is what is changing, so saving any other
+        // setting works on a database without migration 033.
+        ...(patch.slideshow !== undefined ? { slideshow: patch.slideshow } : {}),
         updated_at: new Date().toISOString(),
       },
       { onConflict: 'album_id' },

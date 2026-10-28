@@ -56,7 +56,17 @@ function makeUserClient(config = {}) {
     };
     return b;
   }
-  return { state, client: { from: () => builder() } };
+  state.rpcCalls = [];
+  return {
+    state,
+    client: {
+      from: () => builder(),
+      rpc: (name, args) => {
+        state.rpcCalls.push({ name, args });
+        return Promise.resolve(config.rpcResult ?? { data: config.albumId ?? null, error: null });
+      },
+    },
+  };
 }
 
 function makeRoutes(config = {}, clientPresent = true) {
@@ -160,5 +170,88 @@ describe('admin links routes', () => {
     expect(LINK_WRITE_FIELDS).not.toContain('uploads_count');
     expect(LINK_WRITE_FIELDS).not.toContain('event_id');
     expect(LINK_WRITE_FIELDS).not.toContain('created_by');
+  });
+
+  // A photographer's link that delivers into an album of its own
+  // (migration 032). The album is named, never addressed by id.
+  describe('album_name', () => {
+    const ALBUM_ID = '12345678-1234-4234-8234-123456789012';
+
+    it('makes or finds the album as the caller and stores its id', async () => {
+      const { routes, state } = makeRoutes({ albumId: ALBUM_ID });
+      const res = mockRes();
+      await routes.createLink(req({ body: { label: 'Stream', role: 'photographer', album_name: '  Photographer Stream ' } }), res);
+      expect(res.statusCode).toBe(201);
+      expect(state.rpcCalls).toEqual([{ name: 'event_media_link_album', args: { p_event_id: EVENT_ID, p_name: 'Photographer Stream' } }]);
+      expect(state.inserted[0].album_id).toBe(ALBUM_ID);
+    });
+
+    it('never takes an album id from the body', async () => {
+      const { routes, state } = makeRoutes();
+      const res = mockRes();
+      await routes.createLink(req({ body: { label: 'Stream', role: 'photographer', album_id: ALBUM_ID } }), res);
+      expect(res.statusCode).toBe(201);
+      expect(state.inserted[0].album_id).toBeUndefined();
+      expect(state.rpcCalls).toHaveLength(0);
+    });
+
+    it('refuses an album on a guest link', async () => {
+      const { routes, state } = makeRoutes({ albumId: ALBUM_ID });
+      const res = mockRes();
+      await routes.createLink(req({ body: { label: 'QR', album_name: 'Photographer Stream' } }), res);
+      expect(res.statusCode).toBe(400);
+      expect(state.inserted).toHaveLength(0);
+      expect(state.rpcCalls).toHaveLength(0);
+    });
+
+    it('treats an empty name as the Photographer album', async () => {
+      const { routes, state } = makeRoutes();
+      const res = mockRes();
+      await routes.createLink(req({ body: { label: 'Pro', role: 'photographer', album_name: '   ' } }), res);
+      expect(res.statusCode).toBe(201);
+      expect(state.inserted[0].album_id).toBeNull();
+      expect(state.rpcCalls).toHaveLength(0);
+    });
+
+    it('maps a caller who cannot administer the event to 403', async () => {
+      const { routes, state } = makeRoutes({ rpcResult: { data: null, error: { code: '42501', message: 'not authorised' } } });
+      const res = mockRes();
+      await routes.createLink(req({ body: { label: 'Stream', role: 'photographer', album_name: 'Photographer Stream' } }), res);
+      expect(res.statusCode).toBe(403);
+      expect(state.inserted).toHaveLength(0);
+    });
+
+    it('patch will not make an album for a guest link or a missing one', async () => {
+      const guest = makeRoutes({ existing: { id: LINK_ID, event_id: EVENT_ID, role: 'guest' }, albumId: ALBUM_ID });
+      const res = mockRes();
+      await guest.routes.patchLink(req({ params: { eventId: EVENT_ID, id: LINK_ID }, body: { album_name: 'Stream' } }), res);
+      expect(res.statusCode).toBe(400);
+      expect(guest.state.rpcCalls).toHaveLength(0);
+
+      const missing = makeRoutes({ existing: null, albumId: ALBUM_ID });
+      const res2 = mockRes();
+      await missing.routes.patchLink(req({ params: { eventId: EVENT_ID, id: LINK_ID }, body: { album_name: 'Stream' } }), res2);
+      expect(res2.statusCode).toBe(404);
+      expect(missing.state.rpcCalls).toHaveLength(0);
+    });
+
+    it('says why a standard album name is refused', async () => {
+      const { routes } = makeRoutes({ rpcResult: { data: null, error: { code: '22023', message: 'that name belongs to one of the standard albums' } } });
+      const res = mockRes();
+      await routes.createLink(req({ body: { label: 'Pro', role: 'photographer', album_name: 'Photographer' } }), res);
+      expect(res.statusCode).toBe(400);
+      expect(res.body.error).toBe('invalid_album_name');
+    });
+
+    it('patch can move a link to an album and back', async () => {
+      const existing = { id: LINK_ID, event_id: EVENT_ID, role: 'photographer' };
+      const { routes, state } = makeRoutes({ existing, albumId: ALBUM_ID });
+      const res = mockRes();
+      await routes.patchLink(req({ params: { eventId: EVENT_ID, id: LINK_ID }, body: { album_name: 'Photographer Stream' } }), res);
+      expect(res.statusCode).toBe(200);
+      expect(state.updated[0].album_id).toBe(ALBUM_ID);
+      await routes.patchLink(req({ params: { eventId: EVENT_ID, id: LINK_ID }, body: { album_name: null } }), mockRes());
+      expect(state.updated[1].album_id).toBeNull();
+    });
   });
 });
