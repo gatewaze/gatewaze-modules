@@ -23,6 +23,7 @@ import {
   thresholdsFromConfig,
 } from '../lib/thresholds.js';
 import { loadModuleConfig } from '../lib/module-config.js';
+import { deliverAlert } from '../lib/alert-sink.js';
 
 if (typeof (globalThis as Record<string, unknown>).WebSocket === 'undefined') {
   (globalThis as Record<string, unknown>).WebSocket = class {
@@ -30,22 +31,9 @@ if (typeof (globalThis as Record<string, unknown>).WebSocket === 'undefined') {
   };
 }
 
-async function postWebhook(url, alert, logger) {
-  if (!url) return false;
-  try {
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        text: `:rotating_light: [warehouse-sync] ${alert.severity.toUpperCase()} ${alert.slot_name}/${alert.code}: ${alert.message}`,
-      }),
-    });
-    return res.ok;
-  } catch (e) {
-    logger.warn?.(`webhook post failed: ${e?.message ?? e}`);
-    return false;
-  }
-}
+// Alert delivery lives in lib/alert-sink.ts so it can fall back from an
+// incoming webhook to the slack module's existing bot token. See that file for
+// why: on 2026-10-28 this alert fired correctly and reached nobody.
 
 export default async function handler(job, ctx) {
   const logger = ctx?.logger ?? console;
@@ -61,7 +49,6 @@ export default async function handler(job, ctx) {
 
   const slotName = (job?.data?.slotName as string) ?? (cfg.replicationSlotName as string) ?? 'snowflake_cdc';
   const thresholds = thresholdsFromConfig(cfg);
-  const webhookUrl = (cfg.alertWebhookUrl as string) ?? '';
   const businessHours = isBusinessHoursUtc(new Date().getUTCHours());
 
   const { data: rows, error } = await supabase.rpc('warehouse_sync_slot_health', {
@@ -84,7 +71,7 @@ export default async function handler(job, ctx) {
       value: null,
       message: `replication slot '${slotName}' not present — connector not provisioned or slot dropped (§10.4)`,
     };
-    await reconcileAlerts(supabase, slotName, [missing], webhookUrl, logger);
+    await reconcileAlerts(supabase, slotName, [missing], cfg, logger);
     await supabase.from('warehouse_sync_slot_health').insert({
       slot_name: slotName,
       active: false,
@@ -129,7 +116,7 @@ export default async function handler(job, ctx) {
       alert_severity: maxSeverity,
     });
 
-    await reconcileAlerts(supabase, sample.slot_name, alerts, webhookUrl, logger);
+    await reconcileAlerts(supabase, sample.slot_name, alerts, cfg, logger);
   }
 
   await prune(supabase, cfg, logger);
@@ -141,7 +128,7 @@ export default async function handler(job, ctx) {
  * Open a row for each new alert code, clear (resolve) open rows whose condition
  * recovered this tick. Flap-free: an already-open alert is not re-notified.
  */
-async function reconcileAlerts(supabase, slotName, alerts, webhookUrl, logger) {
+async function reconcileAlerts(supabase, slotName, alerts, cfg, logger) {
   const { data: open } = await supabase
     .from('warehouse_sync_alerts')
     .select('id, code')
@@ -152,7 +139,7 @@ async function reconcileAlerts(supabase, slotName, alerts, webhookUrl, logger) {
 
   for (const a of alerts) {
     if (openByCode.has(a.code)) continue; // already open → don't re-page
-    const notified = await postWebhook(webhookUrl, a, logger);
+    const notified = await deliverAlert(a, cfg, supabase, logger);
     await supabase.from('warehouse_sync_alerts').insert({
       slot_name: a.slot_name,
       code: a.code,
