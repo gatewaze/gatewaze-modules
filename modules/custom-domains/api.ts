@@ -2,8 +2,8 @@ import { Router, type Request, type Response, type NextFunction } from 'express'
 import type { ModuleContext } from '@gatewaze/shared';
 import { createClient } from '@supabase/supabase-js';
 import * as dns from 'dns/promises';
+import { rateLimit as expressRateLimit } from 'express-rate-limit';
 import { requireJwt } from './lib/require-jwt';
-import { rateLimit } from './lib/rate-limit';
 import { cleanTheme } from './lib/theme';
 
 const DOMAIN_REGEX = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
@@ -86,7 +86,13 @@ export function registerRoutes(app: any, _context?: ModuleContext) {
     (req.method === 'GET' && /^\/lookup\/[^/]+\/[^/]+\/?$/.test(req.path)) ||
     (req.method === 'POST' && /^\/lookup-batch\/?$/.test(req.path));
   // Limiter first, auth second: throttling must cover the token check.
-  router.use(rateLimit({ windowMs: 60_000, max: 240 }));
+  router.use(expressRateLimit({
+    windowMs: 60_000,
+    limit: 240,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: 'rate_limited', message: 'too many requests' },
+  }));
   const jwt = requireJwt();
   router.use((req: Request, res: Response, next: NextFunction) => (isOpen(req) ? next() : jwt(req, res, next)));
   router.use((req: Request, res: Response, next: NextFunction) => (isOpen(req) ? next() : requireAdmin(req, res, next)));
