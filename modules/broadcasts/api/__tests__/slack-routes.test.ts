@@ -70,6 +70,19 @@ describe('POST /slack/test', () => {
     expect(out.body.error).toContain(msg);
   });
 
+  it('lets only admins test as the welcome-DM account', async () => {
+    const { supabase } = people([linked]);
+    const log: string[] = [];
+    const h = createSlackTestHandler({ supabase, fetchImpl: slackFetch(log) as never, readToken: async () => 'xoxp' });
+    const editor = res();
+    await h({ adminRole: 'editor', body: { email: 'sam@x.io', text: 'hi', sender: 'welcome_sender' } } as never, editor.r);
+    expect(editor.out.status).toBe(403);
+    expect(log).toHaveLength(0);
+    const admin = res();
+    await h({ adminRole: 'admin', body: { email: 'sam@x.io', text: 'hi', sender: 'welcome_sender' } } as never, admin.r);
+    expect(admin.out).toEqual({ status: 200, body: { success: true } });
+  });
+
   it('says when the person is not linked to Slack', async () => {
     const { supabase } = people([{ id: 'p', email: 'a@x.io', attributes: {} }]);
     const h = createSlackTestHandler({ supabase, readToken: async () => 'x' });
