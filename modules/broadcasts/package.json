@@ -20,6 +20,7 @@
     "@gatewaze-modules/ai": "*",
     "@supabase/supabase-js": "*",
     "express": "*",
+    "pg": "*",
     "react": "^18.0.0 || ^19.0.0"
   },
   "devDependencies": {
