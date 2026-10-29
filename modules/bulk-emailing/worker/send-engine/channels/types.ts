@@ -36,6 +36,9 @@ export interface BatchedMessage {
   disableSubscriptionTracking?: boolean;
   // Message-level; see MessageAttachment. Only meaningful for email.
   attachments?: MessageAttachment[];
+  // Credentials a channel reads per send rather than from env (Slack's token
+  // lives in the slack module's sealed config). Filled from SendContext.channelAuth.
+  auth?: { token: string };
   personalizations: Array<{
     to: string;
     headers?: Record<string, string>;
@@ -51,6 +54,12 @@ export interface BatchedResult {
   statusCode?: number;
   retryable?: boolean;
   rejectedIndices?: number[];
+  // Every later message of this send would fail the same way (e.g. a revoked
+  // token). The engine puts the batch back and pauses the send with this reason.
+  haltSend?: string;
+  // The provider asked us to back off. The engine stops the tick and leaves
+  // the rest for the next one.
+  retryAfterMs?: number;
 }
 
 // Tier 2 NormalizedEmailEvent, generalised across channels — what a channel's
@@ -66,10 +75,15 @@ export interface NormalizedEvent {
 }
 
 export interface ChannelProvider {
-  channel: 'email' | 'sms' | 'whatsapp' | 'in_app';
+  channel: 'email' | 'sms' | 'whatsapp' | 'in_app' | 'slack';
   // Recorded on email_send_log.provider so webhook attribution + reporting know
   // which provider handled the send.
   providerName: string;
+  // Most recipients one sendBatch call may carry. Unset = the engine's batchSize.
+  maxPerCall?: number;
+  // false = no email_send_log rows (and so no reputation gate) for this
+  // channel; the recipient row and its batch row are the record. Default true.
+  writesSendLog?: boolean;
   // Per-recipient destination from the person: email vs E.164 phone vs handle.
   resolveAddress(r: Recipient): string | null;
   // Batched dispatch (email → SendGrid sendBatch; sms/whatsapp → Twilio).

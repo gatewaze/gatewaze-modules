@@ -17,6 +17,8 @@ import express, { type Express, type Router } from 'express';
 import { createClient } from '@supabase/supabase-js';
 import type { ModuleRuntimeContext } from '@gatewaze/shared';
 import { createSegmentsAiBuildRoute } from './segments-ai-build.js';
+import { createSlackRouter } from './slack-routes.js';
+import { readWelcomeSender } from '../lib/slack-message.js';
 
 export async function registerBroadcastsRoutes(app: Express, ctx: ModuleRuntimeContext): Promise<void> {
   const supabaseUrl = process.env.SUPABASE_URL ?? '';
@@ -62,7 +64,11 @@ export async function registerBroadcastsRoutes(app: Express, ctx: ModuleRuntimeC
   router.use(decodeJwt as any);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   router.post('/segments-ai-build', segmentsAiBuild as any);
+  // Slack broadcast routes verify the session themselves (see slack-routes.ts);
+  // mounted before the copilot router so its decode-only middleware never
+  // stands in for that check.
+  app.use('/api/admin/modules/broadcasts/slack', createSlackRouter({ supabase, readSender: readWelcomeSender }));
   app.use('/api/admin/modules/broadcasts', router);
 
-  logger.info('[broadcasts] routes mounted at /api/admin/modules/broadcasts/{segments-ai-build}');
+  logger.info('[broadcasts] routes mounted at /api/admin/modules/broadcasts/{segments-ai-build,slack/status,slack/test}');
 }

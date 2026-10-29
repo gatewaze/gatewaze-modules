@@ -20,6 +20,8 @@ import { getBroadcast, updateBroadcast, createBroadcastSend, hasPreheader, listE
 import { BroadcastTemplateTab } from '../components/BroadcastTemplateTab';
 import { BroadcastContentEditor } from '../components/BroadcastContentEditor';
 import { BroadcastRepliesTab } from '../components/BroadcastRepliesTab';
+import { SlackMessageEditor } from '../components/SlackMessageEditor';
+import { SlackSendingPanel } from '../components/SlackSendingPanel';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 
 const STEPS = [
@@ -31,6 +33,8 @@ const STEPS = [
 // Super admins also get the Template tab: the wrapper this broadcast sends
 // in, and the shared broadcast template repo.
 const SUPER_ADMIN_STEPS = [...STEPS, { id: 'template', label: 'Template' }];
+// A Slack broadcast has no email wrapper and its replies arrive in Slack.
+const SLACK_STEPS = STEPS.filter((s) => s.id !== 'replies');
 
 const inputCls = 'w-full rounded-md border border-[var(--gray-7)] bg-[var(--color-surface)] px-3 py-2 text-sm disabled:opacity-60';
 
@@ -42,11 +46,9 @@ export default function BroadcastDetailPage() {
   const { id, tab } = useParams<{ id: string; tab?: string }>();
   const navigate = useNavigate();
   const { isSuperAdmin } = useAdminScope();
-  const visibleSteps = isSuperAdmin ? SUPER_ADMIN_STEPS : STEPS;
-  const step = tab && visibleSteps.some((s) => s.id === tab) ? tab : 'audience';
-
   const [b, setB] = useState<Broadcast | null>(null);
   const [loading, setLoading] = useState(true);
+  const isSlack = b?.channel === 'slack';
   // Audience size for the Send indicator (the segment's cached member count).
   const [audienceCount, setAudienceCount] = useState<number | null>(null);
   // Step-specific top-right action (e.g. "Save audience & continue"), registered
@@ -67,6 +69,9 @@ export default function BroadcastDetailPage() {
   }, [id, navigate]);
 
   useEffect(() => { load(); }, [load]);
+
+  const visibleSteps = isSlack ? SLACK_STEPS : isSuperAdmin ? SUPER_ADMIN_STEPS : STEPS;
+  const step = tab && visibleSteps.some((s) => s.id === tab) ? tab : 'audience';
 
   // Load the audience size (segment member count) for the Send indicator.
   useEffect(() => {
@@ -242,7 +247,13 @@ export default function BroadcastDetailPage() {
       >
         {step === 'audience' && <AudienceStep b={b} editable={editable} setHeaderActions={setHeaderActions} onSaved={(nb) => { setB(nb); goTo('content'); }} />}
         {step === 'content' && <ContentStep b={b} editable={editable} setHeaderActions={setHeaderActions} onSaved={setB} onProceedToSending={() => goTo('sending')} />}
-        {step === 'sending' && broadcastAdapter && (
+        {step === 'sending' && isSlack && (
+          <div className="space-y-4">
+            <OutreachToggle b={b} editable={editable} onChanged={setB} />
+            <SlackSendingPanel b={b} onChanged={setB} />
+          </div>
+        )}
+        {step === 'sending' && !isSlack && broadcastAdapter && (
           <div className="space-y-4">
             <OutreachToggle b={b} editable={editable} onChanged={setB} />
             <SendingPanel adapter={broadcastAdapter} />
@@ -381,7 +392,9 @@ function AudienceStep({ b, editable, setHeaderActions, onSaved }: { b: Broadcast
         {fixed.description && <p className="text-sm text-[var(--gray-11)]">{fixed.description}</p>}
         <p className="text-xs text-[var(--gray-10)]">
           This audience is a list of people chosen once, not a set of criteria, so it does not change as people are added or updated.
-          Only people subscribed to the broadcast&apos;s unsubscribe list receive it. The Sending step shows how many that is.
+          {b.channel === 'slack'
+            ? 'Only people linked to a Slack member receive it. The Sending step shows how many that is.'
+            : <>Only people subscribed to the broadcast&apos;s unsubscribe list receive it. The Sending step shows how many that is.</>}
         </p>
         {editable && (
           <button
@@ -421,6 +434,7 @@ function AudienceStep({ b, editable, setHeaderActions, onSaved }: { b: Broadcast
           <div className="px-4 py-2 border-b border-[var(--gray-5)] flex items-center justify-between">
             <span className="text-xs font-medium text-[var(--gray-11)]">
               {count == null ? 'No audience selected yet' : `${count.toLocaleString()} ${count === 1 ? 'person' : 'people'} in this filter`}
+              {b.channel === 'slack' && count != null ? '. Only those linked to a Slack member get the message; the Sending step shows how many.' : ''}
             </span>
             {locationCriteria && (
               <div className="inline-flex rounded-md border border-[var(--gray-6)] overflow-hidden text-xs">
@@ -664,25 +678,29 @@ function ContentStep({ b, editable, setHeaderActions, onSaved, onProceedToSendin
   const [events, setEvents] = useState<EventOption[]>([]);
   const [eventId, setEventId] = useState<string>(b.event_id ?? '');
 
+  const isSlack = b.channel === 'slack';
   useEffect(() => { listEventsForLink().then(setEvents).catch(() => setEvents([])); }, []);
-  // The canvas provides its own save controls; clear any header action.
-  useEffect(() => { setHeaderActions(null); return () => setHeaderActions(null); }, [setHeaderActions]);
+  // The email canvas provides its own save controls; clear any header action.
+  // (The Slack editor registers its own Save buttons.)
+  useEffect(() => {
+    if (isSlack) return;
+    setHeaderActions(null);
+    return () => setHeaderActions(null);
+  }, [setHeaderActions, isSlack]);
 
   async function linkEvent(value: string) {
     setEventId(value);
     try {
-      await updateBroadcast(b.id, { event_id: value || null } as Partial<Broadcast>);
+      const nb = await updateBroadcast(b.id, { event_id: value || null } as Partial<Broadcast>);
+      // The Slack editor offers event variables and resolves them for tests
+      // from the broadcast it holds, so it needs the saved link.
+      if (isSlack) onSaved(nb);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to link event');
     }
   }
 
-  return (
-    // Inline in the normal content column (NOT full-bleed): the editor panel
-    // lines up with the config row's left edge and the page's right margin, so
-    // it reads as a bordered editor within the page rather than edge-to-edge.
-    <div className="space-y-2">
-      {/* Slim config row (no card): optional event link + rename control + merge-field hint. */}
+  const configRow = (
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex flex-wrap items-center gap-2">
           <label className="text-sm font-medium text-[var(--gray-12)] shrink-0">Linked event</label>
@@ -697,6 +715,19 @@ function ContentStep({ b, editable, setHeaderActions, onSaved, onProceedToSendin
         </div>
         <BroadcastNameEditor b={b} editable={editable} onSaved={onSaved} />
       </div>
+  );
+
+  if (isSlack) {
+    return <SlackMessageEditor b={b} editable={editable} setHeaderActions={setHeaderActions} onSaved={onSaved} onProceedToSending={onProceedToSending} extra={configRow} />;
+  }
+
+  return (
+    // Inline in the normal content column (NOT full-bleed): the editor panel
+    // lines up with the config row's left edge and the page's right margin, so
+    // it reads as a bordered editor within the page rather than edge-to-edge.
+    <div className="space-y-2">
+      {/* Slim config row (no card): optional event link + rename control + merge-field hint. */}
+      {configRow}
       <p className="text-xs text-[var(--gray-10)]">Recipient merge fields: {'{{first_name}}'} {'{{name}}'} {'{{company}}'} {'{{job_title}}'}. The unsubscribe link is added automatically.{eventId ? ` Event variables: ${EVENT_VARIABLES.map((v) => v.token).join(' ')}.` : ''}</p>
 
       <BroadcastContentEditor broadcast={b} editable={editable} onSaved={onSaved} onProceedToSending={onProceedToSending} />
