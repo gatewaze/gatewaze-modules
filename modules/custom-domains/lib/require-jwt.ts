@@ -127,26 +127,19 @@ export function requireJwt() {
       return;
     }
 
-    if (header.alg === 'HS256') {
-      // `alg` is attacker-controlled and is read before any verification, so on
-      // an ES256-only deployment (no JWT secret set — e.g. Supabase cloud) any
-      // unauthenticated caller can drive execution down this branch.
-      // getJwtSecret() throws there, so it must not be called bare: treat
-      // "cannot verify" as "not verified", matching the ES256 branch below.
-      let secret: string;
-      try {
-        secret = getJwtSecret();
-      } catch {
-        errorResponse(res, 401, 'invalid_token', 'JWT verification failed');
-        return;
-      }
-      if (!verifyHs256(`${headerB64}.${payloadB64}`, signatureB64, secret)) {
-        errorResponse(res, 401, 'invalid_token', 'JWT verification failed');
-        return;
-      }
-    } else {
-      // Non-HS256 (ES256 cloud tokens): verify the signature server-side via
-      // Supabase Auth. Never trust the decoded payload (alg-confusion bypass).
+    // Which check runs is decided by what this server has, never by the
+    // token's own `alg` header (an attacker writes that). With a shared
+    // secret, the HMAC is checked first; anything it does not accept, and
+    // every token where there is no secret, is verified server-side by
+    // Supabase Auth, which checks the asymmetric signature itself. The
+    // decoded payload is trusted only once one of the two has passed.
+    let verified = false;
+    let secret: string | null = null;
+    try { secret = getJwtSecret(); } catch { secret = null; }
+    if (secret && header.alg === 'HS256' && verifyHs256(`${headerB64}.${payloadB64}`, signatureB64, secret)) {
+      verified = true;
+    }
+    if (!verified) {
       const client = verifyClient();
       if (!client) {
         errorResponse(res, 401, 'invalid_token', 'JWT verification failed');
@@ -160,6 +153,7 @@ export function requireJwt() {
         }
         // Trust only the server-verified identity.
         claims = { ...claims, sub: data.user.id, email: data.user.email ?? claims.email };
+        verified = true;
       } catch {
         errorResponse(res, 401, 'invalid_token', 'JWT verification failed');
         return;
