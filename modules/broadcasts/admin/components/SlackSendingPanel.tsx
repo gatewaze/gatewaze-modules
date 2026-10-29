@@ -138,8 +138,14 @@ export function SlackSendingPanel({ b, onChanged }: { b: Broadcast; onChanged: (
   }
 
   async function act(s: SlackSendRow, action: 'pause' | 'resume' | 'cancel') {
+    if (action === 'cancel') {
+      const live = s.status === 'sending' || s.status === 'paused';
+      // Same confirmation as the email Sending panel: stopping can't be undone.
+      if (!window.confirm(live ? 'Stop this send? People not yet messaged will not get it.' : 'Cancel this scheduled send?')) return;
+    }
     try {
       await setSlackSendStatus(s.id, action, s.status);
+      toast.success(action === 'pause' ? 'Send paused' : action === 'resume' ? 'Send resumed' : 'Send stopped');
       await loadSends();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Failed to update the send');

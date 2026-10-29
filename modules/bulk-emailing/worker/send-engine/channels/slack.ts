@@ -62,7 +62,9 @@ async function slackCall(fetchImpl: FetchLike | undefined, method: string, token
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/x-www-form-urlencoded; charset=utf-8' },
       body: new URLSearchParams(params).toString(),
-      signal: AbortSignal.timeout(15_000),
+      // Short, so a tick that starts a message near the end of its budget
+      // still finishes before the next tick (two calls, 16s at most).
+      signal: AbortSignal.timeout(8_000),
     });
   } catch {
     return { ok: false, error: 'network_error' };

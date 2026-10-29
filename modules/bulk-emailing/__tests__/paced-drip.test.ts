@@ -120,10 +120,10 @@ describe('runDripTick with a paced Slack channel', () => {
     const tables: Record<string, Row[]> = { sends: [{ id: 's1', status: 'sending', channel: 'slack' }], recips: recips(5) };
     const posted = slackReplies(() => ({}));
     const { supabase } = fakeDb(tables);
-    // 120ms budget, 50ms apart: room for the first few only.
+    // 120ms budget, 50ms apart: posts start at about 0, 50 and 100ms; the
+    // fourth would start at 150ms, past the budget.
     const out = await runDripTick({ supabase, logger, config: config({ minIntervalMs: 50, budgetMs: 120 }) }, binding());
-    expect(posted.length).toBeGreaterThan(0);
-    expect(posted.length).toBeLessThan(5);
+    expect(posted).toHaveLength(3);
     expect(out.sent).toBe(posted.length);
     const statuses = tables.recips.map((r) => r.status);
     expect(statuses.filter((s) => s === 'sent')).toHaveLength(posted.length);
@@ -188,6 +188,81 @@ describe('runDripTick with a paced Slack channel', () => {
     expect(posted).toHaveLength(0);
     expect(out.failed).toBe(1);
     expect(tables.recips[0].status).toBe('failed');
+  });
+});
+
+describe('runDripTick paced: admin actions and retries', () => {
+  beforeEach(() => { resetSuppressionState(); });
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it('stops between messages when the send is paused mid-tick, without spending attempts', async () => {
+    const tables: Record<string, Row[]> = { sends: [{ id: 's1', status: 'sending', channel: 'slack' }], recips: recips(4) };
+    const posted = slackReplies(() => { tables.sends[0].status = 'paused'; return {}; });
+    const { supabase } = fakeDb(tables);
+    await runDripTick({ supabase, logger, config: config({ minIntervalMs: 1, maxAttempts: 5 }) }, binding());
+    expect(posted).toHaveLength(1);
+    expect(tables.recips[0]).toMatchObject({ status: 'sent', attempts: 1 });
+    expect(tables.recips.slice(1).map((r) => [r.status, r.attempts])).toEqual([['pending', 0], ['pending', 0], ['pending', 0]]);
+    expect(tables.sends[0].status).toBe('paused');
+  });
+
+  it('never relabels a send cancelled during the tick as sent', async () => {
+    const tables: Record<string, Row[]> = { sends: [{ id: 's1', status: 'sending', channel: 'slack', total_recipients: 0 }], recips: recips(3) };
+    // Another tick's cancel sweep lands while the first message is going out.
+    slackReplies(() => {
+      tables.sends[0].status = 'cancelled';
+      for (const r of tables.recips) if (r.id !== 'r0') r.status = 'skipped';
+      return {};
+    });
+    const { supabase } = fakeDb(tables);
+    await runDripTick({ supabase, logger, config: config({ minIntervalMs: 1 }) }, binding());
+    expect(tables.sends[0].status).toBe('cancelled');
+    // The sweep's 'skipped' stands; the one message that went out is 'sent'.
+    expect(tables.recips.map((r) => r.status)).toEqual(['sent', 'skipped', 'skipped']);
+  });
+
+  it('does not overwrite a cancel with a pause when the token is refused', async () => {
+    const tables: Record<string, Row[]> = { sends: [{ id: 's1', status: 'sending', channel: 'slack', metadata: {} }], recips: recips(2) };
+    slackReplies(() => { tables.sends[0].status = 'cancelling'; return { body: { ok: false, error: 'token_revoked' } }; });
+    const { supabase } = fakeDb(tables);
+    await runDripTick({ supabase, logger, config: config({ minIntervalMs: 1 }) }, binding());
+    expect(['cancelling', 'cancelled']).toContain(tables.sends[0].status);
+  });
+
+  it('backs off across every send in the claim, and only the tried row spends an attempt', async () => {
+    const tables: Record<string, Row[]> = {
+      sends: [{ id: 's1', status: 'sending', channel: 'slack' }, { id: 's2', status: 'sending', channel: 'slack' }],
+      recips: [...recips(2), ...recips(2).map((r) => ({ ...r, id: `${r.id}b`, send_id: 's2' }))],
+    };
+    const posted = slackReplies(() => ({ status: 429, headers: { 'retry-after': '20' } }));
+    const { supabase } = fakeDb(tables);
+    await runDripTick({ supabase, logger, config: config({ minIntervalMs: 1, maxAttempts: 5 }) }, binding());
+    expect(posted).toHaveLength(1);
+    expect(tables.recips.every((r) => r.status === 'pending')).toBe(true);
+    expect(tables.recips.map((r) => r.attempts)).toEqual([1, 0, 0, 0]);
+  });
+});
+
+describe('email reputation gate still applies', () => {
+  afterEach(() => { vi.unstubAllGlobals(); });
+
+  it('pauses an email send with a high bounce rate before calling the provider', async () => {
+    const recent = new Date().toISOString();
+    const tables: Record<string, Row[]> = {
+      sends: [{ id: 's1', status: 'sending', channel: 'email' }],
+      recips: recips(2),
+      email_send_log: Array.from({ length: 60 }, (_, i) => ({ id: `l${i}`, broadcast_send_id: 's1', status: 'bounced', sent_at: recent })),
+    };
+    const calls: string[] = [];
+    vi.stubGlobal('fetch', async (url: string) => { calls.push(url); return new Response('', { status: 202 }); });
+    const { supabase } = fakeDb(tables);
+    const emailBinding = binding({
+      buildSendContext: async (_d, sendId) => ({ sendId, brand: 'b', channel: 'email', subject: 's', html: '<p>x</p>', fromEmail: 'a@b.c', fromName: 'A', replyTo: null }),
+    });
+    await runDripTick({ supabase, logger, config: config() }, emailBinding);
+    expect(calls).toHaveLength(0);
+    expect(tables.sends[0].status).toBe('paused');
+    expect(tables.recips.every((r) => r.status === 'pending')).toBe(true);
   });
 });
 

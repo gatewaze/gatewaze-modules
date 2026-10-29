@@ -612,8 +612,17 @@ export async function setSlackSendStatus(sendId: string, action: 'pause' | 'resu
     : action === 'resume' ? 'sending'
     : (current === 'sending' || current === 'paused') ? 'cancelling' : 'cancelled';
   const patch: Record<string, unknown> = { status, updated_at: new Date().toISOString() };
-  const { error } = await supabase.from('broadcast_sends').update(patch).eq('id', sendId).eq('status', current);
+  if (action === 'resume') {
+    // The reason the engine paused it no longer applies once it is resumed.
+    const { data } = await supabase.from('broadcast_sends').select('metadata').eq('id', sendId).single();
+    const metadata = { ...((data?.metadata as Record<string, unknown> | null) ?? {}) };
+    delete metadata.paused_reason;
+    delete metadata.paused_at;
+    patch.metadata = metadata;
+  }
+  const { data: changed, error } = await supabase.from('broadcast_sends').update(patch).eq('id', sendId).eq('status', current).select('id');
   if (error) throw error;
+  if (!changed?.length) throw new Error('The send changed in the meantime; refresh and try again');
 }
 
 async function slackApi<T>(path: string, init?: { method: 'GET' | 'POST'; body?: unknown }): Promise<T> {

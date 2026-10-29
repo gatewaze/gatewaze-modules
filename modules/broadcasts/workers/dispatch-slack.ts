@@ -11,12 +11,16 @@ import { createClient } from '@supabase/supabase-js'
  *
  * Pacing: one message every SLACK_BROADCAST_INTERVAL_MS (default 3s, about
  * 1,200 an hour), well inside Slack's limits for posting to different DMs.
- * Each tick claims only what fits in its budget and stops before the budget
- * runs out, so the next tick never overlaps it.
+ * Each tick claims only what fits in its budget and starts no message after
+ * SLACK_BUDGET_MS; a message's two Slack calls time out within 16s, so a tick
+ * ends inside its 60s slot. Between messages it re-reads the send, so Pause
+ * and Stop take effect within one interval.
  */
 export const SLACK_INTERVAL_MS = Math.max(1000, Number(process.env.SLACK_BROADCAST_INTERVAL_MS ?? 3000))
 export const SLACK_BUDGET_MS = 40_000
-// Retryable Slack errors (rate limits, outages) are tried this many times.
+// Retryable Slack errors (rate limits, outages): a person is tried this many
+// times before being marked failed. Rows put back untried (budget, back-off)
+// do not use up a try. After a 429 the next try is the next tick, 60s on.
 export const SLACK_MAX_ATTEMPTS = 5
 
 export function slackClaimSize(intervalMs: number, budgetMs: number): number {
