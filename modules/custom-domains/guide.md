@@ -11,6 +11,22 @@ Assign custom domains to your events, blog posts, newsletters, and other content
 5. **Assign to content** — map the domain to an event, blog, or other content item
 6. Visitors see your content at your custom domain with full branding
 
+## A module at the root of its own domain
+
+A domain can carry a whole module rather than one piece of content: assign it a content type that is a module id with portal pages (for example `photo-booth`) and no item. The portal then serves that module at the domain root (`example.com/b/x` is the module's `/photo-booth/b/x`), with no portal header or footer at all; the module owns the page. Sign-in, the legal pages and `/api` still pass through. Needs portal 1.3.191 or later.
+
+## The look
+
+Each domain may have its own look, set in **Look** on the domain's page and stored in `custom_domains.theme`. It is a small set of design tokens, never raw CSS: light or dark, seven colours (background, surface, text, muted, primary, text on primary, border), a heading and a body font (Google Fonts family names), an https logo, and the corner radius. The api checks every value on save and the portal checks them again on read; a field that fails is named in the error and nothing is kept.
+
+On a page served by the domain the tokens arrive as CSS variables on `<html>`: `--cd-bg`, `--cd-surface`, `--cd-text`, `--cd-muted`, `--cd-primary`, `--cd-primary-text`, `--cd-border`, `--cd-font-heading`, `--cd-font-body`, `--cd-radius` and `--cd-logo` (a `url(...)`), with `data-custom-domain-mode` set to `light` or `dark`. The portal's own `--primary-color`, `--font-display` and `--font-sans` follow the primary colour and fonts, so the shared sign-in and legal pages match. A background colour also replaces the brand's animated background with a flat one. Changes reach visitors within five minutes (the middleware caches the row).
+
+A design produced elsewhere (for example in Claude Design) is implemented by reading its tokens into these fields, and its sections into the module's own pages.
+
+## Who can change domains
+
+Every route under `/api/modules/custom-domains` except the lookups (`GET /lookup/:contentType/:contentId`, `POST /lookup-batch`, which other modules' admin panels use to show a domain for a piece of content) requires a verified session belonging to an active admin or super admin. The platform does not gate module routes itself; this module does.
+
 ## Getting Started
 
 ### 1. Register a Domain
