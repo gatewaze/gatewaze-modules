@@ -22,6 +22,7 @@ interface BroadcastRow {
   id: string;
   name: string;
   subject: string | null;
+  channel: Broadcast['channel'];
   date: string;
   status: BroadcastStatus;
   sentCount: number;              // total emails sent across this broadcast's sends
@@ -169,7 +170,7 @@ export function BroadcastsTable({ broadcasts, folders = [], organizeMode = false
       const date = latest?.completed_at || latest?.started_at || latest?.scheduled_at || b.created_at;
       const sentCount = (b.sends || []).reduce((n, s) => n + (s.sent_count || 0), 0);
       return {
-        id: b.id, name: b.name, subject: b.subject, date, status, sentCount, folder_id: b.folder_id,
+        id: b.id, name: b.name, subject: b.subject, channel: b.channel ?? 'email', date, status, sentCount, folder_id: b.folder_id,
         scheduledAt: latest?.scheduled_at ?? null,
         startedAt: latest?.started_at ?? null,
         completedAt: latest?.completed_at ?? null,
@@ -251,6 +252,7 @@ export function BroadcastsTable({ broadcasts, folders = [], organizeMode = false
       header: 'Subject',
       cell: (info) => {
         const text = info.getValue();
+        if (info.row.original.channel === 'slack') return <Badge color="gray">Slack message</Badge>;
         return <span className="text-sm text-[var(--gray-12)] truncate max-w-md block">{text || <span className="italic text-[var(--gray-9)]">No subject</span>}</span>;
       },
     }),
@@ -274,6 +276,11 @@ export function BroadcastsTable({ broadcasts, folders = [], organizeMode = false
       size: 90,
       cell: (info) => {
         const e = info.row.original.engagement;
+        // Slack sends have no email log; their sends carry the count.
+        if (info.row.original.channel === 'slack') {
+          const n = info.row.original.sentCount;
+          return n ? <div className="text-sm text-right font-medium text-[var(--gray-12)]">{fmtNum(n)}</div> : <RightDash />;
+        }
         if (e === undefined) return <CellSpin />;
         if (!e || e.sent === 0) return <RightDash />;
         return <div className="text-sm text-right font-medium text-[var(--gray-12)]">{fmtNum(e.sent)}</div>;

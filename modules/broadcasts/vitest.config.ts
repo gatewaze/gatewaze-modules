@@ -8,7 +8,7 @@ import { resolve } from 'node:path';
 // (see .claude/rules/module-registry.md).
 export default defineConfig({
   test: {
-    include: ['{lib,admin,workers}/**/__tests__/**/*.test.ts', 'admin/**/__tests__/**/*.test.tsx'],
+    include: ['{lib,admin,workers,api}/**/__tests__/**/*.test.ts', 'admin/**/__tests__/**/*.test.tsx'],
     environment: 'node',
     globals: false,
   },
@@ -16,7 +16,9 @@ export default defineConfig({
     alias: {
       '@/components/ui': resolve(__dirname, './admin/__test-stubs__/ui.tsx'),
       '@/components/shared/table/DataTable': resolve(__dirname, './admin/__test-stubs__/DataTable.tsx'),
+      '@/components/shared/table/RowActions': resolve(__dirname, './admin/__test-stubs__/RowActions.tsx'),
       '@/lib/supabase': resolve(__dirname, './admin/__test-stubs__/supabase.ts'),
+      '@/lib/segments': resolve(__dirname, './admin/__test-stubs__/segments.ts'),
     },
   },
 });

@@ -6,8 +6,8 @@ const broadcastsModule: GatewazeModule = {
   type: 'feature',
   visibility: 'public',
   name: 'Broadcasts',
-  description: 'Send a single scheduled, timezone-aware email to a segment, with an AI segment copilot',
-  version: '0.2.7',
+  description: 'Send a single scheduled, timezone-aware email or Slack message to a segment, with an AI segment copilot',
+  version: '0.3.0',
   features: [
     'broadcasts',
     'broadcasts.send',
@@ -46,6 +46,13 @@ const broadcastsModule: GatewazeModule = {
       handler: './workers/dispatch-scheduled.ts',
     },
     {
+      // 60s heartbeat: the paced Slack direct-message drip (workers/dispatch-slack.ts).
+      // A tick stops at 40s, so ticks do not overlap; if one ever did, the
+      // SKIP LOCKED claim still gives each recipient to one tick only.
+      name: 'broadcasts:dispatch-slack',
+      handler: './workers/dispatch-slack.ts',
+    },
+    {
       // plays capability: draft a broadcast from a conference recap (never sends).
       // Dispatched by the plays engine for a recap-follow-up Play.
       name: 'broadcasts:draft-from-recap',
@@ -73,6 +80,12 @@ const broadcastsModule: GatewazeModule = {
       queue: 'jobs',
       schedule: { every: 60_000 },
       data: { kind: 'broadcasts:dispatch-scheduled' },
+    },
+    {
+      name: 'broadcast-dispatch-slack',
+      queue: 'jobs',
+      schedule: { every: 60_000 },
+      data: { kind: 'broadcasts:dispatch-slack' },
     },
     {
       name: 'plays-dispatch-send',
@@ -172,6 +185,10 @@ const broadcastsModule: GatewazeModule = {
     // 030 (same fix, but copied all members in one statement) timed out on AAIF
     // prod and is retired; 031 supersedes it and replaces its functions where it ran.
     'migrations/031_duplicate_copies_segment.sql',
+    // Slack as a second channel: Slack fan-out (segment members linked to a
+    // Slack member, no list subscriptions), a separate Slack claim, and the
+    // deliverable count for the Slack sending panel.
+    'migrations/032_slack_channel.sql',
   ],
 
   adminRoutes: [

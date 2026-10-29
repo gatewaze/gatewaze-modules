@@ -1,7 +1,7 @@
 # Broadcasts module
 
-Send a **single scheduled, timezone-aware email to a segment** (or contact
-list), with an **AI segment copilot** that turns a plain-language audience
+Send a **single scheduled, timezone-aware email or Slack message to a segment** (or contact
+list, email only), with an **AI segment copilot** that turns a plain-language audience
 description into a segment and attaches it. Email first; built channel-agnostic
 so SMS / WhatsApp / in-app can be added later (spec-broadcasts-module.md).
 
@@ -30,6 +30,44 @@ broadcasts:dispatch-scheduled (60s BullMQ cron, in-worker — no Edge round-trip
 `global` sends fan out with `send_at = now()`; `tz_local` staggers per timezone.
 Pause/resume/cancel = status flips on `broadcast_sends` (the claim is gated on
 `status='sending'`).
+
+## Slack broadcasts
+
+A broadcast is created as **Email** or **Slack message** and can't change after.
+A Slack broadcast sends a direct message to each person in its segment who is
+linked to a Slack member (`people.attributes.slack_user_id`, written by the
+slack module's member sync).
+
+- **Audience.** Segment only. Email list subscriptions don't apply. The fan-out
+  still skips anyone with a `broadcast_suppressions` row on topic `slack`, outreach
+  prospects unless the send includes them, people already sent by the chosen
+  earlier sends, and (at send time) anyone erased by the compliance module. A
+  Slack member linked to two people rows gets one message.
+- **Content.** `broadcasts.body_text`, Slack mrkdwn, up to 4,000 characters.
+  `{{first_name}}`, `{{name}}`, `{{company}}`, `{{job_title}}` are filled per
+  recipient and escaped, so a profile value can't mention `@channel`. `{{event_*}}`
+  variables are filled when the send is created. There is no unsubscribe link.
+- **Sender.** The workspace bot (`SLACK_BOT_TOKEN` in the slack module, needs
+  the `chat:write` and `im:write` scopes) or the account connected for welcome
+  DMs. The Sending tab checks the bot token with `auth.test` and lists missing scopes.
+- **Sending.** Sends are always created `scheduled` (now, or a chosen time), so
+  `broadcasts:dispatch-scheduled` refreshes the segment and fans out as for email.
+  `fanout_broadcast_send_recipients_batch` hands Slack sends to
+  `fanout_broadcast_slack_recipients_batch`. The drip is separate:
+  `broadcasts:dispatch-slack` (60s) claims with `claim_due_broadcast_slack_recipients`
+  and sends one message every `SLACK_BROADCAST_INTERVAL_MS` (default 3,000ms,
+  about 1,200 an hour). The email claim skips Slack sends, so a Slack backlog
+  never slows email.
+- **Failures.** A refused token (revoked, missing scope) pauses the send with
+  the reason in `metadata.paused_reason`; resume once it's fixed. A member who
+  can't be messaged (deactivated, not found) is marked failed with the Slack error
+  in `last_error`. Rate limits and outages are retried, up to 5 claims per person.
+- **Record.** Slack sends write no `email_send_log` rows. Each
+  `broadcast_send_recipients` row is the record; its batch row's
+  `provider_batch_id` is `<DM channel>:<message ts>`.
+- **Routes.** `GET /api/admin/modules/broadcasts/slack/status` and
+  `POST .../slack/test` (DM one person by email). Both verify the session
+  (`lib/require-jwt.ts`) and require an active admin/editor.
 
 ## Tables / RPCs (migrations)
 
