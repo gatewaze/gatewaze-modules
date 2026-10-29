@@ -136,7 +136,9 @@ export function requireJwt() {
     let verified = false;
     let secret: string | null = null;
     try { secret = getJwtSecret(); } catch { secret = null; }
-    if (secret && header.alg === 'HS256' && verifyHs256(`${headerB64}.${payloadB64}`, signatureB64, secret)) {
+    // The HMAC is tried on every token when a secret is configured; a
+    // token signed another way simply fails it and goes to Supabase Auth.
+    if (secret && verifyHs256(`${headerB64}.${payloadB64}`, signatureB64, secret)) {
       verified = true;
     }
     if (!verified) {

@@ -2,7 +2,7 @@
   "name": "@gatewaze-modules/custom-domains",
   "version": "1.0.0",
   "license": "Apache-2.0",
-  "description": "Custom domain management — assign custom domains to content items for white-label experiences",
+  "description": "Custom domain management \u2014 assign custom domains to content items for white-label experiences",
   "main": "index.ts",
   "types": "index.ts",
   "exports": {
@@ -13,6 +13,9 @@
   "scripts": {
     "build": "tsc",
     "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "express-rate-limit": "^8.5.2"
   },
   "peerDependencies": {
     "@gatewaze/shared": "*",
