@@ -9,7 +9,7 @@ type Row = Record<string, any>;
 type Err = { message: string } | null;
 
 // Minimal PostgREST-shaped fake: filters eq / in / lt, head counts, single, update.
-function fakeDb(tables: Record<string, Row[]>, fail: { updateSends?: Err; countRecipients?: Err } = {}) {
+function fakeDb(tables: Record<string, Row[]>, fail: { updateSends?: Err; countRecipients?: Err; listSends?: Err & { code?: string } } = {}) {
   const from = (table: string) => {
     const filters: Array<(r: Row) => boolean> = [];
     let head = false;
@@ -31,7 +31,8 @@ function fakeDb(tables: Record<string, Row[]>, fail: { updateSends?: Err; countR
           else { for (const r of rows()) Object.assign(r, patch); out = { error: null }; }
         } else if (head) {
           out = table === 'recips' && fail.countRecipients ? { count: null, error: fail.countRecipients } : { count: rows().length, error: null };
-        } else out = { data: rows(), error: null };
+        } else if (table === 'sends' && fail.listSends) out = { data: null, error: fail.listSends };
+        else out = { data: rows(), error: null };
         return Promise.resolve(out).then(res, rej);
       },
     };
@@ -81,6 +82,16 @@ describe('finalizeStranded', () => {
     const { deps } = fakeDb({ sends, recips: [{ send_id: 's1', status: 'sent' }] }, { countRecipients: { message: 'PGRST002' } });
     expect(await finalizeStranded(deps, binding, NOW)).toEqual([]);
     expect(sends[0]).toMatchObject({ status: 'sending', sent_count: 7 });
+  });
+
+  it('does nothing for a binding whose sends table does not exist on this brand', async () => {
+    const { deps } = fakeDb({}, { listSends: { code: 'PGRST205', message: "Could not find the table 'public.plays_sends'" } });
+    expect(await finalizeStranded(deps, binding, NOW)).toEqual([]);
+  });
+
+  it('still raises any other error listing sends', async () => {
+    const { deps } = fakeDb({}, { listSends: { code: 'PGRST002', message: 'schema cache' } });
+    await expect(finalizeStranded(deps, binding, NOW)).rejects.toThrow('schema cache');
   });
 
   it('carries on to the next send when one update fails, and does not report it as finalized', async () => {
