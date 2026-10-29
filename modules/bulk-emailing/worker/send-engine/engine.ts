@@ -109,6 +109,8 @@ export async function runDripTick(deps: EngineDeps, binding: SendEngineBinding):
   // 2b. Self-heal any send just flipped to 'sent' while recipients are still
   // pending (fan-out race). Recency-guarded so stale sends are never re-mailed.
   await reopenPrematurelyCompleted(deps, binding).catch((e: unknown) => logger.warn('[send-engine] self-heal failed', e));
+  // 2c. Close off a send left 'sending' after its last finalize failed.
+  await finalizeStranded(deps, binding).catch((e: unknown) => logger.warn('[send-engine] stranded finalize failed', e));
 
   const ctxCache = new Map<string, SendContext | null>();
   const touched = new Set<string>();
@@ -411,15 +413,19 @@ async function markRows(deps: EngineDeps, binding: SendEngineBinding, ids: strin
 
 async function finalizeSend(deps: EngineDeps, binding: SendEngineBinding, sendId: string): Promise<void> {
   const { supabase } = deps;
+  // Throw on a failed read rather than treat it as 0: a count of 0 would write
+  // sent_count 0 over the real figure (27 Oct: PostgREST was down mid-send).
   const head = async (statuses: string[]) => {
-    const { count } = await supabase.from(binding.recipientsTable).select('id', { count: 'exact', head: true }).eq('send_id', sendId).in('status', statuses);
+    const { count, error } = await supabase.from(binding.recipientsTable).select('id', { count: 'exact', head: true }).eq('send_id', sendId).in('status', statuses);
+    if (error) throw new Error(`count ${statuses.join('/')} failed: ${error.message}`);
     return count ?? 0;
   };
   const [remaining, sent, failed, skipped] = await Promise.all([
     head(['pending', 'sending']), head(['sent']), head(['failed']), head(['skipped']),
   ]);
   const patch: Record<string, unknown> = { sent_count: sent, failed_count: failed, updated_at: new Date().toISOString() };
-  const { data: send } = await supabase.from(binding.sendsTable).select('status, total_recipients').eq('id', sendId).single();
+  const { data: send, error: sendErr } = await supabase.from(binding.sendsTable).select('status, total_recipients').eq('id', sendId).single();
+  if (sendErr) throw new Error(`read send failed: ${sendErr.message}`);
   // Finalise only when nothing is left to send AND every planned recipient has
   // reached a terminal state. total_recipients is set to the real fanned-out
   // count when dispatch flips the send to 'sending'; without this guard a
@@ -437,7 +443,37 @@ async function finalizeSend(deps: EngineDeps, binding: SendEngineBinding, sendId
     patch.status = isCancelling ? 'cancelled' : (sent === 0 && failed > 0 ? 'failed' : 'sent');
     patch.completed_at = new Date().toISOString();
   }
-  await supabase.from(binding.sendsTable).update(patch).eq('id', sendId);
+  const { error: updErr } = await supabase.from(binding.sendsTable).update(patch).eq('id', sendId);
+  if (updErr) throw new Error(`update send failed: ${updErr.message}`);
+}
+
+// finalizeSend only runs for sends a tick touched, so a send whose last
+// finalize failed (API down just after its final batch) had no rows left to
+// claim and stayed 'sending' forever. Retry the finalize for any 'sending'
+// send with nothing outstanding that has not moved for STRANDED_AFTER_MS.
+// Nothing is mailed here: no pending rows means nothing left to send.
+export const STRANDED_AFTER_MS = 10 * 60 * 1000;
+export async function finalizeStranded(deps: EngineDeps, binding: SendEngineBinding, now: number = Date.now()): Promise<string[]> {
+  const { supabase, logger } = deps;
+  const before = new Date(now - STRANDED_AFTER_MS).toISOString();
+  const { data: stale, error } = await supabase.from(binding.sendsTable)
+    .select('id').eq('status', 'sending').lt('updated_at', before).limit(50);
+  if (error) throw new Error(`list stale sends failed: ${error.message}`);
+  const finalized: string[] = [];
+  for (const s of (stale ?? []) as Array<{ id: string }>) {
+    const { count, error: cErr } = await supabase.from(binding.recipientsTable)
+      .select('id', { count: 'exact', head: true }).eq('send_id', s.id).in('status', ['pending', 'sending']);
+    if (cErr || (count ?? 0) > 0) continue;
+    try {
+      await finalizeSend(deps, binding, s.id);
+    } catch (e) {
+      logger.warn('[send-engine] stranded finalize failed', { sendId: s.id, error: e instanceof Error ? e.message : String(e) });
+      continue;
+    }
+    finalized.push(s.id);
+    logger.warn('[send-engine] finalized a stranded send', { sendId: s.id });
+  }
+  return finalized;
 }
 
 // Self-heal a fan-out race: a send wrongly flipped to 'sent' while recipients are
