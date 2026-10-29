@@ -458,6 +458,9 @@ export async function finalizeStranded(deps: EngineDeps, binding: SendEngineBind
   const before = new Date(now - STRANDED_AFTER_MS).toISOString();
   const { data: stale, error } = await supabase.from(binding.sendsTable)
     .select('id').eq('status', 'sending').lt('updated_at', before).limit(50);
+  // A binding whose tables were never migrated on this brand (plays on AAIF)
+  // has nothing to finalize; stay quiet rather than warn every tick.
+  if (error && (error.code === 'PGRST205' || error.code === '42P01')) return [];
   if (error) throw new Error(`list stale sends failed: ${error.message}`);
   const finalized: string[] = [];
   for (const s of (stale ?? []) as Array<{ id: string }>) {
