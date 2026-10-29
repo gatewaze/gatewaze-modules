@@ -118,6 +118,12 @@ export function makeSlackChannelProvider(fetchImpl?: FetchLike): ChannelProvider
       const post = await slackCall(fetchImpl, 'chat.postMessage', token, {
         channel, text, unfurl_links: 'true', unfurl_media: 'false',
       });
+      // A post that timed out or lost its connection may have been delivered,
+      // and Slack has no idempotency key. Mark it failed rather than risk a
+      // second copy; the reason says it may have arrived.
+      if (!post.ok && post.error === 'network_error') {
+        return { success: false, retryable: false, error: 'Slack chat.postMessage: no response; it may have been delivered, so it was not retried' };
+      }
       if (!post.ok) return failure('chat.postMessage', post);
       return { success: true, batchMessageId: `${channel}:${post.ts ?? ''}` };
     },

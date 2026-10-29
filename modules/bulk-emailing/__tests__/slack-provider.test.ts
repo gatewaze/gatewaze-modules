@@ -69,6 +69,13 @@ describe('slack channel provider', () => {
     expect(await provider.sendBatch(msg())).toMatchObject({ success: false, retryable: true });
   });
 
+  it('does not retry a post that got no response, since it may have been delivered', async () => {
+    const { provider } = fakeSlack({ 'conversations.open': [opened], 'chat.postMessage': [new Error('socket hang up')] });
+    const r = await provider.sendBatch(msg());
+    expect(r).toMatchObject({ success: false, retryable: false });
+    expect(r.error).toMatch(/may have been delivered/);
+  });
+
   it('fails a recipient with no Slack user ID, and refuses more than one per call', async () => {
     const { provider, calls } = fakeSlack({});
     expect(await provider.sendBatch(msg({ personalizations: [] }))).toMatchObject({ success: false, retryable: false });

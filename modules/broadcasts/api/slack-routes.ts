@@ -21,6 +21,9 @@ type SB = any;
 export const REQUIRED_BOT_SCOPES = ['chat:write', 'im:write'];
 const EMAIL_RE = /^[^@\s,<>]+@[^@\s,<>]+\.[^@\s,<>]+$/;
 const ADMIN_ROLES = ['super_admin', 'admin', 'editor'];
+// A test as the welcome-DM account is a message from a real person's own
+// Slack account, so editors can only test as the bot.
+const PERSON_SENDER_ROLES = ['super_admin', 'admin'];
 
 type FetchLike = (url: string, init: RequestInit) => Promise<globalThis.Response>;
 
@@ -52,6 +55,11 @@ export function createSlackTestHandler(deps: SlackRouteDeps) {
     const sender = parseSender(body.sender ?? 'bot');
     if (!EMAIL_RE.test(email) || email.length > 254 || email.includes('*')) { res.status(400).json({ error: 'Enter a valid email address' }); return; }
     if (!sender) { res.status(400).json({ error: 'Unknown sender' }); return; }
+    const role = (req as Request & { adminRole?: string }).adminRole;
+    if (sender === 'welcome_sender' && !(role && PERSON_SENDER_ROLES.includes(role))) {
+      res.status(403).json({ error: 'Only admins can send a test as the welcome-DM account' });
+      return;
+    }
     if (!text.trim()) { res.status(400).json({ error: 'The message is empty' }); return; }
     if (text.length > MAX_SLACK_MESSAGE_CHARS) { res.status(400).json({ error: `The message is over ${MAX_SLACK_MESSAGE_CHARS} characters` }); return; }
 
@@ -131,13 +139,18 @@ export function createSlackRouter(deps: SlackRouteDeps): Router {
         res.status(403).json({ error: 'Admin access required' });
         return;
       }
+      (req as Request & { adminRole?: string }).adminRole = data.role;
       next();
     } catch {
       res.status(403).json({ error: 'Admin access required' });
     }
   });
   // Each test is a real DM to a real person.
-  const testLimit = rateLimit({ windowMs: 10 * 60_000, limit: 20, standardHeaders: true, legacyHeaders: false });
+  // Keyed on the signed-in admin (set by requireJwt), not the address.
+  const testLimit = rateLimit({
+    windowMs: 10 * 60_000, limit: 20, standardHeaders: true, legacyHeaders: false,
+    keyGenerator: (req) => `user:${(req as Request & { userId?: string }).userId ?? 'unknown'}`,
+  });
   // Express 4 does not catch a rejected async handler; answer 500 instead of
   // leaving the request hanging.
   const safe = (h: (req: Request, res: Response) => Promise<void>) => (req: Request, res: Response) => {

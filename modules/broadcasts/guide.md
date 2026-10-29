@@ -39,7 +39,8 @@ linked to a Slack member (`people.attributes.slack_user_id`, written by the
 slack module's member sync).
 
 - **Audience.** Segment only. Email list subscriptions don't apply. The fan-out
-  still skips anyone with a `broadcast_suppressions` row on topic `slack`, outreach
+  still skips anyone with a `broadcast_suppressions` row on topic `slack` or `all`
+  (the global opt-out), outreach
   prospects unless the send includes them, people already sent by the chosen
   earlier sends, and (at send time) anyone erased by the compliance module. A
   Slack member linked to two people rows gets one message.
@@ -67,7 +68,10 @@ slack module's member sync).
   `provider_batch_id` is `<DM channel>:<message ts>`.
 - **Routes.** `GET /api/admin/modules/broadcasts/slack/status` and
   `POST .../slack/test` (DM one person by email). Both verify the session
-  (`lib/require-jwt.ts`) and require an active admin/editor.
+  (`lib/require-jwt.ts`) and require an active admin/editor. Only admins can
+  test as the welcome-DM account. Migration 032 also limits the broadcast
+  tables to admins (they were open to any signed-in user) and revokes the
+  fan-out function from `authenticated`.
 
 ## Tables / RPCs (migrations)
 

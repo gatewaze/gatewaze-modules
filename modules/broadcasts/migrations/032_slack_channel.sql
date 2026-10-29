@@ -8,7 +8,7 @@
 -- A Slack send is not tied to an email list, so the fan-out ignores list
 -- subscriptions. It still skips:
 --   - people opted out of Slack broadcasts (broadcast_suppressions, topic
---     'slack'), and
+--     'slack') or of everything (topic 'all'), and
 --   - outreach prospects unless the send includes them.
 -- Compliance erasure is applied by the send engine for every channel.
 --
@@ -113,7 +113,7 @@ BEGIN
       AND NOT EXISTS (
         SELECT 1 FROM public.broadcast_suppressions sup
         WHERE lower(sup.email) = lower(s.email)
-          AND sup.topic = v_send.suppression_topic
+          AND (sup.topic = v_send.suppression_topic OR sup.topic = 'all')
       )
       AND (
         v_send.exclude_sent_send_ids IS NULL
@@ -283,6 +283,12 @@ BEGIN
     ((SELECT count(*) FROM slice) = v_batch)      AS remaining;
 END $function$;
 
+-- Fan-out runs only from the worker (service role, or the table owner over
+-- DATABASE_URL). It was granted to authenticated in 019 with no guard, so any
+-- signed-in user could page a send's audience out through last_email.
+REVOKE ALL ON FUNCTION public.fanout_broadcast_send_recipients_batch(uuid, integer, text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.fanout_broadcast_send_recipients_batch(uuid, integer, text) TO service_role;
+
 -- 4. Claims: email and Slack drip separately ----------------------------------
 -- Slack is sent one message at a time; sharing the email claim would let a
 -- Slack backlog fill every email claim. Email claim: migration 002's, plus
@@ -363,7 +369,7 @@ BEGIN
     AND btrim(pp.attributes->>'slack_user_id') ~ '^[UW][A-Z0-9]{2,}$'
     AND NOT EXISTS (
       SELECT 1 FROM public.broadcast_suppressions sup
-      WHERE lower(sup.email) = lower(pp.email) AND sup.topic = 'slack'
+      WHERE lower(sup.email) = lower(pp.email) AND sup.topic IN ('slack', 'all')
     )
     AND (
       p_exclude_send_ids IS NULL
@@ -385,3 +391,37 @@ COMMENT ON FUNCTION public.fanout_broadcast_slack_recipients_batch(uuid, integer
   'Slack broadcast fan-out: one recipient row per Slack-linked person in the segment, minus Slack opt-outs, prior-send recipients and (unless included) prospects. No list subscription filter.';
 COMMENT ON FUNCTION public.claim_due_broadcast_slack_recipients(integer) IS
   'Claim due recipients of sending Slack broadcasts for the paced Slack drip. The email claim skips these.';
+
+-- 6. Admin-only access ---------------------------------------------------------
+-- 001 and 006 let any authenticated user read and write these tables. Signed-in
+-- community members hold authenticated sessions (LFID), and a Slack send row
+-- plus recipient rows would now be enough to DM anyone in the workspace, so
+-- limit them to admins. The worker, edge functions and API use the service
+-- role, which RLS does not apply to. (SELECT ...) evaluates is_admin() once
+-- per query rather than per row.
+DROP POLICY IF EXISTS "auth_all_broadcasts" ON public.broadcasts;
+DROP POLICY IF EXISTS "admin_all_broadcasts" ON public.broadcasts;
+CREATE POLICY "admin_all_broadcasts" ON public.broadcasts
+  FOR ALL TO authenticated USING ((SELECT public.is_admin())) WITH CHECK ((SELECT public.is_admin()));
+
+DROP POLICY IF EXISTS "auth_all_broadcast_sends" ON public.broadcast_sends;
+DROP POLICY IF EXISTS "admin_all_broadcast_sends" ON public.broadcast_sends;
+CREATE POLICY "admin_all_broadcast_sends" ON public.broadcast_sends
+  FOR ALL TO authenticated USING ((SELECT public.is_admin())) WITH CHECK ((SELECT public.is_admin()));
+
+DROP POLICY IF EXISTS "auth_all_broadcast_send_recipients" ON public.broadcast_send_recipients;
+DROP POLICY IF EXISTS "admin_all_broadcast_send_recipients" ON public.broadcast_send_recipients;
+CREATE POLICY "admin_all_broadcast_send_recipients" ON public.broadcast_send_recipients
+  FOR ALL TO authenticated USING ((SELECT public.is_admin())) WITH CHECK ((SELECT public.is_admin()));
+
+DROP POLICY IF EXISTS "auth_all_broadcast_suppressions" ON public.broadcast_suppressions;
+DROP POLICY IF EXISTS "admin_all_broadcast_suppressions" ON public.broadcast_suppressions;
+CREATE POLICY "admin_all_broadcast_suppressions" ON public.broadcast_suppressions
+  FOR ALL TO authenticated USING ((SELECT public.is_admin())) WITH CHECK ((SELECT public.is_admin()));
+
+-- 004 created the batch table without RLS. A forged 'posting' batch row lets
+-- crash recovery mark or release recipients, so admins only here too.
+ALTER TABLE public.broadcast_send_batches ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "admin_all_broadcast_send_batches" ON public.broadcast_send_batches;
+CREATE POLICY "admin_all_broadcast_send_batches" ON public.broadcast_send_batches
+  FOR ALL TO authenticated USING ((SELECT public.is_admin())) WITH CHECK ((SELECT public.is_admin()));
