@@ -1,7 +1,9 @@
-import { Router, type Request, type Response } from 'express';
+import { Router, type Request, type Response, type NextFunction } from 'express';
 import type { ModuleContext } from '@gatewaze/shared';
 import { createClient } from '@supabase/supabase-js';
 import * as dns from 'dns/promises';
+import { requireJwt } from './lib/require-jwt';
+import { cleanTheme } from './lib/theme';
 
 const DOMAIN_REGEX = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
 
@@ -45,8 +47,46 @@ async function verifyDns(domain: string, cnameTarget: string, expectedIp: string
   return false;
 }
 
+/**
+ * Who may register, point and style a domain: an active admin or super
+ * admin, read through the service client after this module's own
+ * requireJwt has verified the token. The platform does not gate
+ * /api/modules/* (see require-jwt.ts), so without this anyone who could
+ * reach the api could re-point an active domain (security review
+ * 2026-10-29). Editors are not admins here.
+ */
+async function requireAdmin(req: Request, res: Response, next: NextFunction): Promise<void> {
+  const userId = (req as Request & { userId?: string }).userId;
+  if (!userId) { res.status(401).json({ error: 'unauthenticated' }); return; }
+  try {
+    const { data, error } = await getSupabase()
+      .from('admin_profiles')
+      .select('role, is_active')
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (error || !data || data.is_active !== true || !['super_admin', 'admin'].includes(data.role)) {
+      res.status(403).json({ error: 'forbidden', message: 'custom domains are managed by admins' });
+      return;
+    }
+    next();
+  } catch {
+    res.status(403).json({ error: 'forbidden', message: 'custom domains are managed by admins' });
+  }
+}
+
 export function registerRoutes(app: any, _context?: ModuleContext) {
   const router = Router();
+
+  // The lookups (domain for a piece of content) are read-only and say
+  // nothing DNS does not; other modules' admin panels call them without
+  // a token. Everything else is for admins.
+  // Exact shapes, method included, so no other route can wear the lookup's path.
+  const isOpen = (req: Request): boolean =>
+    (req.method === 'GET' && /^\/lookup\/[^/]+\/[^/]+\/?$/.test(req.path)) ||
+    (req.method === 'POST' && /^\/lookup-batch\/?$/.test(req.path));
+  const jwt = requireJwt();
+  router.use((req: Request, res: Response, next: NextFunction) => (isOpen(req) ? next() : jwt(req, res, next)));
+  router.use((req: Request, res: Response, next: NextFunction) => (isOpen(req) ? next() : requireAdmin(req, res, next)));
 
   // GET / — List all custom domains
   router.get('/', async (_req: Request, res: Response) => {
@@ -158,15 +198,34 @@ export function registerRoutes(app: any, _context?: ModuleContext) {
     }
   });
 
-  // PUT /:domainId — Update domain settings (branding)
+  // PUT /:domainId — Update domain settings (branding and the look)
   router.put('/:domainId', async (req: Request, res: Response) => {
     try {
-      const { page_title, favicon_url } = req.body;
+      const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
+      const update: Record<string, unknown> = {};
+      if ('page_title' in body) {
+        const v = body.page_title;
+        if (v !== null && (typeof v !== 'string' || v.length > 120)) return res.status(400).json({ error: 'page_title must be text up to 120 characters, or null' });
+        update.page_title = v === '' ? null : v;
+      }
+      if ('favicon_url' in body) {
+        const v = body.favicon_url;
+        let ok = v === null || v === '';
+        if (!ok && typeof v === 'string' && v.length <= 500) { try { ok = new URL(v).protocol === 'https:'; } catch { ok = false; } }
+        if (!ok) return res.status(400).json({ error: 'favicon_url must be an https URL, or null' });
+        update.favicon_url = v === '' ? null : v;
+      }
+      if ('theme' in body) {
+        const { theme, refused } = cleanTheme(body.theme);
+        if (refused.length) return res.status(400).json({ error: `theme: not acceptable: ${refused.join(', ')}`, refused });
+        update.theme = theme;
+      }
+      if (Object.keys(update).length === 0) return res.status(400).json({ error: 'nothing to change' });
       const supabase = getSupabase();
 
       const { data, error } = await supabase
         .from('custom_domains')
-        .update({ page_title, favicon_url })
+        .update(update)
         .eq('id', req.params.domainId)
         .select()
         .single();

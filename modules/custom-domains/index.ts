@@ -7,7 +7,7 @@ const customDomainsModule: GatewazeModule = {
   visibility: 'public',
   name: 'Custom Domains',
   description: 'Assign custom domains to content items (events, blogs, newsletters) for white-label experiences with automatic DNS verification and TLS certificate provisioning',
-  version: '1.0.0',
+  version: '1.1.0',
 
   features: ['custom-domains'],
 
@@ -15,6 +15,7 @@ const customDomainsModule: GatewazeModule = {
 
   migrations: [
     'migrations/001_custom_domains_table.sql',
+    'migrations/002_theme.sql',
   ],
 
   apiRoutes: async (app: unknown, context?: ModuleContext) => {
