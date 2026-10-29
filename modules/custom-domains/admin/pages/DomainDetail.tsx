@@ -28,12 +28,34 @@ interface CustomDomain {
   content_slug: string | null;
   page_title: string | null;
   favicon_url: string | null;
+  theme: DomainTheme | null;
   error_message: string | null;
   dns_verified_at: string | null;
   is_apex?: boolean;
   created_at: string;
   updated_at: string;
 }
+
+/** The domain's own look (migration 002): tokens the portal turns into CSS variables. */
+interface DomainTheme {
+  mode?: 'dark' | 'light';
+  colors?: Partial<Record<'background' | 'surface' | 'text' | 'muted' | 'primary' | 'primaryText' | 'border', string>>;
+  fonts?: { heading?: string; body?: string };
+  logoUrl?: string;
+  radius?: 'sharp' | 'soft' | 'round';
+}
+
+const THEME_COLOURS: Array<{ key: keyof NonNullable<DomainTheme['colors']>; label: string; hint: string }> = [
+  { key: 'background', label: 'Background', hint: 'The page behind everything.' },
+  { key: 'surface', label: 'Surface', hint: 'Cards and panels.' },
+  { key: 'text', label: 'Text', hint: 'Body text.' },
+  { key: 'muted', label: 'Muted text', hint: 'Captions and notes.' },
+  { key: 'primary', label: 'Primary', hint: 'Buttons and links.' },
+  { key: 'primaryText', label: 'Text on primary', hint: 'Text drawn on a primary button.' },
+  { key: 'border', label: 'Border', hint: 'Lines between things.' },
+];
+
+const HEX_RE = /^#[0-9a-fA-F]{6}$/;
 
 const API_BASE = `${import.meta.env.VITE_API_URL || ''}/api/modules/custom-domains`;
 
@@ -87,6 +109,15 @@ export default function DomainDetail({ domainId: propDomainId, onBack }: DomainD
   const [faviconUrl, setFaviconUrl] = useState('');
   const [savingBranding, setSavingBranding] = useState(false);
 
+  // The look form: strings as typed, checked on save (the api checks again).
+  const [themeMode, setThemeMode] = useState<'' | 'dark' | 'light'>('');
+  const [themeColours, setThemeColours] = useState<Record<string, string>>({});
+  const [themeHeading, setThemeHeading] = useState('');
+  const [themeBody, setThemeBody] = useState('');
+  const [themeLogo, setThemeLogo] = useState('');
+  const [themeRadius, setThemeRadius] = useState<'' | 'sharp' | 'soft' | 'round'>('');
+  const [savingTheme, setSavingTheme] = useState(false);
+
   // Content assignment
   const [assignContentType, setAssignContentType] = useState('');
   const [assignContentId, setAssignContentId] = useState('');
@@ -108,6 +139,13 @@ export default function DomainDetail({ domainId: propDomainId, onBack }: DomainD
       setDomain(data);
       setPageTitle(data.page_title || '');
       setFaviconUrl(data.favicon_url || '');
+      const t = data.theme ?? {};
+      setThemeMode(t.mode ?? '');
+      setThemeColours({ ...(t.colors ?? {}) });
+      setThemeHeading(t.fonts?.heading ?? '');
+      setThemeBody(t.fonts?.body ?? '');
+      setThemeLogo(t.logoUrl ?? '');
+      setThemeRadius(t.radius ?? '');
       setAssignContentType(data.content_type || '');
       setAssignContentId(data.content_id || '');
       setAssignContentSlug(data.content_slug || '');
@@ -144,6 +182,39 @@ export default function DomainDetail({ domainId: propDomainId, onBack }: DomainD
       setError(err.message);
     } finally {
       setVerifying(false);
+    }
+  };
+
+  const handleSaveTheme = async () => {
+    setSavingTheme(true);
+    setError(null);
+    try {
+      const colors: Record<string, string> = {};
+      for (const [k, v] of Object.entries(themeColours)) {
+        const val = v.trim();
+        if (!val) continue;
+        if (!HEX_RE.test(val)) throw new Error(`${k}: use a six-digit hex colour such as #1a1a1a`);
+        colors[k] = val.toLowerCase();
+      }
+      const theme: DomainTheme = {};
+      if (themeMode) theme.mode = themeMode;
+      if (Object.keys(colors).length) theme.colors = colors;
+      const fonts: DomainTheme['fonts'] = {};
+      if (themeHeading.trim()) fonts.heading = themeHeading.trim();
+      if (themeBody.trim()) fonts.body = themeBody.trim();
+      if (Object.keys(fonts).length) theme.fonts = fonts;
+      if (themeLogo.trim()) theme.logoUrl = themeLogo.trim();
+      if (themeRadius) theme.radius = themeRadius;
+      await apiFetch(`/${domainId}`, {
+        method: 'PUT',
+        body: JSON.stringify({ theme: Object.keys(theme).length ? theme : null }),
+      });
+      showSuccessMessage(Object.keys(theme).length ? 'Look saved. Pages on the domain pick it up within five minutes.' : 'Look cleared; the domain uses the brand look again.');
+      await fetchDomain();
+    } catch (err: any) {
+      setError(err.message);
+    } finally {
+      setSavingTheme(false);
     }
   };
 
@@ -660,6 +731,127 @@ export default function DomainDetail({ domainId: propDomainId, onBack }: DomainD
             <Button onClick={handleSaveBranding} disabled={savingBranding} size="sm">
               {savingBranding ? 'Saving...' : 'Save Branding'}
             </Button>
+          </div>
+        </Card>
+
+        {/* The look */}
+        <Card className="p-5">
+          <h2 className="text-lg font-medium text-[var(--gray-12)] mb-3">Look</h2>
+          <p className="text-sm text-[var(--gray-11)] mb-4">
+            The domain's own colours, fonts, logo and corners, in place of the brand's. Pages on the domain read these as
+            design tokens; leave a field blank to keep that page's default. A design handed over from Claude Design maps
+            onto these tokens.
+          </p>
+
+          <div className="space-y-4">
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className="block text-xs font-medium text-[var(--gray-a9)] mb-1">Light or dark</label>
+                <select
+                  value={themeMode}
+                  onChange={(e) => setThemeMode(e.target.value as '' | 'dark' | 'light')}
+                  className="w-full px-3 py-2 rounded-md border border-[var(--gray-a6)] bg-[var(--gray-a2)] text-[var(--gray-12)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-a7)]"
+                >
+                  <option value="">Brand default</option>
+                  <option value="dark">Dark</option>
+                  <option value="light">Light</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-[var(--gray-a9)] mb-1">Corners</label>
+                <select
+                  value={themeRadius}
+                  onChange={(e) => setThemeRadius(e.target.value as '' | 'sharp' | 'soft' | 'round')}
+                  className="w-full px-3 py-2 rounded-md border border-[var(--gray-a6)] bg-[var(--gray-a2)] text-[var(--gray-12)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-a7)]"
+                >
+                  <option value="">Page default</option>
+                  <option value="sharp">Sharp</option>
+                  <option value="soft">Soft</option>
+                  <option value="round">Round</option>
+                </select>
+              </div>
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              {THEME_COLOURS.map(({ key, label, hint }) => {
+                const value = themeColours[key] ?? '';
+                return (
+                  <div key={key}>
+                    <label className="block text-xs font-medium text-[var(--gray-a9)] mb-1">{label}</label>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="color"
+                        value={HEX_RE.test(value) ? value : '#000000'}
+                        onChange={(e) => setThemeColours((c) => ({ ...c, [key]: e.target.value }))}
+                        className="h-9 w-10 rounded-md border border-[var(--gray-a6)] bg-transparent p-0.5"
+                        aria-label={`${label} colour picker`}
+                      />
+                      <input
+                        type="text"
+                        value={value}
+                        onChange={(e) => setThemeColours((c) => ({ ...c, [key]: e.target.value }))}
+                        placeholder="#1a1a1a"
+                        maxLength={7}
+                        className="w-full px-3 py-2 rounded-md border border-[var(--gray-a6)] bg-[var(--gray-a2)] text-[var(--gray-12)] placeholder:text-[var(--gray-a8)] font-mono text-sm focus:outline-none focus:ring-2 focus:ring-[var(--accent-a7)]"
+                      />
+                    </div>
+                    <p className="text-xs text-[var(--gray-a9)] mt-1">{hint}</p>
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div>
+                <label className="block text-xs font-medium text-[var(--gray-a9)] mb-1">Heading font</label>
+                <input
+                  type="text"
+                  value={themeHeading}
+                  onChange={(e) => setThemeHeading(e.target.value)}
+                  placeholder="Fraunces"
+                  className="w-full px-3 py-2 rounded-md border border-[var(--gray-a6)] bg-[var(--gray-a2)] text-[var(--gray-12)] placeholder:text-[var(--gray-a8)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-a7)]"
+                />
+                <p className="text-xs text-[var(--gray-a9)] mt-1">A Google Fonts family name, as it appears on fonts.google.com.</p>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-[var(--gray-a9)] mb-1">Body font</label>
+                <input
+                  type="text"
+                  value={themeBody}
+                  onChange={(e) => setThemeBody(e.target.value)}
+                  placeholder="Inter"
+                  className="w-full px-3 py-2 rounded-md border border-[var(--gray-a6)] bg-[var(--gray-a2)] text-[var(--gray-12)] placeholder:text-[var(--gray-a8)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-a7)]"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-medium text-[var(--gray-a9)] mb-1">Logo URL</label>
+              <input
+                type="url"
+                value={themeLogo}
+                onChange={(e) => setThemeLogo(e.target.value)}
+                placeholder="https://cdn.example.com/logo.svg"
+                className="w-full max-w-md px-3 py-2 rounded-md border border-[var(--gray-a6)] bg-[var(--gray-a2)] text-[var(--gray-12)] placeholder:text-[var(--gray-a8)] focus:outline-none focus:ring-2 focus:ring-[var(--accent-a7)]"
+              />
+              <p className="text-xs text-[var(--gray-a9)] mt-1">An https address of an SVG or PNG. Pages on the domain show it in their own header.</p>
+            </div>
+
+            <div className="flex items-center gap-2">
+              <Button onClick={handleSaveTheme} disabled={savingTheme} size="sm">
+                {savingTheme ? 'Saving...' : 'Save Look'}
+              </Button>
+              {domain.theme && (
+                <Button
+                  variant="outlined"
+                  size="sm"
+                  disabled={savingTheme}
+                  onClick={() => { setThemeMode(''); setThemeColours({}); setThemeHeading(''); setThemeBody(''); setThemeLogo(''); setThemeRadius(''); }}
+                >
+                  Clear fields
+                </Button>
+              )}
+            </div>
           </div>
         </Card>
 
