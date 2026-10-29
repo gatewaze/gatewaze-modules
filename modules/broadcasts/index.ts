@@ -47,8 +47,9 @@ const broadcastsModule: GatewazeModule = {
     },
     {
       // 60s heartbeat: the paced Slack direct-message drip (workers/dispatch-slack.ts).
-      // A tick stops at 40s, so ticks do not overlap; if one ever did, the
-      // SKIP LOCKED claim still gives each recipient to one tick only.
+      // A tick starts no message after 40s and each message times out within
+      // 16s, so ticks fit their 60s slot; if two ever overlapped, the SKIP
+      // LOCKED claim still gives each recipient to one tick only.
       name: 'broadcasts:dispatch-slack',
       handler: './workers/dispatch-slack.ts',
     },

@@ -149,7 +149,7 @@ export async function runDripTick(deps: EngineDeps, binding: SendEngineBinding):
     const gate = await splitSuppressed(deps, claimedRows);
     if (gate.error) {
       logger.error('[send-engine] suppression check failed; holding the batch', gate.error);
-      await releaseRows(deps, binding, claimedRows.map((r) => r.id));
+      await releaseUntried(deps, binding, claimedRows);
       break;
     }
     if (gate.suppressed.length) {
@@ -163,15 +163,15 @@ export async function runDripTick(deps: EngineDeps, binding: SendEngineBinding):
 
     for (const [sendId, recips] of bySend) {
       touched.add(sendId);
-      if (stopTick) { await releaseRows(deps, binding, recips.map((r) => r.id)); continue; }
+      if (stopTick) { await releaseUntried(deps, binding, recips); continue; }
       const { data: send } = await supabase.from(binding.sendsTable).select('*').eq('id', sendId).single();
-      if (!send) { await releaseRows(deps, binding, recips.map((r) => r.id)); continue; }
+      if (!send) { await releaseUntried(deps, binding, recips); continue; }
       if (send.status === 'cancelling' || send.status === 'cancelled') { await markRows(deps, binding, recips.map((r) => r.id), 'skipped'); continue; }
-      if (send.status === 'paused') { await releaseRows(deps, binding, recips.map((r) => r.id)); continue; }
+      if (send.status === 'paused') { await releaseUntried(deps, binding, recips); continue; }
 
       let ctx = ctxCache.get(sendId);
       if (ctx === undefined) { ctx = await binding.buildSendContext(deps, sendId); ctxCache.set(sendId, ctx); }
-      if (!ctx) { await releaseRows(deps, binding, recips.map((r) => r.id)); continue; }   // no content yet — retry next tick
+      if (!ctx) { await releaseUntried(deps, binding, recips); continue; }   // no content yet — retry next tick
 
       // Attachments ride on the message, so a send with per-recipient files
       // cannot share a batch — one personalization per call. A provider may
@@ -188,15 +188,22 @@ export async function runDripTick(deps: EngineDeps, binding: SendEngineBinding):
           // long enough for the stuck-row sweeper to hand them out twice.
           if (Date.now() + Math.max(wait, 0) - start >= config.budgetMs) {
             stopTick = true;
-            await releaseRows(deps, binding, batches.slice(i).flat().map((r) => r.id));
+            await releaseUntried(deps, binding, batches.slice(i).flat());
             break;
           }
           if (wait > 0) await sleep(wait);
+          // A paced group takes many seconds, so an admin's Pause or Stop must
+          // land between messages, not after the whole group has gone out.
+          const { data: now } = await supabase.from(binding.sendsTable).select('status').eq('id', sendId).single();
+          if (now?.status !== 'sending') {
+            await releaseUntried(deps, binding, batches.slice(i).flat());
+            break;
+          }
         }
         // Fast bounce/spam gate (last 60s for this send).
         if (provider.writesSendLog !== false && await shouldAbortForReputation(deps, binding, sendId)) {
           // This batch and any later ones claimed for the send go back.
-          await releaseRows(deps, binding, batches.slice(i).flat().map((r) => r.id));
+          await releaseUntried(deps, binding, batches.slice(i).flat());
           await supabase.from(binding.sendsTable).update({ status: 'paused', updated_at: new Date().toISOString() }).eq('id', sendId);
           logger.warn('[send-engine] reputation gate tripped; paused', { sendId });
           break;
@@ -205,9 +212,9 @@ export async function runDripTick(deps: EngineDeps, binding: SendEngineBinding):
         const want = Math.floor(batch.length * (config.rampPercent / 100)) || batch.length;
         const { data: granted } = await supabase.rpc('claim_drip_quota', { p_brand: send.brand ?? 'default', p_channel: send.channel ?? 'email', p_request: want, p_daily_cap: config.dailyCap });
         const grant = typeof granted === 'number' ? granted : want;
-        if (grant <= 0) { await releaseRows(deps, binding, batches.slice(i).flat().map((r) => r.id)); break; }
+        if (grant <= 0) { await releaseUntried(deps, binding, batches.slice(i).flat()); break; }
         const slice = batch.slice(0, grant);
-        if (slice.length < batch.length) await releaseRows(deps, binding, batch.slice(grant).map((r) => r.id));
+        if (slice.length < batch.length) await releaseUntried(deps, binding, batch.slice(grant));
 
         lastPostAt = Date.now();
         const out = await postBatch(deps, binding, ctx, send, slice);
@@ -215,7 +222,7 @@ export async function runDripTick(deps: EngineDeps, binding: SendEngineBinding):
         if (out.halted || out.backOff) {
           // Halted: the send is paused, so its other claimed rows go back.
           // Back-off: the provider is rate limiting us; try again next tick.
-          await releaseRows(deps, binding, batches.slice(i + 1).flat().map((r) => r.id));
+          await releaseUntried(deps, binding, batches.slice(i + 1).flat());
           if (out.backOff) stopTick = true;
           break;
         }
@@ -340,7 +347,7 @@ async function postBatch(deps: EngineDeps, binding: SendEngineBinding, ctx: Send
   if (result.haltSend) {
     // Nothing later in this send can succeed (e.g. the token was revoked).
     // Put the batch back and pause rather than fail every recipient in turn.
-    await updateRowsByIds(deps, binding.recipientsTable, ids, { status: 'pending', updated_at: now, ...errorPatch });
+    await updateRowsByIds(deps, binding.recipientsTable, ids, { status: 'pending', updated_at: now, ...errorPatch }, 'sending');
     await supabase.from(binding.sendsTable).update({ status: 'paused', updated_at: now }).eq('id', ctx.sendId).eq('status', 'sending');
     logger.warn('[send-engine] provider halted the send; paused', { sendId: ctx.sendId, reason: result.haltSend });
     if (binding.onSendHalted) {
@@ -355,11 +362,11 @@ async function postBatch(deps: EngineDeps, binding: SendEngineBinding, ctx: Send
     const max = config.maxAttempts;
     const exhausted = max ? recips.filter((r) => (r.attempts ?? 0) >= max) : [];
     const retry = recips.filter((r) => !exhausted.includes(r));
-    if (retry.length) await updateRowsByIds(deps, binding.recipientsTable, retry.map((r) => r.id), { status: 'pending', updated_at: now, ...errorPatch });
-    if (exhausted.length) await updateRowsByIds(deps, binding.recipientsTable, exhausted.map((r) => r.id), { status: 'failed', updated_at: now, ...errorPatch });
+    if (retry.length) await updateRowsByIds(deps, binding.recipientsTable, retry.map((r) => r.id), { status: 'pending', updated_at: now, ...errorPatch }, 'sending');
+    if (exhausted.length) await updateRowsByIds(deps, binding.recipientsTable, exhausted.map((r) => r.id), { status: 'failed', updated_at: now, ...errorPatch }, 'sending');
     failed = exhausted.length;
   } else {
-    await updateRowsByIds(deps, binding.recipientsTable, ids, { status: 'failed', updated_at: now, ...errorPatch });
+    await updateRowsByIds(deps, binding.recipientsTable, ids, { status: 'failed', updated_at: now, ...errorPatch }, 'sending');
     failed = recips.length;
   }
   await supabase.from(binding.batchesTable).update({ status: result.retryable ? 'failed' : 'rejected', ...batchFailed }).eq('id', batchId);
@@ -429,10 +436,12 @@ async function shouldAbortForReputation(deps: EngineDeps, binding: SendEngineBin
 // emails had already gone out). Chunk every id-filtered write to a safe size and
 // surface errors instead of swallowing them.
 const ID_CHUNK = 100;
-async function updateRowsByIds(deps: EngineDeps, table: string, ids: string[], patch: Record<string, unknown>): Promise<void> {
+async function updateRowsByIds(deps: EngineDeps, table: string, ids: string[], patch: Record<string, unknown>, onlyIfStatus?: string): Promise<void> {
   for (let i = 0; i < ids.length; i += ID_CHUNK) {
     const chunk = ids.slice(i, i + ID_CHUNK);
-    const { error } = await deps.supabase.from(table).update(patch).in('id', chunk);
+    let q = deps.supabase.from(table).update(patch).in('id', chunk);
+    if (onlyIfStatus) q = q.eq('status', onlyIfStatus);
+    const { error } = await q;
     if (error) deps.logger.error('[send-engine] row update failed', { table, count: chunk.length, error: (error as { message?: string }).message ?? error });
   }
 }
@@ -487,8 +496,26 @@ export async function splitSuppressed(deps: EngineDeps, rows: Recipient[]): Prom
   return { allowed, suppressed };
 }
 
+// Put claimed rows back without having tried them. The claim added one to
+// attempts; where attempts cap retries (maxAttempts), take it off again so a
+// row only spends attempts on real tries, not on ticks that ran out of time or
+// were told to back off. Without a cap this is releaseRows, unchanged.
+async function releaseUntried(deps: EngineDeps, binding: SendEngineBinding, rows: Recipient[]): Promise<void> {
+  if (!deps.config.maxAttempts) { await releaseRows(deps, binding, rows.map((r) => r.id)); return; }
+  const byAttempts = new Map<number, string[]>();
+  for (const r of rows) {
+    const a = Math.max(0, (r.attempts ?? 1) - 1);
+    (byAttempts.get(a) ?? byAttempts.set(a, []).get(a)!).push(r.id);
+  }
+  for (const [attempts, ids] of byAttempts) {
+    await updateRowsByIds(deps, binding.recipientsTable, ids, { status: 'pending', attempts, updated_at: new Date().toISOString() }, 'sending');
+  }
+}
+
+// Only rows still 'sending' (ours from the claim) go back: a cancel sweep that
+// marked them 'skipped' meanwhile must stand.
 async function releaseRows(deps: EngineDeps, binding: SendEngineBinding, ids: string[]): Promise<void> {
-  await updateRowsByIds(deps, binding.recipientsTable, ids, { status: 'pending', updated_at: new Date().toISOString() });
+  await updateRowsByIds(deps, binding.recipientsTable, ids, { status: 'pending', updated_at: new Date().toISOString() }, 'sending');
 }
 async function markRows(deps: EngineDeps, binding: SendEngineBinding, ids: string[], status: string): Promise<void> {
   await updateRowsByIds(deps, binding.recipientsTable, ids, { status, updated_at: new Date().toISOString() });
@@ -522,11 +549,16 @@ async function finalizeSend(deps: EngineDeps, binding: SendEngineBinding, sendId
   const terminal = sent + failed + skipped;
   const isCancelling = send?.status === 'cancelling';
   const allAccountedFor = planned <= 0 || terminal >= planned;
-  if (remaining === 0 && (allAccountedFor || isCancelling)) {
+  // A send already 'cancelled' keeps that status: an in-flight tick that
+  // finishes after the cancel must not relabel it 'sent'.
+  if (remaining === 0 && (allAccountedFor || isCancelling) && send?.status !== 'cancelled') {
     patch.status = isCancelling ? 'cancelled' : (sent === 0 && failed > 0 ? 'failed' : 'sent');
     patch.completed_at = new Date().toISOString();
   }
-  const { error: updErr } = await supabase.from(binding.sendsTable).update(patch).eq('id', sendId);
+  // Compare-and-swap on the status we read, so a concurrent change wins.
+  let upd = supabase.from(binding.sendsTable).update(patch).eq('id', sendId);
+  if (patch.status && send?.status) upd = upd.eq('status', send.status);
+  const { error: updErr } = await upd;
   if (updErr) throw new Error(`update send failed: ${updErr.message}`);
 }
 

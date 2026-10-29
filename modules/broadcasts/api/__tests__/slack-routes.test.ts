@@ -132,3 +132,50 @@ it('parseSender allows only the two senders', () => {
   expect(parseSender('welcome_sender')).toBe('welcome_sender');
   expect(parseSender('x')).toBeNull();
 });
+
+describe('createSlackRouter admin gate', () => {
+  async function call(profile: Record<string, unknown> | null, method: 'GET' | 'POST', path: string, body?: unknown) {
+    const { default: express } = await import('express');
+    const { createSlackRouter } = await import('../slack-routes');
+    const prev = process.env.GATEWAZE_TEST_DISABLE_AUTH;
+    process.env.GATEWAZE_TEST_DISABLE_AUTH = '1';   // requireJwt sets a fixed test user (non-production only)
+    const supabase = {
+      from: (t: string) => ({
+        select: () => ({
+          eq: () => ({ maybeSingle: async () => ({ data: t === 'admin_profiles' ? profile : null, error: null }) }),
+          ilike: () => ({ limit: async () => ({ data: [], error: null }) }),
+        }),
+      }),
+    };
+    const app = express();
+    app.use('/slack', createSlackRouter({ supabase, readToken: async () => '', readSender: async () => null }));
+    const server = app.listen(0);
+    try {
+      const port = (server.address() as { port: number }).port;
+      const res = await fetch(`http://127.0.0.1:${port}/slack${path}`, {
+        method, headers: { 'Content-Type': 'application/json' }, body: body ? JSON.stringify(body) : undefined,
+      });
+      return { status: res.status, body: await res.json() };
+    } finally {
+      server.close();
+      if (prev === undefined) delete process.env.GATEWAZE_TEST_DISABLE_AUTH; else process.env.GATEWAZE_TEST_DISABLE_AUTH = prev;
+    }
+  }
+
+  it.each([
+    ['no admin profile', null],
+    ['an inactive admin', { role: 'admin', is_active: false }],
+    ['a non-admin role', { role: 'viewer', is_active: true }],
+  ])('refuses %s', async (_label, profile) => {
+    expect((await call(profile, 'GET', '/status')).status).toBe(403);
+    expect((await call(profile, 'POST', '/test', { email: 'a@x.io', text: 'hi' })).status).toBe(403);
+  });
+
+  it('lets an active editor through, and refuses them the welcome-DM sender', async () => {
+    const editor = { role: 'editor', is_active: true };
+    expect((await call(editor, 'GET', '/status')).status).toBe(200);
+    const r = await call(editor, 'POST', '/test', { email: 'a@x.io', text: 'hi', sender: 'welcome_sender' });
+    expect(r.status).toBe(403);
+    expect(r.body.error).toMatch(/Only admins/);
+  });
+});
