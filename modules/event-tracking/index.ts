@@ -19,6 +19,7 @@ const eventTrackingModule: GatewazeModule = {
   migrations: [
     'migrations/001_event_tracking_tables.sql',
     'migrations/002_tracking_session_attribution_columns.sql',
+    'migrations/003_touch_session_only.sql',
   ],
 
   adminSlots: [
