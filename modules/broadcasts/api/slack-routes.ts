@@ -19,7 +19,8 @@ import { makeSlackChannelProvider, MAX_SLACK_MESSAGE_CHARS } from '../../bulk-em
 type SB = any;
 
 export const REQUIRED_BOT_SCOPES = ['chat:write', 'im:write'];
-const EMAIL_RE = /^[^@\s,<>]+@[^@\s,<>]+\.[^@\s,<>]+$/;
+// Domain labels exclude '.', so each dot has one way to match (no ReDoS).
+const EMAIL_RE = /^[^@\s,<>]+@[^@\s,<>.]+(?:\.[^@\s,<>.]+)+$/;
 const ADMIN_ROLES = ['super_admin', 'admin', 'editor'];
 // A test as the welcome-DM account is a message from a real person's own
 // Slack account, so editors can only test as the bot.
@@ -53,7 +54,7 @@ export function createSlackTestHandler(deps: SlackRouteDeps) {
     const email = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
     const text = typeof body.text === 'string' ? body.text : '';
     const sender = parseSender(body.sender ?? 'bot');
-    if (!EMAIL_RE.test(email) || email.length > 254 || email.includes('*')) { res.status(400).json({ error: 'Enter a valid email address' }); return; }
+    if (email.length > 254 || !EMAIL_RE.test(email) || email.includes('*')) { res.status(400).json({ error: 'Enter a valid email address' }); return; }
     if (!sender) { res.status(400).json({ error: 'Unknown sender' }); return; }
     const role = (req as Request & { adminRole?: string }).adminRole;
     if (sender === 'welcome_sender' && !(role && PERSON_SENDER_ROLES.includes(role))) {
