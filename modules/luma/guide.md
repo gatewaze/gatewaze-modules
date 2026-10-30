@@ -7,7 +7,7 @@ Sync events and registrations from Luma (lu.ma) into Gatewaze. This integration 
 The module provides four edge functions:
 
 - **Webhook** (`integrations-luma-webhook`) — Receives real-time event and registration updates from Luma via webhooks.
-- **Process Registration** (`integrations-luma-process-registration`) — Handles individual registration events, mapping Luma fields to Gatewaze records. Luma's company question collects company and job title together and the notification email renders them as one line ("Phonely - CEO"); the parser splits that on the first " - " and fills the person's company and job title when they are empty. The event's registration field mappings are then applied to the new registration.
+- **Process Registration** (`integrations-luma-process-registration`) — Handles individual registration events, mapping Luma fields to Gatewaze records. Luma's company question collects company and job title together and the notification email renders them as one line ("Phonely - CEO"); the parser splits that on the first " - " and fills the person's company and job title when they are empty. The event's registration field mappings are then applied to the new registration. Luma's `custom_source` (the `utm_source` the registrant arrived with, which the email renders as "UTM source for the registration was X.") is stored as `registration_metadata.utm_source` on every path; when it is shaped `{platform}__{session}` the session half is also stored as `tracking_session_id` for the ad-conversions module.
 - **Process CSV** (`integrations-luma-process-csv`) — Imports registrations in bulk from Luma CSV exports.
 - **Issue Discount** (`integrations-luma-issue-discount`) — Creates and issues discount codes through the Luma API.
 

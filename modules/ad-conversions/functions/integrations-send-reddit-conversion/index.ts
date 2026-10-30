@@ -1,4 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { isTrustedCaller, unauthorizedResponse } from '../_shared/auth.ts'
+import { sessionConsentsTo } from '../_shared/consent.ts'
 
 /**
  * Send Reddit Conversion
@@ -58,6 +60,8 @@ interface TrackingSession {
   ip_address: string | null
   user_agent: string | null
   landing_page: string | null
+  tracking_consent: boolean | null
+  consented_platforms: string[] | null
 }
 
 interface RegistrationData {
@@ -66,6 +70,7 @@ interface RegistrationData {
   amount_paid: number | null
   currency: string | null
   created_at: string
+  registered_at?: string | null
   email: string
 }
 
@@ -173,6 +178,7 @@ async function sendToRedditCAPI(
  * Get registration data with email
  */
 async function getRegistrationData(registrationId: string): Promise<RegistrationData | null> {
+  // events_registrations carries person_id directly; people_profiles is optional.
   const { data: registration, error: regError } = await supabase
     .from('events_registrations')
     .select(
@@ -182,7 +188,8 @@ async function getRegistrationData(registrationId: string): Promise<Registration
       amount_paid,
       currency,
       created_at,
-      member_profile_id
+      registered_at,
+      person_id
     `
     )
     .eq('id', registrationId)
@@ -193,21 +200,10 @@ async function getRegistrationData(registrationId: string): Promise<Registration
     return null
   }
 
-  const { data: memberProfile } = await supabase
-    .from('people_profiles')
-    .select('person_id')
-    .eq('id', registration.member_profile_id)
-    .single()
-
-  if (!memberProfile) {
-    console.error('Member profile not found')
-    return null
-  }
-
   const { data: person } = await supabase
     .from('people')
     .select('email')
-    .eq('id', memberProfile.person_id)
+    .eq('id', registration.person_id)
     .single()
 
   if (!person?.email) {
@@ -303,7 +299,7 @@ async function findTrackingSession(
   eventId: string,
   trackingSessionId?: string
 ): Promise<TrackingSession | null> {
-  const selectFields = 'id, click_ids, platform_cookies, ip_address, user_agent, landing_page'
+  const selectFields = 'id, click_ids, platform_cookies, ip_address, user_agent, landing_page, tracking_consent, consented_platforms'
 
   // Tier 1: Direct session ID lookup
   if (trackingSessionId) {
@@ -351,6 +347,7 @@ async function findTrackingSession(
     .eq('event_id', eventId)
     .eq('status', 'pending')
     .is('email_hash', null)
+    .eq('tracking_consent', true)
     .is('external_redirect_at', null)
     .gte('created_at', thirtyMinutesAgo)
     .gte('expires_at', new Date().toISOString())
@@ -454,6 +451,10 @@ Deno.serve(async (req) => {
     })
   }
 
+  if (!isTrustedCaller(req)) {
+    return unauthorizedResponse(corsHeaders)
+  }
+
   try {
     const body: RedditConversionRequest = await req.json()
     const { registrationId, competitionEntryId, discountCodeId, trackingSessionId, eventName = 'SignUp', config: providedConfig } = body
@@ -509,7 +510,9 @@ Deno.serve(async (req) => {
     }
 
     // 3. Find tracking session
-    const trackingSession = await findTrackingSession(registration.email, registration.event_id, trackingSessionId)
+    // Session data (click id, cookie, IP, user agent) is only used with consent for Reddit.
+    const matchedSession = await findTrackingSession(registration.email, registration.event_id, trackingSessionId)
+    const trackingSession = matchedSession && sessionConsentsTo(matchedSession, 'reddit') ? matchedSession : null
 
     // 4. Build user object for Reddit
     const hashedEmail = await hashForReddit(registration.email)
@@ -561,7 +564,9 @@ Deno.serve(async (req) => {
 
     // 6. Generate conversion ID for deduplication
     const dedupId = generateConversionId(conversionType, conversionId)
-    const eventAt = new Date(registration.created_at).toISOString()
+    // The moment the person registered, not the moment the row was written —
+    // a Luma webhook or CSV row can arrive well after the registration.
+    const eventAt = new Date(registration.registered_at || registration.created_at).toISOString()
 
     // Determine test mode
     const testMode = config.test_mode || false

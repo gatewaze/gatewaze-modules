@@ -7,7 +7,7 @@ const eventTrackingModule: GatewazeModule = {
   group: 'events',
   name: 'Event Tracking',
   description: 'UTM tracking, referral links, conversion analytics, and attribution for events',
-  version: '1.0.1',
+  version: '1.1.0',
   features: [
     'event-tracking',
     'event-tracking.utm',
@@ -18,6 +18,8 @@ const eventTrackingModule: GatewazeModule = {
 
   migrations: [
     'migrations/001_event_tracking_tables.sql',
+    'migrations/002_tracking_session_attribution_columns.sql',
+    'migrations/003_touch_session_only.sql',
   ],
 
   adminSlots: [

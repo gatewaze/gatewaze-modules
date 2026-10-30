@@ -7,6 +7,7 @@ import {
   type RegistrationData,
   type EventData,
 } from '../_shared/lumaRegistration.ts'
+import { extractTrackingSessionId, sanitizeUtmSource } from '../_shared/utmSource.ts'
 
 /**
  * Process Luma Webhook
@@ -319,12 +320,11 @@ async function handleGuestRegistered(data: LumaGuestData): Promise<Response> {
 
   const ticketInfo = extractTicketInfo(data)
 
-  // Parse custom_source to extract tracking session ID
-  // Format: {platform}__{session_id} e.g. "meta__ml5ddyhn-0er7obxy"
-  let trackingSessionId: string | undefined
-  if (data.custom_source?.includes('__')) {
-    trackingSessionId = data.custom_source.split('__')[1]
-  }
+  // custom_source is the utm_source the guest arrived with; when it came
+  // through our redirect it is {platform}__{session_id} and the session half
+  // is what the ad-conversions module matches on.
+  const utmSource = sanitizeUtmSource(data.custom_source) || undefined
+  const trackingSessionId = extractTrackingSessionId(utmSource) || undefined
 
   const registrationData: RegistrationData = {
     email: data.user_email,
@@ -341,6 +341,7 @@ async function handleGuestRegistered(data: LumaGuestData): Promise<Response> {
     registrationAnswers: data.registration_answers,
     registeredAt: data.registered_at,
     trackingSessionId,
+    utmSource,
   }
 
   const eventData: EventData = {

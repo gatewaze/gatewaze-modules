@@ -1,4 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { isTrustedCaller, unauthorizedResponse } from '../_shared/auth.ts'
+import { sessionConsentsTo, sessionHasAnyConsent } from '../_shared/consent.ts'
 
 /**
  * Send Conversion - Dispatcher
@@ -37,15 +39,17 @@ const corsHeaders = {
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 }
 
-// Supported platforms and their Edge Function names
+// Supported platforms and their Edge Function names. These must match the
+// `edgeFunctions` list in the module manifest (index.ts): that is what gets
+// deployed, and an unprefixed name here is a 404 at runtime.
 const PLATFORM_FUNCTIONS: Record<string, string> = {
-  meta: 'send-meta-conversion',
-  reddit: 'send-reddit-conversion',
+  meta: 'integrations-send-meta-conversion',
+  reddit: 'integrations-send-reddit-conversion',
+  linkedin: 'integrations-send-linkedin-conversion',
   // Future platforms:
-  // google: 'send-google-conversion',
-  // bing: 'send-bing-conversion',
-  // linkedin: 'send-linkedin-conversion',
-  // tiktok: 'send-tiktok-conversion',
+  // google: 'integrations-send-google-conversion',
+  // bing: 'integrations-send-bing-conversion',
+  // tiktok: 'integrations-send-tiktok-conversion',
 }
 
 interface ConversionRequest {
@@ -80,13 +84,14 @@ async function hashEmail(email: string): Promise<string> {
  * Get registration details including email and metadata
  */
 async function getRegistrationDetails(registrationId: string) {
+  // events_registrations carries person_id directly; people_profiles is optional.
   const { data: registration, error } = await supabase
     .from('events_registrations')
     .select(
       `
       id,
       event_id,
-      member_profile_id,
+      person_id,
       registration_metadata
     `
     )
@@ -97,16 +102,7 @@ async function getRegistrationDetails(registrationId: string) {
     return null
   }
 
-  // Get email from people_profiles -> people
-  const { data: memberProfile } = await supabase
-    .from('people_profiles')
-    .select('person_id')
-    .eq('id', registration.member_profile_id)
-    .single()
-
-  if (!memberProfile) return null
-
-  const { data: person } = await supabase.from('people').select('email').eq('id', memberProfile.person_id).single()
+  const { data: person } = await supabase.from('people').select('email').eq('id', registration.person_id).single()
 
   if (!person?.email) return null
 
@@ -213,7 +209,8 @@ async function findTrackingSession(
 ): Promise<{
   id: string
   click_ids: Record<string, string>
-  consented_platforms: string[]
+  tracking_consent: boolean | null
+  consented_platforms: string[] | null
 } | null> {
   // Tier 1: Direct session ID lookup
   if (trackingSessionId) {
@@ -222,7 +219,7 @@ async function findTrackingSession(
     if (uuidRegex.test(trackingSessionId)) {
       const { data: byId } = await supabase
         .from('integrations_ad_tracking_sessions')
-        .select('id, click_ids, consented_platforms')
+        .select('id, click_ids, tracking_consent, consented_platforms')
         .eq('id', trackingSessionId)
         .maybeSingle()
       if (byId) return byId
@@ -231,7 +228,7 @@ async function findTrackingSession(
     // Also try as session_id string (from cookie/UTM)
     const { data: bySessionId } = await supabase
       .from('integrations_ad_tracking_sessions')
-      .select('id, click_ids, consented_platforms')
+      .select('id, click_ids, tracking_consent, consented_platforms')
       .eq('session_id', trackingSessionId)
       .maybeSingle()
     if (bySessionId) return bySessionId
@@ -242,7 +239,7 @@ async function findTrackingSession(
 
   const { data: emailMatch } = await supabase
     .from('integrations_ad_tracking_sessions')
-    .select('id, click_ids, consented_platforms')
+    .select('id, click_ids, tracking_consent, consented_platforms')
     .eq('email_hash', emailHash)
     .eq('event_id', eventId)
     .eq('status', 'pending')
@@ -261,10 +258,11 @@ async function findTrackingSession(
   const thirtyMinutesAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString()
   const { data: timingMatch } = await supabase
     .from('integrations_ad_tracking_sessions')
-    .select('id, click_ids, consented_platforms')
+    .select('id, click_ids, tracking_consent, consented_platforms')
     .eq('event_id', eventId)
     .eq('status', 'pending')
     .is('email_hash', null)
+    .eq('tracking_consent', true)
     .is('external_redirect_at', null)
     .gte('created_at', thirtyMinutesAgo)
     .gte('expires_at', new Date().toISOString())
@@ -289,22 +287,14 @@ async function findTrackingSession(
  * Falls back to: event → account → brand default → env vars
  */
 async function getActivePlatformConfigs(eventId: string): Promise<string[]> {
-  // Get account_id for this event
-  const { data: event } = await supabase.from('events').select('account_id').eq('event_id', eventId).single()
-
-  // Find all active configs for this event or its account
-  const orClauses = [`event_id.eq.${eventId}`]
-  if (event?.account_id) {
-    orClauses.push(`account_id.eq.${event.account_id}`)
+  // Resolved in SQL (event → account → brand-wide) so no identifier is ever
+  // interpolated into a PostgREST filter here.
+  const { data: active, error } = await supabase.rpc('get_active_ad_platforms', { p_event_id: eventId })
+  if (error) {
+    console.error('get_active_ad_platforms failed:', error.message)
   }
 
-  const { data: configs } = await supabase
-    .from('ad_platform_configs')
-    .select('platform')
-    .eq('is_active', true)
-    .or(orClauses.join(','))
-
-  const platforms = configs?.map((c) => c.platform) || []
+  const platforms: string[] = Array.isArray(active) ? active.filter((p): p is string => typeof p === 'string') : []
 
   // If no DB configs found, check env vars as final fallback
   if (platforms.length === 0) {
@@ -320,6 +310,13 @@ async function getActivePlatformConfigs(eventId: string): Promise<string[]> {
     if (redditPixelId && redditAccessToken) {
       console.log('Using Reddit env var fallback config')
       platforms.push('reddit')
+    }
+
+    const linkedinConversionId = Deno.env.get('LINKEDIN_CONVERSION_ID')
+    const linkedinAccessToken = Deno.env.get('LINKEDIN_ACCESS_TOKEN')
+    if (linkedinConversionId && linkedinAccessToken) {
+      console.log('Using LinkedIn env var fallback config')
+      platforms.push('linkedin')
     }
   }
 
@@ -380,7 +377,11 @@ async function callPlatformFunction(
 function determinePlatformsToSend(
   requestedPlatforms: string[] | undefined,
   activePlatforms: string[],
-  trackingSession: { click_ids: Record<string, string>; consented_platforms: string[] } | null
+  trackingSession: {
+    click_ids: Record<string, string>
+    tracking_consent: boolean | null
+    consented_platforms: string[] | null
+  } | null
 ): string[] {
   // Start with active platforms
   let platforms = activePlatforms.filter((p) => PLATFORM_FUNCTIONS[p])
@@ -390,9 +391,11 @@ function determinePlatformsToSend(
     platforms = platforms.filter((p) => requestedPlatforms.includes(p))
   }
 
-  // Filter to consented platforms if tracking session exists
-  if (trackingSession?.consented_platforms?.length) {
-    platforms = platforms.filter((p) => trackingSession.consented_platforms.includes(p))
+  // With a session, a platform is only used when the visitor consented to it.
+  // (A session without any consent was already dropped by the caller, so the
+  // registration is then sent with the hashed email alone, session-free.)
+  if (trackingSession) {
+    platforms = platforms.filter((p) => sessionConsentsTo(trackingSession, p))
   }
 
   // Only send to platforms that have their specific click ID
@@ -428,6 +431,10 @@ Deno.serve(async (req) => {
       status: 405,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     })
+  }
+
+  if (!isTrustedCaller(req)) {
+    return unauthorizedResponse(corsHeaders)
   }
 
   try {
@@ -505,7 +512,27 @@ Deno.serve(async (req) => {
       trackingSessionId ||
       (conversionDetails.metadata?.tracking_session_id as string | undefined)
 
-    const trackingSession = await findTrackingSession(conversionDetails.email, conversionDetails.event_id, resolvedTrackingSessionId)
+    let trackingSession = await findTrackingSession(conversionDetails.email, conversionDetails.event_id, resolvedTrackingSessionId)
+
+    // A session that recorded a refusal (or no consent at all) is a decision
+    // the visitor made: send nothing for this registration, not even the
+    // hashed email. Only a registration with NO session at all falls back to
+    // the hashed-email-only send (the same signal as the warehouse export).
+    if (trackingSession && !sessionHasAnyConsent(trackingSession)) {
+      console.log('Tracking session without consent, skipping conversion:', trackingSession.id)
+      return new Response(
+        JSON.stringify({
+          success: true,
+          message: 'Visitor declined marketing consent; no conversion sent',
+          reason: 'no_consent',
+          platformsProcessed: 0,
+        }),
+        {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        }
+      )
+    }
 
     console.log('Tracking session found:', !!trackingSession)
 

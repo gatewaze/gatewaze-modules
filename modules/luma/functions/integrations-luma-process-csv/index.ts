@@ -5,6 +5,7 @@ import {
   type RegistrationData,
   type EventData,
 } from '../_shared/lumaRegistration.ts'
+import { extractTrackingSessionId, sanitizeUtmSource } from '../_shared/utmSource.ts'
 
 /**
  * Process Luma CSV Upload
@@ -248,7 +249,7 @@ async function processEventGuests(
       luma_approval_status: row.approval_status,
       luma_checked_in_at: row.checked_in_at ? new Date(row.checked_in_at).toISOString() : null,
       luma_qr_code_url: row.qr_code_url,
-      luma_custom_source: row.custom_source || null,
+      luma_custom_source: sanitizeUtmSource(row.custom_source),
       luma_ticket_type_id: row.ticket_type_id || null,
       luma_ticket_name: row.ticket_name || null,
       luma_registered_at: row.created_at ? new Date(row.created_at).toISOString() : null,
@@ -435,12 +436,10 @@ async function processEventGuests(
               lastName = lastName || parsed.lastName
             }
 
-            // Parse custom_source to extract tracking session ID
-            // Format: {platform}__{session_id} e.g. "meta__ml5ddyhn-0er7obxy"
-            let csvTrackingSessionId: string | undefined
-            if (row.custom_source?.includes('__')) {
-              csvTrackingSessionId = row.custom_source.split('__')[1]
-            }
+            // custom_source is the utm_source the guest arrived with; when it
+            // came through our redirect it is {platform}__{session_id}.
+            const csvUtmSource = sanitizeUtmSource(row.custom_source) || undefined
+            const csvTrackingSessionId = extractTrackingSessionId(csvUtmSource) || undefined
 
             // Build registration data for shared function
             const registrationData: RegistrationData = {
@@ -459,6 +458,7 @@ async function processEventGuests(
               registeredAt: row.created_at ? new Date(row.created_at).toISOString() : undefined,
               source: 'luma_csv_upload',
               trackingSessionId: csvTrackingSessionId,
+              utmSource: csvUtmSource,
             }
 
             // Use shared registration function
