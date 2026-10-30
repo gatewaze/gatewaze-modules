@@ -33,11 +33,17 @@ export interface BroadcastSendInstance {
 /** The broadcast parent — its definition, audience, and draft content. */
 export type BroadcastTemplate = 'plain' | 'repo';
 
+export type BroadcastChannel = 'email' | 'slack';
+/** Who a Slack broadcast is sent as: the workspace bot, or the account connected for welcome DMs. */
+export type SlackSender = 'bot' | 'welcome_sender';
+
 export interface Broadcast {
   id: string;
   name: string;
   brand: string;
-  channel: 'email';
+  channel: BroadcastChannel;
+  /** Slack broadcasts only. */
+  slack_sender: SlackSender;
   audience_type: AudienceType;
   segment_id: string | null;
   list_ids: string[];
@@ -82,6 +88,7 @@ export interface BroadcastFolder {
 export interface CreateBroadcastInput {
   name: string;
   brand?: string;
+  channel?: BroadcastChannel;
   audience_type?: AudienceType;
   segment_id?: string | null;
   list_ids?: string[];
@@ -278,6 +285,7 @@ export async function createBroadcast(input: CreateBroadcastInput): Promise<Broa
     .insert({
       name: input.name,
       brand: input.brand ?? 'default',
+      channel: input.channel ?? 'email',
       audience_type: input.audience_type ?? 'segment',
       segment_id: input.segment_id ?? null,
       list_ids: input.list_ids ?? [],
@@ -383,6 +391,7 @@ export function hasPreheader(preheader: string | null | undefined): boolean {
 export async function createBroadcastSend(parentId: string, config: SendComposerConfig): Promise<{ id: string }> {
   const parent = await getBroadcast(parentId);
   if (!parent) throw new Error('Broadcast not found');
+  if (parent.channel === 'slack') throw new Error('Slack broadcasts are sent from the Slack sending panel');
   if (!parent.rendered_html) throw new Error('Add content before sending');
   // Mandatory: every broadcast is tied to a list so recipients can unsubscribe
   // from it (the send injects the unsubscribe footer for that list). No list → no send.
@@ -452,6 +461,199 @@ export async function createBroadcastSend(parentId: string, config: SendComposer
     .single();
   if (error) throw error;
   return { id: data.id as string };
+}
+
+// ---------------------------------------------------------------------------
+// Slack broadcasts
+//
+// A Slack broadcast DMs each person in its segment who is linked to a Slack
+// member. It has no subject, From address or unsubscribe list. Sends are
+// always created 'scheduled' (for now, or a chosen time) so the worker's
+// dispatcher refreshes the segment and fans out, then the paced Slack drip
+// sends one message every few seconds.
+// ---------------------------------------------------------------------------
+
+export const MAX_SLACK_MESSAGE_CHARS = 4000;
+export const SLACK_MERGE_FIELDS = ['{{first_name}}', '{{name}}', '{{company}}', '{{job_title}}'];
+
+export interface SlackSendConfig {
+  scheduledAt: string | null;       // null = as soon as possible
+  excludeSentSendIds: string[];
+}
+
+/** The message a Slack send will carry: the parent's text with {{event_*}} filled. */
+export async function resolveSlackText(parent: Broadcast): Promise<string> {
+  let text = parent.body_text ?? '';
+  if (parent.event_id) {
+    const { data: ev } = await supabase
+      .from('events')
+      .select('event_title, event_slug, event_id, event_start, event_city')
+      .eq('id', parent.event_id)
+      .maybeSingle();
+    if (ev) text = substituteEventVars(text, eventVarValues(ev as Parameters<typeof eventVarValues>[0], await resolvePortalBase()));
+  }
+  return text;
+}
+
+export async function createSlackBroadcastSend(parentId: string, config: SlackSendConfig): Promise<{ id: string }> {
+  const parent = await getBroadcast(parentId);
+  if (!parent) throw new Error('Broadcast not found');
+  if (parent.channel !== 'slack') throw new Error('This is not a Slack broadcast');
+  if (!parent.segment_id) throw new Error('Set an audience first');
+  const text = await resolveSlackText(parent);
+  if (!text.trim()) throw new Error('Write the message before sending');
+  if (text.length > MAX_SLACK_MESSAGE_CHARS) throw new Error(`The message is over ${MAX_SLACK_MESSAGE_CHARS} characters`);
+
+  const now = new Date().toISOString();
+  const { data, error } = await supabase
+    .from('broadcast_sends')
+    .insert({
+      broadcast_id: parentId,
+      event_id: parent.event_id,
+      name: parent.name,
+      brand: parent.brand,
+      channel: 'slack',
+      audience_type: 'segment',
+      segment_id: parent.segment_id,
+      include_prospects: parent.include_prospects ?? false,
+      subject: parent.name,
+      body_text: text,
+      content_json: {},
+      suppression_topic: 'slack',
+      status: 'scheduled',
+      schedule_type: config.scheduledAt ? 'scheduled' : 'immediate',
+      scheduled_at: config.scheduledAt ?? now,
+      delivery_strategy: 'global',
+      exclude_sent_send_ids: config.excludeSentSendIds.length > 0 ? config.excludeSentSendIds : null,
+      total_recipients: 0, sent_count: 0, failed_count: 0,
+      metadata: { slack_sender: parent.slack_sender ?? 'bot' },
+    })
+    .select('id')
+    .single();
+  if (error) throw error;
+  return { id: data.id as string };
+}
+
+/** People in the segment a Slack send would reach (linked to Slack, minus opt-outs and earlier sends). */
+export async function slackRecipientCount(segmentId: string, excludeSentSendIds: string[], includeProspects: boolean): Promise<number> {
+  const { data, error } = await supabase.rpc('broadcast_slack_recipient_preview_count', {
+    p_segment_id: segmentId,
+    p_exclude_send_ids: excludeSentSendIds.length > 0 ? excludeSentSendIds : null,
+    p_include_prospects: includeProspects,
+  });
+  if (error) throw error;
+  return (data as number) ?? 0;
+}
+
+export interface SlackSendRow {
+  id: string;
+  status: BroadcastStatus;
+  schedule_type: 'immediate' | 'scheduled';
+  scheduled_at: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  metadata: { slack_sender?: SlackSender; paused_reason?: string; error?: string } | null;
+}
+
+export async function listSlackSends(broadcastId: string): Promise<SlackSendRow[]> {
+  const { data, error } = await supabase
+    .from('broadcast_sends')
+    .select('id, status, schedule_type, scheduled_at, started_at, completed_at, created_at, metadata')
+    .eq('broadcast_id', broadcastId)
+    .order('created_at', { ascending: false });
+  if (error) throw error;
+  return (data ?? []) as SlackSendRow[];
+}
+
+export interface SlackRecipientRow {
+  id: string;
+  email: string;
+  slack_user_id: string | null;
+  status: 'pending' | 'sending' | 'sent' | 'failed' | 'skipped';
+  last_error: string | null;
+  attempts: number;
+  updated_at: string | null;
+}
+
+export type SlackSendCounts = Record<SlackRecipientRow['status'], number>;
+
+export async function slackSendCounts(sendId: string): Promise<SlackSendCounts> {
+  const statuses: SlackRecipientRow['status'][] = ['pending', 'sending', 'sent', 'failed', 'skipped'];
+  const counts = await Promise.all(statuses.map(async (s) => {
+    const { count, error } = await supabase
+      .from('broadcast_send_recipients')
+      .select('id', { count: 'exact', head: true })
+      .eq('send_id', sendId)
+      .eq('status', s);
+    if (error) throw error;
+    return count ?? 0;
+  }));
+  return Object.fromEntries(statuses.map((s, i) => [s, counts[i]])) as SlackSendCounts;
+}
+
+export async function listSlackRecipients(sendId: string, opts: { status?: SlackRecipientRow['status']; page: number; pageSize: number }): Promise<{ rows: SlackRecipientRow[]; total: number }> {
+  let q = supabase
+    .from('broadcast_send_recipients')
+    .select('id, email, slack_user_id, status, last_error, attempts, updated_at', { count: 'exact' })
+    .eq('send_id', sendId);
+  if (opts.status) q = q.eq('status', opts.status);
+  const from = opts.page * opts.pageSize;
+  const { data, count, error } = await q
+    .order('updated_at', { ascending: false, nullsFirst: false })
+    .range(from, from + opts.pageSize - 1);
+  if (error) throw error;
+  return { rows: (data ?? []) as SlackRecipientRow[], total: count ?? 0 };
+}
+
+/** Pause, resume or stop a send. Same transitions as the email Sending panel. */
+export async function setSlackSendStatus(sendId: string, action: 'pause' | 'resume' | 'cancel', current: BroadcastStatus): Promise<void> {
+  const status = action === 'pause' ? 'paused'
+    : action === 'resume' ? 'sending'
+    : (current === 'sending' || current === 'paused') ? 'cancelling' : 'cancelled';
+  const patch: Record<string, unknown> = { status, updated_at: new Date().toISOString() };
+  if (action === 'resume') {
+    // The reason the engine paused it no longer applies once it is resumed.
+    const { data } = await supabase.from('broadcast_sends').select('metadata').eq('id', sendId).single();
+    const metadata = { ...((data?.metadata as Record<string, unknown> | null) ?? {}) };
+    delete metadata.paused_reason;
+    delete metadata.paused_at;
+    patch.metadata = metadata;
+  }
+  const { data: changed, error } = await supabase.from('broadcast_sends').update(patch).eq('id', sendId).eq('status', current).select('id');
+  if (error) throw error;
+  if (!changed?.length) throw new Error('The send changed in the meantime; refresh and try again');
+}
+
+async function slackApi<T>(path: string, init?: { method: 'GET' | 'POST'; body?: unknown }): Promise<T> {
+  const { data } = await supabase.auth.getSession();
+  const token = data.session?.access_token;
+  const headers: Record<string, string> = { Accept: 'application/json' };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  if (init?.body !== undefined) headers['Content-Type'] = 'application/json';
+  const res = await fetch(`${API_URL}/api/admin/modules/broadcasts/slack${path}`, {
+    method: init?.method ?? 'GET',
+    headers,
+    body: init?.body !== undefined ? JSON.stringify(init.body) : undefined,
+  });
+  const json = (await res.json().catch(() => ({}))) as T & { error?: string };
+  if (!res.ok) throw new Error(json?.error || `Request failed (${res.status})`);
+  return json;
+}
+
+export interface SlackStatus {
+  bot?: { configured: boolean; ok?: boolean; error?: string; team?: string; name?: string; missing_scopes?: string[] };
+  welcome_sender?: { connected: boolean; name?: string | null; status?: string | null };
+}
+
+export function getSlackStatus(): Promise<SlackStatus> {
+  return slackApi<SlackStatus>('/status');
+}
+
+/** DM the broadcast's message (event variables filled) to one person, by email. */
+export async function sendSlackTest(parent: Broadcast, email: string): Promise<void> {
+  const text = await resolveSlackText(parent);
+  await slackApi('/test', { method: 'POST', body: { email, text, sender: parent.slack_sender ?? 'bot' } });
 }
 
 export async function getTimezoneBreakdown(id: string): Promise<TimezoneBreakdownRow[]> {
