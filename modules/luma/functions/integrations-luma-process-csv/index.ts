@@ -249,7 +249,7 @@ async function processEventGuests(
       luma_approval_status: row.approval_status,
       luma_checked_in_at: row.checked_in_at ? new Date(row.checked_in_at).toISOString() : null,
       luma_qr_code_url: row.qr_code_url,
-      luma_custom_source: row.custom_source || null,
+      luma_custom_source: sanitizeUtmSource(row.custom_source),
       luma_ticket_type_id: row.ticket_type_id || null,
       luma_ticket_name: row.ticket_name || null,
       luma_registered_at: row.created_at ? new Date(row.created_at).toISOString() : null,
