@@ -7,7 +7,7 @@ const lumaIntegrationModule: GatewazeModule = {
   visibility: 'public',
   name: 'Luma.com Integration',
   description: 'Sync events and registrations from Luma — process webhooks, CSV imports, and issue discount codes',
-  version: '1.1.1',
+  version: '1.2.0',
   features: [
     'luma.sync',
     'luma.webhooks',
