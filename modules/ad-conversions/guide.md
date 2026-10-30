@@ -8,7 +8,8 @@ Server-side conversion events for Meta (Facebook/Instagram), Reddit and LinkedIn
 2. **Registration.** Every registration path (Luma email, Luma webhook, Luma CSV, portal form) inserts into `events_registrations`. The Luma paths store the session id and the raw `utm_source` in `registration_metadata`.
 3. **Dispatch.** The `send_conversion_on_registration` trigger (migration 001) fires after each insert and posts `{registrationId}` to the `integrations-send-conversion` edge function through pg_net. It skips cancelled rows and registrations older than 7 days (a backfilled CSV is not a fresh conversion).
 4. **Matching.** The dispatcher finds the tracking session in three tiers: the session id from the registration metadata, then SHA-256 email plus event, then a session for the same event in the last 30 minutes that was not redirected off site.
-5. **Sending.** For each platform with an active config, the dispatcher calls the platform function. With a matched session, a platform is only sent when its own click id is present; without a session every active platform receives the hashed-email event. Each attempt is written to `integrations_conversion_log` with the response.
+5. **Consent.** A matched session carries the visitor's marketing consent (`tracking_consent`, `consented_platforms`). If the session records a refusal or no consent, nothing is sent for that registration, not even the hashed email. With consent, session data (click id, cookies, IP, user agent) goes only to the platforms the visitor consented to. A registration with no session at all is sent as a hashed email only, which is the same signal as the warehouse export of registrations.
+6. **Sending.** For each platform with an active config, the dispatcher calls the platform function. With a matched session, a platform is only sent when its own click id is present. Each attempt is written to `integrations_conversion_log` with the response.
 
 Edge functions: `integrations-send-conversion` (dispatcher), `integrations-send-meta-conversion`, `integrations-send-reddit-conversion`, `integrations-send-linkedin-conversion`. All four require `Authorization: Bearer <service-role key>`; the trigger and the dispatcher supply it.
 
@@ -27,7 +28,7 @@ Deploy the four edge functions (nothing in CI deploys edge functions).
 
 ## Platform credentials
 
-Credentials live in `ad_platform_configs`, read only by the service role through `get_ad_platform_config`. A row is scoped to an event (`event_id`), an account (`account_id`) or the whole brand (both null); resolution is event, then account, then brand. Environment variables on the edge functions are the last fallback.
+Credentials live in `ad_platform_configs`. Super admins manage rows in the admin Tracking tab; the edge functions read them with the service role through `get_ad_platform_config`. A row is scoped to an event (`event_id`), an account (`account_id`) or the whole brand (both null); resolution is event, then account, then brand. Environment variables on the edge functions are the last fallback.
 
 | Platform | `credentials` keys | Env fallback |
 |---|---|---|

@@ -29,6 +29,11 @@ COMMENT ON COLUMN public.integrations_ad_tracking_sessions.external_redirect_at 
 COMMENT ON COLUMN public.integrations_ad_tracking_sessions.consented_platforms IS
   'Platforms the visitor consented to share conversion data with. Empty means no marketing consent; senders then use the hashed email only.';
 
+-- The senders look a session up by session_id with maybeSingle(); a duplicate
+-- would make that lookup fail and attribution silently stop for that id.
+CREATE UNIQUE INDEX IF NOT EXISTS uq_integrations_tracking_sessions_session_id
+  ON public.integrations_ad_tracking_sessions (session_id);
+
 CREATE INDEX IF NOT EXISTS idx_integrations_tracking_sessions_email_event
   ON public.integrations_ad_tracking_sessions (email_hash, event_id)
   WHERE email_hash IS NOT NULL;
@@ -77,9 +82,15 @@ DROP POLICY IF EXISTS "ad_tracking_sessions_update_browser" ON public.integratio
 DROP POLICY IF EXISTS "ad_tracking_sessions_select_admin" ON public.integrations_ad_tracking_sessions;
 DROP POLICY IF EXISTS "ad_tracking_sessions_write_admin" ON public.integrations_ad_tracking_sessions;
 
+-- A browser can only create a fresh, pending session with a bounded lifetime.
 CREATE POLICY "ad_tracking_sessions_insert_browser"
   ON public.integrations_ad_tracking_sessions FOR INSERT TO anon, authenticated
-  WITH CHECK (true);
+  WITH CHECK (
+    status = 'pending'
+    AND matched_registration_id IS NULL
+    AND conversions_sent IS NULL
+    AND (expires_at IS NULL OR expires_at <= now() + interval '8 days')
+  );
 CREATE POLICY "ad_tracking_sessions_update_browser"
   ON public.integrations_ad_tracking_sessions FOR UPDATE TO anon, authenticated
   USING (true) WITH CHECK (true);
@@ -91,6 +102,41 @@ CREATE POLICY "ad_tracking_sessions_select_anon"
 CREATE POLICY "ad_tracking_sessions_select_admin"
   ON public.integrations_ad_tracking_sessions FOR SELECT TO authenticated
   USING (public.is_admin());
+
+-- The two post-insert updates the portal makes, as one RPC that works for
+-- anon and signed-in members alike without giving either role a row read.
+-- (A signed-in member runs as `authenticated`, whose SELECT policy above is
+-- admin-only, so a direct UPDATE ... WHERE session_id would match nothing.)
+CREATE OR REPLACE FUNCTION public.event_tracking_touch_session(
+  p_session_id        text,
+  p_external_redirect boolean DEFAULT false,
+  p_email_hash        text    DEFAULT NULL
+)
+RETURNS boolean
+LANGUAGE plpgsql SECURITY DEFINER
+SET search_path = public, pg_temp
+AS $$
+BEGIN
+  IF p_session_id IS NULL OR p_session_id !~ '^[A-Za-z0-9_-]{1,64}$' THEN
+    RETURN false;
+  END IF;
+  IF p_email_hash IS NOT NULL AND p_email_hash !~ '^[0-9a-f]{64}$' THEN
+    RETURN false;
+  END IF;
+
+  UPDATE public.integrations_ad_tracking_sessions
+     SET external_redirect_at = CASE WHEN p_external_redirect THEN coalesce(external_redirect_at, now()) ELSE external_redirect_at END,
+         email_hash           = coalesce(p_email_hash, email_hash)
+   WHERE session_id = p_session_id
+     AND status = 'pending'
+     AND (expires_at IS NULL OR expires_at > now());
+
+  RETURN FOUND;
+END;
+$$;
+
+REVOKE ALL ON FUNCTION public.event_tracking_touch_session(text, boolean, text) FROM PUBLIC;
+GRANT EXECUTE ON FUNCTION public.event_tracking_touch_session(text, boolean, text) TO anon, authenticated, service_role;
 
 -- Conversion log: written by the edge functions (service role), read by
 -- admins only. 001 let every authenticated user do anything.

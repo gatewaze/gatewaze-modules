@@ -324,6 +324,7 @@ async function findTrackingSession(
     .eq('event_id', eventId)
     .eq('status', 'pending')
     .is('email_hash', null)
+    .eq('tracking_consent', true)
     .is('external_redirect_at', null)
     .gte('created_at', thirtyMinutesAgo)
     .gte('expires_at', new Date().toISOString())

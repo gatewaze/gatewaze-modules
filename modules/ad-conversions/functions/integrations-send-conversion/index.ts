@@ -262,6 +262,7 @@ async function findTrackingSession(
     .eq('event_id', eventId)
     .eq('status', 'pending')
     .is('email_hash', null)
+    .eq('tracking_consent', true)
     .is('external_redirect_at', null)
     .gte('created_at', thirtyMinutesAgo)
     .gte('expires_at', new Date().toISOString())
@@ -513,12 +514,24 @@ Deno.serve(async (req) => {
 
     let trackingSession = await findTrackingSession(conversionDetails.email, conversionDetails.event_id, resolvedTrackingSessionId)
 
-    // No marketing consent on the session: forget the session entirely so no
-    // click id, IP or user agent is forwarded. The hashed email alone is
-    // still sent (same signal as the warehouse batch export).
+    // A session that recorded a refusal (or no consent at all) is a decision
+    // the visitor made: send nothing for this registration, not even the
+    // hashed email. Only a registration with NO session at all falls back to
+    // the hashed-email-only send (the same signal as the warehouse export).
     if (trackingSession && !sessionHasAnyConsent(trackingSession)) {
-      console.log('Tracking session without consent, sending hashed email only:', trackingSession.id)
-      trackingSession = null
+      console.log('Tracking session without consent, skipping conversion:', trackingSession.id)
+      return new Response(
+        JSON.stringify({
+          success: true,
+          message: 'Visitor declined marketing consent; no conversion sent',
+          reason: 'no_consent',
+          platformsProcessed: 0,
+        }),
+        {
+          status: 200,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        }
+      )
     }
 
     console.log('Tracking session found:', !!trackingSession)

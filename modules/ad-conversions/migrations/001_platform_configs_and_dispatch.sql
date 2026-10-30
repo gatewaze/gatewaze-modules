@@ -11,10 +11,11 @@
 --                  registration edge functions have relied on by comment only.
 --              The trigger posts to the integrations-send-conversion edge
 --              function through pg_net. It reads the Supabase URL and the
---              service-role key from Vault (names gw_supabase_url and
---              gw_service_role_key), falling back to the app.supabase_url /
---              app.service_role_key settings. With neither present it is a
---              no-op, so the migration is safe to apply before any setup.
+--              service-role key as a pair from Vault (gw_supabase_url and
+--              gw_service_role_key); only when Vault holds neither does it
+--              read the pair from app.supabase_url / app.service_role_key.
+--              The two sources are never mixed. With no complete pair it is
+--              a no-op, so the migration is safe to apply before any setup.
 -- Requires: event-tracking 002 (tracking session columns), pg_net for dispatch.
 -- ============================================================================
 
@@ -40,7 +41,7 @@ CREATE TABLE IF NOT EXISTS public.ad_platform_configs (
 );
 
 COMMENT ON TABLE public.ad_platform_configs IS
-  'Ad platform Conversions API credentials. Resolution order for an event: event row, then its account row, then the brand-wide row (event_id and account_id both null). Credentials are read only through get_ad_platform_config by the service role.';
+  'Ad platform Conversions API credentials. Resolution order for an event: event row, then its account row, then the brand-wide row (event_id and account_id both null). Managed by super admins in the admin Tracking tab; the edge functions read it through get_ad_platform_config with the service role.';
 COMMENT ON COLUMN public.ad_platform_configs.credentials IS
   'meta: {pixel_id, access_token, test_event_code?}. reddit: {pixel_id, access_token, test_mode?}. linkedin: {conversion_id, access_token, purchase_conversion_id?, api_version?}.';
 
@@ -56,16 +57,19 @@ CREATE TRIGGER ad_platform_configs_updated_at
   BEFORE UPDATE ON public.ad_platform_configs
   FOR EACH ROW EXECUTE FUNCTION public.set_updated_at();
 
--- Credentials: RLS on. Admins manage rows from the admin Tracking tab
--- (authenticated role, is_admin()); the edge functions read through the
--- service role, which bypasses RLS. Nothing for anon.
+-- Credentials: RLS on. Super admins manage rows from the admin Tracking tab
+-- (authenticated role). is_admin() would also admit editors, and these rows
+-- hold live ad-account tokens, so the bar is is_super_admin(). The edge
+-- functions read through the service role, which bypasses RLS. Nothing for
+-- anon.
 ALTER TABLE public.ad_platform_configs ENABLE ROW LEVEL SECURITY;
 REVOKE ALL ON public.ad_platform_configs FROM anon, authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.ad_platform_configs TO authenticated;
 DROP POLICY IF EXISTS "ad_platform_configs_admin_all" ON public.ad_platform_configs;
-CREATE POLICY "ad_platform_configs_admin_all"
+DROP POLICY IF EXISTS "ad_platform_configs_super_admin_all" ON public.ad_platform_configs;
+CREATE POLICY "ad_platform_configs_super_admin_all"
   ON public.ad_platform_configs FOR ALL TO authenticated
-  USING (public.is_admin()) WITH CHECK (public.is_admin());
+  USING (public.is_super_admin()) WITH CHECK (public.is_super_admin());
 
 -- ---------------------------------------------------------------------------
 -- 2. Config resolution RPCs (service role only)
