@@ -44,6 +44,10 @@ describe('interpret', () => {
     expect(interpret(sample('6', { did_you_mean: 'Jane@Gmail.com' })).suggestion).toBe('jane@gmail.com');
   });
 
+  it('keeps an undeliverable role address invalid', () => {
+    expect(interpret(sample('6', { role: 'true' }))).toMatchObject({ status: 'invalid', reason: 'mailbox_not_found' });
+  });
+
   it('refuses an unknown code rather than guessing', () => {
     expect(() => interpret(sample('9'))).toThrow(/no known result code/);
   });
@@ -84,6 +88,33 @@ describe('provider', () => {
     const err = await provider.verify('jane@acme.com', c).catch((e) => e);
     expect(err.kind).toBe(kind);
     expect(String(err.message)).not.toContain(KEY);
+  });
+
+  it('refuses to follow redirects, since the key is in the URL', async () => {
+    let init: RequestInit | undefined;
+    const c = ctx(() => json(sample('5'))).ctx;
+    const inner = c.fetch;
+    c.fetch = (async (input: RequestInfo | URL, i?: RequestInit) => { init = i; return inner(input, i); }) as typeof fetch;
+    await provider.verify('jane@acme.com', c);
+    expect(init?.redirect).toBe('error');
+  });
+
+  it('reports a missing key as auth without calling Debounce', async () => {
+    const { ctx: c, seen } = ctx(() => json(sample('5')), {});
+    expect((await provider.verify('jane@acme.com', c).catch((e) => e)).kind).toBe('auth');
+    expect(seen).toHaveLength(0);
+  });
+
+  it('spots low credits from the message whatever the status, so the provider is stopped', async () => {
+    const { ctx: c } = ctx(() => json({ error: 'Credits Low', success: '0' }, 200));
+    expect((await provider.verify('jane@acme.com', c).catch((e) => e)).kind).toBe('credits');
+  });
+
+  it('treats a non-JSON 200 and a 200 with success 0 as bad responses', async () => {
+    const html = ctx(() => new Response('<html>oops</html>', { status: 200 })).ctx;
+    expect((await provider.verify('jane@acme.com', html).catch((e) => e)).kind).toBe('bad_response');
+    const failed = ctx(() => json({ debounce: { code: '5' }, success: '0' })).ctx;
+    expect((await provider.verify('jane@acme.com', failed).catch((e) => e)).kind).toBe('bad_response');
   });
 
   it('reports a network failure as temporary without the URL', async () => {

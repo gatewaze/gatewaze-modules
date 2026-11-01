@@ -10,7 +10,8 @@
 import { createClient } from '@supabase/supabase-js';
 import { promises as dns } from 'node:dns';
 import type { Job } from 'bullmq';
-import { parseConfig, providerDailyLimit, PROVIDER_PREFIX, type VerificationConfig } from '../lib/config';
+import { makeBudget, orderProviders } from '../lib/budget';
+import { parseConfig, PROVIDER_PREFIX, type VerificationConfig } from '../lib/config';
 import { loadProviders, type LoadedProvider } from '../lib/load-providers';
 import { lookupDomain, type DomainResult } from '../lib/mx';
 import { unsealSecret } from '../lib/secret-envelope';
@@ -34,24 +35,6 @@ function client() {
 
 function unseal(v: unknown): string | null {
   return typeof v === 'string' ? unsealSecret(v) : null;
-}
-
-/** Providers in the configured order; with no order set, every enabled provider by id. */
-export function orderProviders(loaded: LoadedProvider[], config: VerificationConfig): {
-  primary: LoadedProvider[]; escalation: LoadedProvider | null; compare: LoadedProvider | null;
-} {
-  const byId = new Map(loaded.map((p) => [p.id, p]));
-  const special = new Set([config.escalationProvider, config.compareProvider].filter(Boolean));
-  const ordered = config.providerOrder.length > 0
-    ? config.providerOrder.map((id) => byId.get(id)).filter(Boolean)
-    : [...loaded].filter((p) => !special.has(p.id)).sort((a, b) => a.id.localeCompare(b.id));
-  // A provider set only for escalation or compare is not also a first choice,
-  // unless the order names it.
-  return {
-    primary: ordered as LoadedProvider[],
-    escalation: config.escalationProvider ? byId.get(config.escalationProvider) ?? null : null,
-    compare: config.compareProvider ? byId.get(config.compareProvider) ?? null : null,
-  };
 }
 
 async function mapLimit<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
@@ -107,14 +90,10 @@ async function run(supabase, mods, config: VerificationConfig, started: number, 
 
   // Daily limits: one across all providers, plus any a provider sets itself.
   const today = new Date().toISOString().slice(0, 10);
-  const { data: usageRows } = await supabase.from('email_verification_usage').select('provider, checks').eq('day', today);
-  const usedBy = new Map<string, number>((usageRows ?? []).map((u) => [u.provider, u.checks]));
-  let paidLeft = Math.max(0, config.dailyPaidLimit - [...usedBy.values()].reduce((a, b) => a + b, 0));
-  const providerLeft = new Map<string, number>();
-  for (const p of loaded) {
-    const cap = providerDailyLimit(p.config);
-    providerLeft.set(p.id, cap === null ? Infinity : Math.max(0, cap - (usedBy.get(p.id) ?? 0)));
-  }
+  const { data: usageRows, error: usageErr } = await supabase.from('email_verification_usage').select('provider, checks').eq('day', today);
+  // A failed read must not make a used-up limit look fresh: no paid checks this run.
+  if (usageErr) console.warn(`[email-verification] usage read failed, no paid checks this run: ${usageErr.message}`);
+  const budget = makeBudget(usageErr ? null : (usageRows ?? []), config.dailyPaidLimit, loaded);
   const spent = new Map<string, number>();
 
   const { primary, escalation, compare } = config.dailyPaidLimit > 0 ? orderProviders(loaded, config) : { primary: [], escalation: null, compare: null };
@@ -167,13 +146,8 @@ async function run(supabase, mods, config: VerificationConfig, started: number, 
         escalation: slot(escalation),
         compare: slot(compare),
         inCompareSample: (e) => sampleBucket(e) < config.comparePercent,
-        take: (id) => {
-          const left = providerLeft.get(id) ?? 0;
-          if (paidLeft <= 0 || left <= 0) return false;
-          paidLeft--; providerLeft.set(id, left - 1);
-          return true;
-        },
-        giveBack: (id) => { paidLeft++; providerLeft.set(id, (providerLeft.get(id) ?? 0) + 1); },
+        take: budget.take,
+        giveBack: budget.giveBack,
         stopped,
         call: async (s, e) => {
           const ac = new AbortController();

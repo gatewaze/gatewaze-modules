@@ -18,6 +18,17 @@ describe('parseConfig', () => {
     expect(c.suppressInvalid).toBe(false);
   });
 
+  it('caps the run budget well inside the 900-second lease', () => {
+    expect(parseConfig({ budget_ms: 10_000_000 }).budgetMs).toBe(240_000);
+    expect(parseConfig({ budget_ms: 1 }).budgetMs).toBe(10_000);
+  });
+
+  it('reads booleans from strings and provider lists from arrays', () => {
+    expect(parseConfig({ suppress_invalid: 'true' }).suppressInvalid).toBe(true);
+    expect(parseConfig({ suppress_invalid: 'nonsense' }).suppressInvalid).toBe(true);
+    expect(parseConfig({ provider_order: ['debounce', 'kickbox'] }).providerOrder).toEqual(['email-verification-debounce', 'email-verification-kickbox']);
+  });
+
   it('turns short provider names into module ids, without duplicates', () => {
     const c = parseConfig({ provider_order: 'debounce, Kickbox,email-verification-debounce,,', escalation_provider: 'bounceban' });
     expect(c.providerOrder).toEqual(['email-verification-debounce', 'email-verification-kickbox']);

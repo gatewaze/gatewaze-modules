@@ -1,4 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
+
+// Lets one test pretend every candidate file exists, so the id guard (not a
+// missing file) is what keeps a bad id out.
+const fsState = vi.hoisted(() => ({ everythingExists: false }));
+vi.mock('node:fs', async (orig) => {
+  const real = await orig<typeof import('node:fs')>();
+  return { ...real, existsSync: (p: string) => fsState.everythingExists || real.existsSync(p) };
+});
+
 import { loadProviders, providerPaths } from '../load-providers';
 import { verifyAddress } from '../verify';
 
@@ -26,6 +35,24 @@ describe('loadProviders', () => {
     ]);
     expect(out).toEqual([]);
     warn.mockRestore();
+  });
+
+  it('never tries to import a malformed id, even when a file exists at the path', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    fsState.everythingExists = true;
+    try {
+      const out = await loadProviders([
+        { id: 'email-verification-../../etc', config: {} },
+        { id: 'email-verification-a/b', config: {} },
+        { id: 'other-module', config: {} },
+      ]);
+      expect(out).toEqual([]);
+      // An attempted import would have logged "could not load" or "does not export".
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      fsState.everythingExists = false;
+      warn.mockRestore();
+    }
   });
 
   it('runs a real provider through the decision sequence, including its error kinds', async () => {

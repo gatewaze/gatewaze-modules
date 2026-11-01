@@ -18,6 +18,11 @@ describe('checkLocally', () => {
     expect(checkLocally(email).verdict).toEqual({ status: 'invalid', reason: 'syntax', suggestion: null });
   });
 
+  it('rejects an address over 254 characters even when each part is within its own limit', () => {
+    const domain = `${'a'.repeat(60)}.${'b'.repeat(60)}.${'c'.repeat(60)}.example.com`;
+    expect(checkLocally(`${'x'.repeat(64)}@${domain}`).verdict?.reason).toBe('syntax');
+  });
+
   it('accepts an IDN top-level domain', () => {
     expect(checkLocally('jane@example.xn--p1ai').verdict).toBeNull();
   });
