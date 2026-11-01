@@ -26,6 +26,13 @@ export function assertFolderPrefix(prefix: string): string {
   return p;
 }
 
+/** The string without trailing slashes. A loop, not /\/+$/, which is slow on long runs of slashes. */
+export function trimTrailingSlashes(s: string): string {
+  let end = s.length;
+  while (end > 0 && s.charCodeAt(end - 1) === 47) end -= 1;
+  return s.slice(0, end);
+}
+
 /** A bucket name as S3 allows it. Bucket names reach URLs and signed strings. */
 export function isValidBucket(bucket: string): boolean {
   return /^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(bucket);

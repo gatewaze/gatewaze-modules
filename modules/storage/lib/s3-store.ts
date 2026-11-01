@@ -7,7 +7,7 @@
  * loads it. The packages are dependencies of the provider modules.
  */
 
-import { assertFolderPrefix, assertSafeKey, clampInt, countedStream, defaultCacheControl, encodeKey, isBuffer, versionParam } from './keys.js';
+import { assertFolderPrefix, assertSafeKey, clampInt, countedStream, defaultCacheControl, encodeKey, isBuffer, trimTrailingSlashes, versionParam } from './keys.js';
 import type { Body, HeadResult, ImageSize, ListEntry, ObjectStore, PutOptions, SignedUpload, SignUploadOptions, UrlOptions } from './types.js';
 
 export interface S3StoreSettings {
@@ -94,7 +94,7 @@ export function cloudflareImageOptions(size: ImageSize): string {
 }
 
 export function s3Store(settings: S3StoreSettings, bucket: string): ObjectStore {
-  const base = settings.publicBaseUrl.replace(/\/+$/, '');
+  const base = trimTrailingSlashes(settings.publicBaseUrl);
 
   return {
     provider: settings.provider,
