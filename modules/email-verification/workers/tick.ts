@@ -94,7 +94,22 @@ async function run(supabase, mods, config: VerificationConfig, started: number, 
   // A failed read must not make a used-up limit look fresh: no paid checks this run.
   if (usageErr) console.warn(`[email-verification] usage read failed, no paid checks this run: ${usageErr.message}`);
   const budget = makeBudget(usageErr ? null : (usageRows ?? []), config.dailyPaidLimit, loaded);
-  const spent = new Map<string, number>();
+  // Each answered paid check is saved straight away, so a run that dies
+  // part-way cannot leave the next run thinking the money was not spent.
+  // If saving fails, stop paid checks for the rest of this run.
+  const recordSpend = async (providerId: string) => {
+    let message: string | null = null;
+    try {
+      const { error } = await supabase.rpc('email_verification_add_usage', { p_provider: providerId, p_checks: 1 });
+      if (error) message = error.message;
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    if (message !== null) {
+      console.warn(`[email-verification] usage write failed for ${providerId}, no more paid checks this run: ${message}`);
+      budget.close();
+    }
+  };
 
   const { primary, escalation, compare } = config.dailyPaidLimit > 0 ? orderProviders(loaded, config) : { primary: [], escalation: null, compare: null };
   const slot = (p: LoadedProvider | null): ProviderSlot | null => (p ? { id: p.id, provider: p.provider, config: p.config } : null);
@@ -153,7 +168,9 @@ async function run(supabase, mods, config: VerificationConfig, started: number, 
           const ac = new AbortController();
           const timer = setTimeout(() => ac.abort(), PROVIDER_TIMEOUT_MS);
           try {
-            return await s.provider.verify(e, { config: s.config, unsealSecret: unseal, fetch, signal: ac.signal });
+            const answer = await s.provider.verify(e, { config: s.config, unsealSecret: unseal, fetch, signal: ac.signal });
+            await recordSpend(s.id);
+            return answer;
           } finally {
             clearTimeout(timer);
           }
@@ -161,7 +178,7 @@ async function run(supabase, mods, config: VerificationConfig, started: number, 
       });
       for (const c of r.calls) {
         calls.push({ ...c, email });
-        if (c.result) { spent.set(c.provider, (spent.get(c.provider) ?? 0) + 1); result.paid++; }
+        if (c.result) result.paid++;
       }
       if (!r.outcome) { records.push({ email, retry: true }); result.retry++; return; }
       if (r.paidPending) result.paidPending++;
@@ -202,11 +219,6 @@ async function run(supabase, mods, config: VerificationConfig, started: number, 
     );
     if (error) { console.warn(`[email-verification] provider results write failed: ${error.message}`); break; }
   }
-  for (const [provider, n] of spent) {
-    const { error } = await supabase.rpc('email_verification_add_usage', { p_provider: provider, p_checks: n });
-    if (error) console.warn(`[email-verification] usage write failed for ${provider}: ${error.message}`);
-  }
-
   for (let i = 0; i < records.length; i += WRITE_BATCH) {
     const { error } = await supabase.rpc('email_verification_record', {
       p_rows: records.slice(i, i + WRITE_BATCH),

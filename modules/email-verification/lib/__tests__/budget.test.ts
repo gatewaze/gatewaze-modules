@@ -37,6 +37,14 @@ describe('makeBudget', () => {
     expect(b.take('a')).toBe(false);
   });
 
+  it('allows nothing more once closed', () => {
+    const b = makeBudget([], 10, [p('a')]);
+    expect(b.take('a')).toBe(true);
+    b.close();
+    expect(b.take('a')).toBe(false);
+    expect(b.left()).toBe(0);
+  });
+
   it('refuses a provider it does not know', () => {
     expect(makeBudget([], 10, [p('a')]).take('zzz')).toBe(false);
   });

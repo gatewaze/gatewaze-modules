@@ -30,7 +30,7 @@ With more than one enabled:
 
 - `email_verifications` holds one row per address: status (valid, risky, invalid), reason, level (domain, mailbox or delivery), who decided, the inbox provider, and when to check again (default 180 days).
 - The same result is copied onto the person as `attributes.email_check`, `email_check_reason`, `email_check_level` and `email_provider`, so segments can filter on it, e.g. prospects with `email_check` equal to `valid`.
-- With `suppress_invalid` on (the default), invalid addresses are added to broadcast suppressions with topic `all`, so broadcasts skip them. The module never removes a suppression by itself, because the same row can also stand for an unsubscribe. An admin can lift one from the lookup on the admin page (**Allow broadcasts again**), which removes only rows this module added.
+- With `suppress_invalid` on (the default), invalid addresses are added to broadcast suppressions under the email topics (`broadcasts` and `plays`), so email broadcasts and plays skip them. Slack broadcasts are not affected, because a Slack message does not depend on the address. The module never removes a suppression by itself, because the same row can also stand for an unsubscribe. An admin can lift one from the lookup on the admin page (**Allow broadcasts again**), which removes only rows this module added.
 - A hard bounce stays invalid. A later check does not overwrite it.
 - `email_verification_provider_results` keeps every paid answer for the audit trail.
 

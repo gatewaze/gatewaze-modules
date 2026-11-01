@@ -14,7 +14,8 @@
 -- attributes.email_check (valid | risky | invalid), email_check_reason,
 -- email_check_level (domain | mailbox | delivery) and email_provider (google,
 -- microsoft, ...). With suppress_invalid on (the default), an invalid address
--- is added to broadcast_suppressions (topic 'all') so broadcasts skip it.
+-- is added to broadcast_suppressions (topics 'broadcasts' and 'plays') so
+-- email broadcasts skip it. Slack broadcasts are not affected.
 -- The module never removes a suppression by itself: a suppression row with
 -- the same email and topic may also stand for an unsubscribe, so only an admin
 -- lifts one, through email_verification_lift_suppression().
@@ -131,6 +132,9 @@ AS $$
     FROM public.people p
     LEFT JOIN public.email_verifications v ON v.email = lower(p.email)
     WHERE p.email IS NOT NULL AND p.email <> ''
+      -- Results are stored trimmed, so an address with spaces round it would
+      -- never match its row and be checked (and paid for) every run.
+      AND p.email = btrim(p.email)
       AND (v.email IS NULL OR v.next_check_at <= now())
     GROUP BY lower(p.email)
   ) d
@@ -156,6 +160,13 @@ LANGUAGE sql VOLATILE SECURITY DEFINER SET search_path = public, pg_temp
 AS $$
   UPDATE public.email_verification_lease SET locked_until = '-infinity', holder = NULL WHERE id AND holder = p_holder;
 $$;
+
+-- The suppression topics email sends check: broadcasts and plays. Slack
+-- sends use 'slack' and are left alone.
+CREATE OR REPLACE FUNCTION public.email_verification_topics()
+RETURNS text[]
+LANGUAGE sql IMMUTABLE SET search_path = pg_catalog, pg_temp
+AS $$ SELECT ARRAY['broadcasts', 'plays']::text[] $$;
 
 -- ----------------------------------------------------------------------------
 -- Apply one verdict: the verification row, the person's attributes, and the
@@ -223,12 +234,15 @@ BEGIN
        OR p.attributes->>'email_check_level' IS DISTINCT FROM p_level
        OR (COALESCE(p_mailbox_provider, 'unknown') <> 'unknown' AND p.attributes->>'email_provider' IS DISTINCT FROM p_mailbox_provider));
 
-  -- Broadcasts skip suppressed addresses. Add one for an invalid address and
-  -- leave any existing row (an unsubscribe, a manual suppression) as it is.
+  -- Email broadcasts and plays skip suppressed addresses. Add one for an
+  -- invalid address under each email topic, not 'all': a Slack broadcast
+  -- reaches the person's Slack account and does not depend on the address.
+  -- Any existing row (an unsubscribe, a manual suppression) is left as it is.
   IF p_status = 'invalid' AND p_suppress AND to_regclass('public.broadcast_suppressions') IS NOT NULL THEN
     EXECUTE 'INSERT INTO public.broadcast_suppressions (email, topic, reason, source)
-             VALUES ($1, ''all'', $2, ''email-verification'') ON CONFLICT DO NOTHING'
-      USING v_email, 'email_check:' || COALESCE(p_reason, 'invalid');
+             SELECT $1, t, $2, ''email-verification'' FROM unnest($3::text[]) AS t
+             ON CONFLICT DO NOTHING'
+      USING v_email, 'email_check:' || COALESCE(p_reason, 'invalid'), public.email_verification_topics();
   END IF;
 END $$;
 
@@ -444,7 +458,7 @@ BEGIN
   END IF;
   IF to_regclass('public.broadcast_suppressions') IS NOT NULL THEN
     EXECUTE 'DELETE FROM public.broadcast_suppressions
-              WHERE lower(email) = $1 AND topic = ''all'' AND source = ''email-verification'''
+              WHERE lower(email) = $1 AND source = ''email-verification'''
       USING lower(trim(p_email));
     GET DIAGNOSTICS n = ROW_COUNT;
   END IF;
