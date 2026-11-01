@@ -16,7 +16,7 @@
  * sanitised on upload.
  */
 
-import { assertFolderPrefix, assertSafeKey, clampInt, countedStream, defaultCacheControl, isBuffer, maxAgeSeconds, versionParam } from './keys.js';
+import { assertFolderPrefix, assertSafeKey, clampInt, countedStream, defaultCacheControl, isBuffer, maxAgeSeconds, trimTrailingSlashes, versionParam } from './keys.js';
 import type { HeadResult, ImageSize, ListEntry, ObjectStore, PutOptions, SignedUpload, SignUploadOptions, UrlOptions, Body } from './types.js';
 
 export interface SupabaseStoreSettings {
@@ -44,7 +44,7 @@ export interface SupabaseStorageClient {
   };
 }
 
-const trimSlash = (s: string) => s.replace(/\/+$/, '');
+const trimSlash = trimTrailingSlashes;
 
 export function supabaseSettingsFromEnv(env: Record<string, string | undefined>): SupabaseStoreSettings {
   const internalUrl = trimSlash(String(env.SUPABASE_URL ?? '').trim());
@@ -165,7 +165,7 @@ export function supabaseStore(client: SupabaseStorageClient, settings: SupabaseS
     async list(prefix: string, max = 2000): Promise<ListEntry[]> {
       // Supabase lists one folder level a page at a time, so walk it.
       const out: ListEntry[] = [];
-      const queue = [assertFolderPrefix(prefix).replace(/\/+$/, '')];
+      const queue = [trimTrailingSlashes(assertFolderPrefix(prefix))];
       let folders = 0;
       while (queue.length && out.length < max && folders < 500) {
         const dir = queue.shift() as string;

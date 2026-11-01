@@ -12,7 +12,7 @@
  */
 
 import { s3Store } from '../../storage/lib/s3-store.js';
-import { isValidBucket } from '../../storage/lib/keys.js';
+import { isValidBucket, trimTrailingSlashes } from '../../storage/lib/keys.js';
 import { unsealSecret } from '../../storage/lib/secret-envelope.js';
 import type { StorageProviderModule } from '../../storage/lib/types.js';
 
@@ -41,7 +41,7 @@ export function r2Settings(env: Record<string, string | undefined>, cfg: Record<
   const bucket = pick(env, cfg, 'R2_BUCKET');
   const accessKeyId = pick(env, cfg, 'R2_ACCESS_KEY_ID', true);
   const secretAccessKey = pick(env, cfg, 'R2_SECRET_ACCESS_KEY', true);
-  const publicBaseUrl = pick(env, cfg, 'R2_PUBLIC_URL').replace(/\/+$/, '');
+  const publicBaseUrl = trimTrailingSlashes(pick(env, cfg, 'R2_PUBLIC_URL'));
   const resize = pick(env, cfg, 'R2_IMAGE_RESIZING').toLowerCase() === 'true';
   const j = pick(env, cfg, 'R2_JURISDICTION').toLowerCase();
   if (!accountId || !bucket || !accessKeyId || !secretAccessKey || !publicBaseUrl) return null;
