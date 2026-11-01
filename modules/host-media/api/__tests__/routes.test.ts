@@ -56,7 +56,7 @@ function mockSupabase(overrides: Record<string, unknown> = {}) {
       const tableErr = (overrides as Record<string, unknown>)[`from-err:${table}`] ?? null;
       return {
         ...queryBuilder(tableData, tableErr),
-        insert: () => ({ select: () => ({ single: () => Promise.resolve({ data: tableData, error: tableErr }) }) }),
+        insert: (row: unknown) => { calls.push({ table, args: row }); return { select: () => ({ single: () => Promise.resolve({ data: tableData, error: tableErr }) }) }; },
         update: () => queryBuilder(tableData, tableErr),
         delete: () => queryBuilder(tableData, tableErr),
       };
@@ -217,6 +217,64 @@ describe('host-media routes', () => {
       await routes.patchMedia(req, res as never);
       expect(res.statusCode).toBe(400);
       expect((res.body as { error: string }).error).toBe('no_fields');
+    });
+  });
+
+  describe('storage location', () => {
+    it('records the provider and bucket the adapter wrote to', async () => {
+      const deps = makeDeps({ 'rpc:host_media_quota_check': { ok: true }, 'from:host_media': { id: MEDIA_ID } });
+      deps.mediaAdapter.upload = async (args) => ({
+        storagePath: `site/${args.hostId}/${args.mediaId}/a.jpg`, cdnUrl: 'https://media.example/a.jpg', storageProvider: 'r2', storageBucket: 'media-bucket',
+      });
+      deps.parseUploadedFiles = async () => [{ filename: 'a.jpg', mimeType: 'image/jpeg', bytes: 3, buffer: Buffer.from('abc') }];
+      const routes = createMediaRoutes(deps);
+      const res = mockRes();
+      await routes.uploadMedia({ params: { hostKind: 'site', hostId: SITE_ID }, query: {}, body: {}, userId: USER_ID } as never, res as never);
+      expect(res.statusCode).toBe(200);
+      const insert = deps.supabase.calls.find((c) => c.table === 'host_media' && c.args);
+      expect(insert.args).toMatchObject({ storage_provider: 'r2', storage_bucket: 'media-bucket' });
+    });
+
+    it('leaves the columns to their Supabase defaults when the adapter does not say', async () => {
+      const deps = makeDeps({ 'rpc:host_media_quota_check': { ok: true }, 'from:host_media': { id: MEDIA_ID } });
+      deps.parseUploadedFiles = async () => [{ filename: 'a.jpg', mimeType: 'image/jpeg', bytes: 3, buffer: Buffer.from('abc') }];
+      await createMediaRoutes(deps).uploadMedia({ params: { hostKind: 'site', hostId: SITE_ID }, query: {}, body: {}, userId: USER_ID } as never, mockRes() as never);
+      const insert = deps.supabase.calls.find((c) => c.table === 'host_media' && c.args);
+      expect(insert.args).not.toHaveProperty('storage_provider');
+      expect(insert.args).not.toHaveProperty('storage_bucket');
+    });
+
+    it('never lets a PATCH move a row to another provider', async () => {
+      const res = mockRes();
+      await createMediaRoutes(makeDeps()).patchMedia({
+        params: { hostKind: 'site', hostId: SITE_ID, id: MEDIA_ID },
+        body: { storage_provider: 'r2', storage_bucket: 'evil-bucket' },
+        userId: USER_ID,
+      } as never, res as never);
+      expect(res.statusCode).toBe(400);
+      expect((res.body as { error: string }).error).toBe('no_fields');
+    });
+
+    it('deletes each file from the store its row names', async () => {
+      const deps = makeDeps({
+        'from:host_media': { id: MEDIA_ID, storage_path: 'site/x/m/a.jpg', storage_provider: 'r2', storage_bucket: 'media-bucket', variants: { thumb: 'site/x/m/variants/t.webp' }, bytes: 3, used_in: [] },
+      });
+      const deleted: Array<[string, unknown]> = [];
+      deps.mediaAdapter.delete = async (path, loc) => { deleted.push([path, { provider: loc?.storage_provider, bucket: loc?.storage_bucket }]); };
+      await createMediaRoutes(deps).deleteMedia({ params: { hostKind: 'site', hostId: SITE_ID, id: MEDIA_ID }, userId: USER_ID } as never, mockRes() as never);
+      expect(deleted).toEqual([
+        ['site/x/m/a.jpg', { provider: 'r2', bucket: 'media-bucket' }],
+        ['site/x/m/variants/t.webp', { provider: 'r2', bucket: 'media-bucket' }],
+      ]);
+    });
+
+    it('still lists a row whose addresses cannot be built', async () => {
+      const deps = makeDeps({ 'from:host_media': [{ id: MEDIA_ID, storage_path: 'p/a.jpg', storage_provider: 'r2', mime_type: 'image/jpeg' }] });
+      deps.mediaAdapter.getPublicUrl = async () => { throw new Error('storage-r2 is not enabled'); };
+      const res = mockRes();
+      await createMediaRoutes(deps).listMedia({ params: { hostKind: 'site', hostId: SITE_ID }, query: {}, userId: USER_ID } as never, res as never);
+      expect(res.statusCode).toBe(200);
+      expect((res.body as { items: Array<{ cdn_url: unknown }> }).items[0].cdn_url).toBeNull();
     });
   });
 

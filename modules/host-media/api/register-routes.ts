@@ -27,6 +27,7 @@ import { createChunkedRoutes, mountChunkedRoutes } from './chunked-routes.js';
 import { requireJwt } from '../lib/require-jwt.js';
 import { createHostAuthorizer } from '../lib/authorize-host.js';
 import { sanitiseFilename } from '../lib/storage-paths.js';
+import { createStorageMediaAdapter, lazyMediaAdapter, loadStorageRegistry } from '../lib/storage-adapter.js';
 
 // Canonical bucket per spec-relative-storage-paths.md: a single `media`
 // bucket per Gatewaze instance. HOST_MEDIA_BUCKET remains an override for
@@ -96,8 +97,10 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
     return `${publicSupabaseUrl}/storage/v1/object/public/${STORAGE_BUCKET}/${storagePath}`;
   }
 
-  // Default media adapter (Supabase Storage).
-  const mediaAdapter: MediaAdapter = {
+  // Built-in media adapter (Supabase Storage). Used when the storage
+  // module cannot be loaded, and for any row the storage module says is in
+  // Supabase it gives the same addresses.
+  const supabaseAdapter: MediaAdapter = {
     async upload(args) {
       // Slugify the filename at the upload boundary so the storage path
       // (and the cdn_url derived from it) is URL-safe. Mail clients won't
@@ -128,6 +131,14 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
       return data.signedUrl;
     },
   };
+
+  // The storage module (modules/storage) when it is present, so a brand can
+  // keep new media in another provider. Brands without it keep the
+  // built-in Supabase adapter and behave exactly as before.
+  const mediaAdapter: MediaAdapter = lazyMediaAdapter(async () => {
+    const registry = await loadStorageRegistry({ supabase, logger });
+    return registry ? createStorageMediaAdapter(registry, STORAGE_BUCKET) : null;
+  }, supabaseAdapter, STORAGE_BUCKET);
 
   // Multipart parser — applied to the upload route only (not the
   // whole router) so JSON endpoints aren't broken. This lesson came
