@@ -36,8 +36,12 @@ export interface MediaUploadUrlDeps {
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-/** One file name, no folders. The extension must match the type. */
-const NAME_RE = /^[a-z0-9][a-z0-9-]{0,80}\.(jpg|png)$/;
+/**
+ * One file name, no folders, with one of the prefixes the admin tools
+ * write -- never a name an original could have. The extension must match
+ * the type.
+ */
+const NAME_RE = /^(?:rot|enhanced|ai)-[a-z0-9-]{1,70}\.(jpg|png)$/;
 const TYPES: Record<string, string> = { jpg: 'image/jpeg', png: 'image/png' };
 const MAX_BYTES = 64 * 1024 * 1024;
 
@@ -97,6 +101,13 @@ export function createMediaUploadUrl(deps: MediaUploadUrlDeps) {
     try {
       const store = (await media.forRow(row)).direct;
       const path = `${dir}/${name}`;
+      // Never a name that is already taken. An S3-style presigned PUT
+      // replaces whatever is there, so this is what stops a copy landing
+      // on top of the original or an earlier copy the row still uses.
+      if ((await store.head(path)).ok) {
+        sendError(res, 409, 'exists', 'a file with that name is already there');
+        return;
+      }
       const signed = await store.signUpload(path, { contentType, bytes, expiresSeconds: 15 * 60 });
       res.status(200).json({ storage_path: path, upload_url: signed.url, upload_headers: signed.headers });
     } catch (err) {

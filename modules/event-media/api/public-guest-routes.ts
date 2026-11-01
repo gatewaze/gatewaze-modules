@@ -1464,7 +1464,10 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       try {
         // The size is signed where the store can, so the PUT must be
         // exactly the file described here.
-        signed = await target.signUpload(storagePath, { contentType: v.file.mime_type, bytes: v.file.bytes, expiresSeconds: TICKET_TTL_SECONDS });
+        // Thirty minutes to start the upload. An S3-style presigned PUT can
+        // be replayed until it expires, unlike Supabase's single-use one,
+        // so it should not outlive the time a phone needs to begin.
+        signed = await target.signUpload(storagePath, { contentType: v.file.mime_type, bytes: v.file.bytes, expiresSeconds: 30 * 60 });
       } catch (err) {
         logger.error('guest mint sign-url failed', { error: err instanceof Error ? err.message : String(err) });
         items.push({ filename: v.file.filename, status: 'failed', error: 'sign_url_failed', message: 'could not prepare upload' });
