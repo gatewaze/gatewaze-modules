@@ -17,6 +17,11 @@ describe('providerPaths', () => {
     expect(paths[0]).toBe('/repo/modules/email-verification-debounce/provider.ts');
     expect(paths).toContain('/gatewaze-modules/modules/email-verification-debounce/provider.ts');
   });
+
+  it("also looks in the worker's nested module cache", () => {
+    const paths = providerPaths('email-verification-debounce', '/repo/modules/email-verification', ['/app/.gatewaze-modules/github-com-acme-mods/modules']);
+    expect(paths).toContain('/app/.gatewaze-modules/github-com-acme-mods/modules/email-verification-debounce/provider.ts');
+  });
 });
 
 describe('loadProviders', () => {

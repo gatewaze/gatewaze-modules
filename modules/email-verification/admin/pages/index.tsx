@@ -71,7 +71,7 @@ export default function EmailVerificationPage() {
   const [dailyLimit, setDailyLimit] = useState<number>(500);
   const [loading, setLoading] = useState(true);
   const [query, setQuery] = useState('');
-  const [found, setFound] = useState<{ row: VerificationRow | null; results: ProviderResultRow[] } | null>(null);
+  const [found, setFound] = useState<{ row: VerificationRow | null; results: ProviderResultRow[]; suppressed: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -98,21 +98,24 @@ export default function EmailVerificationPage() {
     e?.preventDefault();
     const email = query.trim().toLowerCase();
     if (!email) return;
-    const [{ data: row, error }, { data: results }] = await Promise.all([
+    const [{ data: row, error }, { data: results }, { count: suppressions }] = await Promise.all([
       supabase.from('email_verifications').select('*').eq('email', email).maybeSingle(),
       supabase.from('email_verification_provider_results')
         .select('id, provider, purpose, status, reason, error_kind, error, created_at')
         .eq('email', email).order('created_at', { ascending: false }).limit(20),
+      // This module stores addresses lower-cased, so an exact match finds its rows.
+      supabase.from('broadcast_suppressions').select('id', { count: 'exact', head: true })
+        .eq('email', email).eq('source', 'email-verification'),
     ]);
     if (error) { toast.error(error.message); return; }
-    setFound({ row: (row ?? null) as VerificationRow | null, results: (results ?? []) as ProviderResultRow[] });
+    setFound({ row: (row ?? null) as VerificationRow | null, results: (results ?? []) as ProviderResultRow[], suppressed: (suppressions ?? 0) > 0 });
   };
 
   const recheck = async () => {
     if (!found?.row) return;
     const { error } = await supabase.rpc('email_verification_request_recheck', { p_email: found.row.email });
     if (error) { toast.error(error.message); return; }
-    toast.success('It will be checked again within 5 minutes.');
+    toast.success('Queued. It is checked on an upcoming run, after any addresses not yet checked.');
   };
 
   const lift = async () => {
@@ -121,6 +124,7 @@ export default function EmailVerificationPage() {
     const { data, error } = await supabase.rpc('email_verification_lift_suppression', { p_email: found.row.email });
     if (error) { toast.error(error.message); return; }
     toast.success(Number(data) > 0 ? 'Broadcasts can send to this address again.' : 'This module had not suppressed this address.');
+    setFound((f) => (f ? { ...f, suppressed: false } : f));
   };
 
   const requeue = async () => {
@@ -276,7 +280,7 @@ export default function EmailVerificationPage() {
                         <span className="text-[var(--gray-10)]">Checked {when(found.row.checked_at)} by {found.row.decided_by ?? '—'}</span>
                         <span className="text-[var(--gray-10)]">Next check {when(found.row.next_check_at)}</span>
                         <Button variant="outlined" onClick={() => void recheck()}>Check again</Button>
-                        {found.row.status === 'invalid' && (
+                        {found.suppressed && (
                           <Button variant="outlined" onClick={() => void lift()}>Allow broadcasts again</Button>
                         )}
                       </div>

@@ -7,7 +7,7 @@
  * another module repository.
  */
 
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { PROVIDER_PREFIX, providerId } from './config';
@@ -37,9 +37,23 @@ function isProvider(v: unknown): v is VerificationProvider {
   return !!p && typeof p.verify === 'function' && typeof p.isConfigured === 'function' && typeof p.label === 'string';
 }
 
-export function providerPaths(id: string, coreDir: string = thisModuleDir()): string[] {
+// The worker's materialised module cache nests each source repo:
+// /app/.gatewaze-modules/<repo-slug>/modules/<id>.
+const NESTED_ROOT = '/app/.gatewaze-modules';
+
+function nestedRoots(): string[] {
+  try {
+    return readdirSync(NESTED_ROOT, { withFileTypes: true })
+      .filter((d) => d.isDirectory() || d.isSymbolicLink())
+      .map((d) => path.join(NESTED_ROOT, d.name, 'modules'));
+  } catch {
+    return [];
+  }
+}
+
+export function providerPaths(id: string, coreDir: string = thisModuleDir(), extraRoots: string[] = nestedRoots()): string[] {
   const parent = path.dirname(coreDir);
-  return [path.join(parent, id), ...MODULE_ROOTS.map((r) => path.join(r, id))].flatMap((dir) => [
+  return [path.join(parent, id), ...[...MODULE_ROOTS, ...extraRoots].map((r) => path.join(r, id))].flatMap((dir) => [
     path.join(dir, 'provider.ts'),
     path.join(dir, 'provider.js'),
   ]);

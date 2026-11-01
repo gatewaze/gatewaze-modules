@@ -12,6 +12,8 @@ export interface Budget {
   giveBack(providerId: string): void;
   /** Checks left across all providers. */
   left(): number;
+  /** No more paid checks this run, e.g. when usage could not be saved. */
+  close(): void;
 }
 
 /**
@@ -31,10 +33,11 @@ export function makeBudget(
     const cap = providerDailyLimit(p.config);
     perProvider.set(p.id, cap === null ? Infinity : Math.max(0, cap - (usedBy.get(p.id) ?? 0)));
   }
+  let closed = false;
   return {
     take(id) {
       const mine = perProvider.get(id) ?? 0;
-      if (total <= 0 || mine <= 0) return false;
+      if (closed || total <= 0 || mine <= 0) return false;
       total--;
       perProvider.set(id, mine - 1);
       return true;
@@ -43,7 +46,8 @@ export function makeBudget(
       total++;
       perProvider.set(id, (perProvider.get(id) ?? 0) + 1);
     },
-    left: () => total,
+    left: () => (closed ? 0 : total),
+    close() { closed = true; },
   };
 }
 
