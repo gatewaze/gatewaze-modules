@@ -152,6 +152,39 @@ describe('verifyAddress with providers', () => {
     expect(r.calls.find((c) => c.purpose === 'compare')?.result).toEqual(gone);
   });
 
+  it('does not escalate a risky answer that is not catch-all or unknown', async () => {
+    const esc = fake(() => ok);
+    await verifyAddress('jane@acme.com', deps({ primary: [slot('email-verification-a', fake(() => ({ status: 'risky', reason: 'role' })))], escalation: slot('email-verification-esc', esc) }));
+    expect(esc.calls).toEqual([]);
+  });
+
+  it('does not ask the same provider twice when it is both primary and escalation', async () => {
+    const a = fake(() => catchAll);
+    const s = slot('email-verification-a', a);
+    await verifyAddress('jane@acme.com', deps({ primary: [s], escalation: s }));
+    expect(a.calls).toHaveLength(1);
+  });
+
+  it('calls the compare provider only for addresses in the sample', async () => {
+    const cmp = fake(() => ok);
+    await verifyAddress('jane@acme.com', deps({ primary: [slot('email-verification-a', fake(() => ok))], compare: slot('email-verification-cmp', cmp), inCompareSample: () => false }));
+    expect(cmp.calls).toEqual([]);
+  });
+
+  it('does not call the compare provider again when it already answered as primary', async () => {
+    const cmp = fake(() => ok);
+    const s = slot('email-verification-cmp', cmp);
+    await verifyAddress('jane@acme.com', deps({ primary: [s], compare: s, inCompareSample: () => true }));
+    expect(cmp.calls).toHaveLength(1);
+  });
+
+  it("passes on the provider's suggestion and cuts long error messages", async () => {
+    const r = await verifyAddress('jane@acme.com', deps({ primary: [slot('email-verification-a', fake(() => ({ ...gone, suggestion: 'jane@acme.co' })))] }));
+    expect(r.outcome?.suggestion).toBe('jane@acme.co');
+    const e = await verifyAddress('jane@acme.com', deps({ primary: [slot('email-verification-a', fake(() => new ProviderError('temporary', 'x'.repeat(500))))] }));
+    expect(e.calls[0].error).toHaveLength(200);
+  });
+
   it('keeps a role address risky even when the mailbox exists', async () => {
     const r = await verifyAddress('sales@acme.com', deps({ primary: [slot('email-verification-a', fake(() => ok))] }));
     expect(r.outcome).toMatchObject({ status: 'risky', reason: 'role', level: 'mailbox' });

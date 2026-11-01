@@ -43,7 +43,7 @@ describe('lookupDomain', () => {
   });
 
   it('falls back to address records when there is no MX', async () => {
-    expect((await lookupDomain('a.example', resolver({ mx: err('ENODATA'), a: ['192.0.2.1'] }))).outcome).toBe('address_only');
+    expect(await lookupDomain('a.example', resolver({ mx: err('ENODATA'), a: ['192.0.2.1'] }))).toMatchObject({ outcome: 'address_only', mailboxProvider: 'other' });
     expect((await lookupDomain('b.example', resolver({ mx: err('ENODATA'), a: err('ENODATA'), aaaa: err('ENODATA') }))).outcome).toBe('no_mail_host');
   });
 
