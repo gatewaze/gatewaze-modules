@@ -1,4 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.57.4'
+import { recordUnsubscribe } from '../_shared/unsubscribe-suppress.ts'
 
 /**
  * Broadcast Unsubscribe Edge Function
@@ -41,13 +42,6 @@ async function verifyToken(token: string, hmacSecret: string): Promise<{ email: 
   return { email, topic }
 }
 
-async function suppress(supabase: ReturnType<typeof createClient>, email: string, topic: string): Promise<void> {
-  await supabase.from('broadcast_suppressions').upsert(
-    { email, topic, source: 'one_click_unsubscribe', reason: 'recipient unsubscribed' },
-    { onConflict: 'email,topic', ignoreDuplicates: true },
-  )
-}
-
 async function handler(req: Request) {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: corsHeaders })
 
@@ -67,7 +61,20 @@ async function handler(req: Request) {
   }
 
   const supabase = createClient(Deno.env.get('SUPABASE_URL')!, Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!)
-  await suppress(supabase, verified.email, verified.topic)
+  const saved = await recordUnsubscribe(supabase, verified.email, verified.topic)
+  if (!saved.ok) {
+    // Never tell someone they are unsubscribed when nothing was saved.
+    console.error('[broadcast-unsubscribe] suppression write failed:', saved.error)
+    if (req.method === 'POST') {
+      return new Response(JSON.stringify({ success: false, error: 'Could not save the unsubscribe' }), { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } })
+    }
+    const failPage = `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Unsubscribe failed</title></head>` +
+      `<body style="font-family:system-ui,sans-serif;max-width:480px;margin:64px auto;text-align:center;color:#333;">` +
+      `<h1 style="font-size:20px;">We could not unsubscribe you</h1>` +
+      `<p style="color:#666;">Something went wrong on our side. Please try the link again in a few minutes.</p>` +
+      `</body></html>`
+    return new Response(failPage, { status: 500, headers: { ...corsHeaders, 'Content-Type': 'text/html; charset=utf-8' } })
+  }
 
   // One-click POST (RFC 8058): machine endpoint, return 200.
   if (req.method === 'POST') {
