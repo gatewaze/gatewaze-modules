@@ -34,7 +34,8 @@ import {
 import { READY_PROMPTS, readyPrompt, readyWindow } from '../lib/ready-prompts.js';
 import { plateHasPeople, runCardCopy, runCutout, runDepth, runPlate } from '../lib/booth-provider.js';
 import { bounded } from '../lib/bounded.js';
-import { browserObjectUrl, browserSizedUrl, type CdnConfig } from '../lib/cdn.js';
+import type { CdnConfig } from '../lib/cdn.js';
+import type { MediaStorage, MediaStore } from '../lib/media-storage.js';
 import { albumForUpload, isView, resolveViews, tagView, type View } from '../lib/view-albums.js';
 import eventMediaModule from '../index.js';
 import { displayName, matchGuests, type GuestEntry } from '../lib/guest-identity.js';
@@ -55,6 +56,8 @@ export interface GuestRoutesDeps {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   supabase: any;
   storageBucket: string;
+  /** Where each row's files are, and where new ones go (lib/media-storage.ts). */
+  media: MediaStorage;
   /** External Supabase hostname for URLs handed to browsers. */
   publicSupabaseUrl: string;
   /** Internal Supabase hostname (what the server-side client uses). */
@@ -125,21 +128,16 @@ function clientIp(req: Request): string {
 }
 
 export function createGuestRoutes(deps: GuestRoutesDeps) {
-  const { supabase, storageBucket, publicSupabaseUrl, internalSupabaseUrl, rateLimit, logger } = deps;
+  const { supabase, storageBucket, publicSupabaseUrl, media, rateLimit, logger } = deps;
   const cdn: CdnConfig = deps.cdn ?? { zone: null };
 
+  /** The link's logo, which admin uploads into Supabase's bucket. */
   function toPublicUrl(storagePath: string): string {
     return `${publicSupabaseUrl}/storage/v1/object/public/${storageBucket}/${storagePath}`;
   }
 
-  /** Signed URLs come back on the server-side (often in-cluster) host;
-   *  browsers need the external one. */
-  function externaliseUrl(url: string): string {
-    if (internalSupabaseUrl && url.startsWith(internalSupabaseUrl)) {
-      return `${publicSupabaseUrl}${url.slice(internalSupabaseUrl.length)}`;
-    }
-    return url;
-  }
+  type Stores = { browser: MediaStore; direct: MediaStore };
+  type Loc = { storage_provider?: string | null; storage_bucket?: string | null };
 
   async function checkRate(res: Response, key: string, limit: { max: number; windowMs: number }): Promise<boolean> {
     const rl = await rateLimit(key, limit.max, limit.windowMs);
@@ -459,6 +457,8 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
   interface FeedRow {
     id: string;
     storage_path: string;
+    storage_provider?: string | null;
+    storage_bucket?: string | null;
     mime_type: string;
     bytes: number;
     width: number | null;
@@ -470,6 +470,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
 
   /** Write one generated asset next to the photo and record the path. */
   async function storeVariant(
+    store: MediaStore,
     mediaId: string,
     storagePath: string,
     name: string,
@@ -480,11 +481,10 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     const dir = storagePath.slice(0, storagePath.lastIndexOf('/'));
     if (!dir) return false;
     const path = `${dir}/variants/${name}.${ext}`;
-    const { error: upErr } = await supabase.storage
-      .from(storageBucket)
-      .upload(path, bytes, { contentType, upsert: true });
-    if (upErr) {
-      logger.warn('layer upload failed', { mediaId, name, error: upErr.message });
+    try {
+      await store.put(path, bytes, { contentType, upsert: true });
+    } catch (err) {
+      logger.warn('layer upload failed', { mediaId, name, error: err instanceof Error ? err.message : String(err) });
       return false;
     }
     // Merge rather than replace: the image-variant edge function writes
@@ -536,7 +536,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
    * When the check itself cannot run, the plate is kept (the display's
    * own pixel check still applies).
    */
-  async function checkedPlate(mediaId: string, storagePath: string, src: string): Promise<void> {
+  async function checkedPlate(store: MediaStore, mediaId: string, storagePath: string, src: string): Promise<void> {
     const dir = storagePath.slice(0, storagePath.lastIndexOf('/'));
     for (const strict of [false, true]) {
       const r = await runPlate(src, strict);
@@ -545,13 +545,16 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         continue;
       }
       const candidate = `${dir}/variants/plate-check-${strict ? 2 : 1}.jpg`;
-      const { error: upErr } = await supabase.storage
-        .from(storageBucket)
-        .upload(candidate, r.image, { contentType: 'image/jpeg', upsert: true });
-      const people = upErr ? null : await plateHasPeople(toPublicUrl(candidate));
-      await removeObject(candidate);
+      let stored = true;
+      try {
+        await store.put(candidate, r.image, { contentType: 'image/jpeg', upsert: true });
+      } catch {
+        stored = false;
+      }
+      const people = stored ? await plateHasPeople(store.publicUrl(candidate)) : null;
+      await store.remove([candidate]);
       if (people !== true) {
-        await storeVariant(mediaId, storagePath, 'plate', r.image, 'image/jpeg', 'jpg');
+        await storeVariant(store, mediaId, storagePath, 'plate', r.image, 'image/jpeg', 'jpg');
         return;
       }
       logger.warn('plate still shows a person', { mediaId, attempt: strict ? 2 : 1 });
@@ -574,9 +577,12 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     });
   });
 
-  async function generateLayers(mediaId: string, storagePath: string): Promise<void> {
+  async function generateLayers(mediaId: string, storagePath: string, loc: Loc): Promise<void> {
     try {
-      const src = toPublicUrl(storagePath);
+      // Direct, never through a CDN: the models fetch the original, and
+      // the plate check reads a scratch file deleted straight after.
+      const store = (await media.forRow(loc)).direct;
+      const src = store.publicUrl(storagePath);
 
       // Browse-card copy lives in metadata rather than storage — it is a
       // few short strings, not a file. Started BEFORE the layers and
@@ -614,11 +620,11 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       const [depth, cutout] = await Promise.all([
         runDepth(src),
         runCutout(src),
-        checkedPlate(mediaId, storagePath, src),
+        checkedPlate(store, mediaId, storagePath, src),
       ]);
 
-      if (depth.ok) await storeVariant(mediaId, storagePath, 'depth', depth.image, 'image/png', 'png');
-      if (cutout.ok) await storeVariant(mediaId, storagePath, 'cutout', cutout.image, 'image/png', 'png');
+      if (depth.ok) await storeVariant(store, mediaId, storagePath, 'depth', depth.image, 'image/png', 'png');
+      if (cutout.ok) await storeVariant(store, mediaId, storagePath, 'cutout', cutout.image, 'image/png', 'png');
       for (const [name, r] of [['depth', depth], ['cutout', cutout]] as const) {
         if (!r.ok) logger.warn('layer generation failed', { mediaId, name, error: r.error, detail: r.detail });
       }
@@ -641,8 +647,8 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
    * photograph anyway -- and they went stale the moment a photograph was
    * rotated, since each one had to be turned alongside it.
    */
-  function processNewImage(mediaId: string, storagePath: string): void {
-    layerQueue(() => generateLayers(mediaId, storagePath));
+  function processNewImage(mediaId: string, storagePath: string, loc: Loc): void {
+    layerQueue(() => generateLayers(mediaId, storagePath, loc));
   }
 
   /**
@@ -650,8 +656,8 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
    * Supabase's per-transformation render endpoint is never hit; otherwise
    * the render endpoint, as before.
    */
-  function toRenderUrl(storagePath: string, width: number): string {
-    return browserSizedUrl(cdn, publicSupabaseUrl, storageBucket, storagePath, width);
+  function toRenderUrl(s: Stores, storagePath: string, width: number): string {
+    return s.browser.sizedUrl(storagePath, { width });
   }
 
   /**
@@ -659,8 +665,22 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
    * which also builds the source URLs handed to the image models —
    * including short-lived scratch files there is no point caching.
    */
-  function toBrowserUrl(storagePath: string): string {
-    return browserObjectUrl(cdn, publicSupabaseUrl, storageBucket, storagePath);
+  function toBrowserUrl(s: Stores, storagePath: string): string {
+    return s.browser.publicUrl(storagePath);
+  }
+
+  /**
+   * Each row with the stores holding its files, dropping any row whose
+   * provider is switched off -- it could not be shown anyway.
+   */
+  async function withStores<R extends Loc>(rows: R[]): Promise<Array<[R, Stores]>> {
+    const storeOf = await media.forRows(rows);
+    const out: Array<[R, Stores]> = [];
+    for (const r of rows) {
+      const s = storeOf(r);
+      if (s) out.push([r, s]);
+    }
+    return out;
   }
 
   /**
@@ -834,7 +854,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     }
   }
 
-  function mapFeedItem(r: FeedRow, view?: View) {
+  function mapFeedItem(r: FeedRow, s: Stores, view?: View) {
     const meta = (r.metadata ?? {}) as Record<string, unknown>;
     const variants: Record<string, string> = {};
     if (r.variants && typeof r.variants === 'object') {
@@ -849,7 +869,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         // it never leaves here at all.
         if (k === 'enhanced' || k === 'enhanced_selfie'
           || k === 'enhanced_ai' || k === 'enhanced_ai_selfie') continue;
-        if (typeof v === 'string' && v) variants[k] = toBrowserUrl(v);
+        if (typeof v === 'string' && v) variants[k] = toBrowserUrl(s, v);
       }
     }
     // Sizes are always made on the fly from the original, never read
@@ -858,13 +878,19 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     // when they were stored is ignored -- it is the wrong way up for a
     // photograph that has since been turned.
     if (r.mime_type.startsWith('image/')) {
-      variants['thumb'] = toRenderUrl(r.storage_path, 350);
-      variants['medium'] = toRenderUrl(r.storage_path, 800);
+      variants['thumb'] = toRenderUrl(s, r.storage_path, 350);
+      variants['medium'] = toRenderUrl(s, r.storage_path, 800);
     }
     return {
       id: r.id,
       kind: r.mime_type.startsWith('video/') ? 'video' : 'photo',
-      url: toBrowserUrl(r.storage_path),
+      url: toBrowserUrl(s, r.storage_path),
+      // The original, never through a CDN that recompresses: what a guest
+      // saves (asked 2026-10-17).
+      download_url: s.direct.publicUrl(r.storage_path),
+      // How the projector may ask for a screen-sized copy (display-url.ts).
+      // Supabase and Bunny addresses it recognises by their shape.
+      resizer: s.browser.provider !== 'supabase' && s.browser.canResize ? 'cloudflare' : null,
       mime_type: r.mime_type,
       width: r.width,
       height: r.height,
@@ -876,7 +902,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       card: meta['card'] && typeof meta['card'] === 'object' ? meta['card'] : null,
       // The photograph the guest actually took, where the booth kept one
       // -- the projector has a view of its own for these.
-      selfie: typeof meta['selfie'] === 'string' && meta['selfie'] ? toBrowserUrl(meta['selfie']) : null,
+      selfie: typeof meta['selfie'] === 'string' && meta['selfie'] ? toBrowserUrl(s, meta['selfie']) : null,
       // 'booth' | 'day' | 'seed': the view album it is in, else its tag.
       // Older rows predate the tag and read as 'seed', which they are.
       album: view ?? tagView(meta),
@@ -919,7 +945,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
 
     let query = supabase
       .from('host_media')
-      .select('id, storage_path, mime_type, bytes, width, height, variants, metadata, created_at')
+      .select('id, storage_path, storage_provider, storage_bucket, mime_type, bytes, width, height, variants, metadata, created_at')
       .eq('host_kind', 'event')
       .eq('host_id', link.event_id)
       .eq('access_level', 'public')
@@ -983,7 +1009,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     const last = page[page.length - 1];
     const views = await viewsFor(link.event_id, page);
     res.status(200).json({
-      items: page.map((r) => mapFeedItem(r, views.get(r.id))),
+      items: (await withStores(page)).map(([r, s]) => mapFeedItem(r, s, views.get(r.id))),
       next_cursor: hasMore && last ? encodeCursor(last.created_at, last.id) : null,
     });
   }
@@ -1190,7 +1216,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
 
     const counts = new Map<string, number>();
     const [pageResult] = await Promise.all([
-      inAlbum(base('id, storage_path, mime_type, bytes, width, height, variants, metadata, created_at') as never)
+      inAlbum(base('id, storage_path, storage_provider, storage_bucket, mime_type, bytes, width, height, variants, metadata, created_at') as never)
         // By when it was taken. A photographer delivers weeks later in
         // one sitting, so ordering by arrival put 851 photographs in
         // whatever order the browser happened to finish them in.
@@ -1236,8 +1262,8 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
      * (asked 2026-09-27). The album's slug rides along so a link to the
      * photograph can carry the album it belongs to.
      */
-    const forFeed = (r: FeedRow) => {
-      const item = mapFeedItem(r);
+    const forFeed = (r: FeedRow, s: Stores) => {
+      const item = mapFeedItem(r, s);
       const view = albumOf(r.metadata);
       const better = (r.variants ?? {}) as Record<string, unknown>;
       const withSlug = { ...item, album: view, album_slug: slugFor(view) } as Record<string, unknown>;
@@ -1258,7 +1284,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       };
       const betterSelfie = pick('enhanced_selfie', 'enhanced_ai_selfie');
       if (xray.has(view) && enhanced.has(view) && betterSelfie && withSlug['selfie']) {
-        withSlug['selfie'] = toBrowserUrl(betterSelfie);
+        withSlug['selfie'] = toBrowserUrl(s, betterSelfie);
         withSlug['selfie_original'] = item.selfie;
         withSlug['selfie_enhanced'] = true;
       }
@@ -1266,9 +1292,10 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       if (!path) return withSlug;
       return {
         ...withSlug,
-        url: toBrowserUrl(path),
+        url: toBrowserUrl(s, path),
+        download_url: s.direct.publicUrl(path),
         enhanced: true,
-        variants: { ...withSlug.variants, thumb: toRenderUrl(path, 350), medium: toRenderUrl(path, 800) },
+        variants: { ...withSlug.variants, thumb: toRenderUrl(s, path, 350), medium: toRenderUrl(s, path, 800) },
         // The photograph as it was taken, so the difference can be seen
         // by switching rather than by asking again (asked 2026-09-28).
         original: {
@@ -1283,13 +1310,16 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     // sits in the album -- page forty of The day is still one link.
     let focus: ReturnType<typeof forFeed> | null = null;
     if (focusId) {
-      const { data: one } = await base('id, storage_path, mime_type, bytes, width, height, variants, metadata, created_at')
+      const { data: one } = await base('id, storage_path, storage_provider, storage_bucket, mime_type, bytes, width, height, variants, metadata, created_at')
         .eq('id', focusId)
         .maybeSingle();
       // The same rules as the list: a photograph in an album that is not
       // on the portal is not reachable by knowing its id either.
       const row = (one ?? null) as FeedRow | null;
-      if (row && offered.includes(albumOf(row.metadata))) focus = forFeed(row);
+      if (row && offered.includes(albumOf(row.metadata))) {
+        const [one2] = await withStores([row]);
+        if (one2) focus = forFeed(one2[0], one2[1]);
+      }
     }
 
     const page = (data ?? []) as FeedRow[];
@@ -1311,7 +1341,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       // the page it belongs to (asked 2026-09-28).
       nav: albums.map((a) => ({ label: a.name, path: a.slug, count: a.count })),
       total,
-      items: page.map(forFeed),
+      items: (await withStores(page)).map(([r, s]) => forFeed(r, s)),
       focus,
       // Which end this page started at, so the portal can show the
       // switch the right way round without knowing the album's default.
@@ -1408,6 +1438,17 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
 
     const nowSeconds = Math.floor(Date.now() / 1000);
     const items: Array<Record<string, unknown>> = [];
+    // Where these files go. The ticket carries it, signed, so completing
+    // the upload records the same place it was sent to.
+    let target: MediaStore;
+    try {
+      target = (await media.forNew()).direct;
+    } catch (err) {
+      logger.error('guest mint: no store for new media', { error: err instanceof Error ? err.message : String(err) });
+      sendError(res, 503, 'storage_unavailable', 'uploads are not available right now');
+      return;
+    }
+    const location = media.columnsFor(target);
 
     for (const raw of files) {
       const v = validateMintFile(raw, link);
@@ -1419,11 +1460,13 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       const mediaId = newMediaId();
       const storagePath = buildGuestStoragePath(link.event_id, mediaId, v.file.filename);
 
-      const { data: signed, error: signErr } = await supabase
-        .storage.from(storageBucket)
-        .createSignedUploadUrl(storagePath);
-      if (signErr || !signed?.signedUrl) {
-        logger.error('guest mint sign-url failed', { error: signErr?.message });
+      let signed: { url: string; headers: Record<string, string> };
+      try {
+        // The size is signed where the store can, so the PUT must be
+        // exactly the file described here.
+        signed = await target.signUpload(storagePath, { contentType: v.file.mime_type, bytes: v.file.bytes, expiresSeconds: TICKET_TTL_SECONDS });
+      } catch (err) {
+        logger.error('guest mint sign-url failed', { error: err instanceof Error ? err.message : String(err) });
         items.push({ filename: v.file.filename, status: 'failed', error: 'sign_url_failed', message: 'could not prepare upload' });
         continue;
       }
@@ -1445,6 +1488,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         prompt: v.file.prompt ?? null,
         taken_at: v.file.taken_at ?? null,
         member_id: who.guest?.id ?? null,
+        ...location,
         exp: nowSeconds + TICKET_TTL_SECONDS,
       };
 
@@ -1453,7 +1497,9 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
         status: 'ready',
         media_id: mediaId,
         storage_path: storagePath,
-        upload_url: externaliseUrl(signed.signedUrl),
+        upload_url: signed.url,
+        // Send these with the PUT, exactly: some stores sign them.
+        upload_headers: signed.headers,
         ticket: mintTicket(payload, deps.ticketSecret),
       });
     }
@@ -1487,6 +1533,9 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       host_kind: 'event',
       host_id: p.event_id,
       storage_path: p.storage_path,
+      // From the signed ticket: where mint sent the file.
+      ...(p.storage_provider ? { storage_provider: p.storage_provider } : {}),
+      ...(p.storage_bucket ? { storage_bucket: p.storage_bucket } : {}),
       filename: sanitiseGuestFilename(p.storage_path.split('/').pop() ?? 'file'),
       mime_type: p.mime_type,
       bytes: actualBytes,
@@ -1558,31 +1607,22 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     return typeof slug === 'string' && ALBUM_SLUG_RE.test(slug) && !isView(slug) ? slug : null;
   }
 
-  async function headObject(storagePath: string): Promise<{ ok: boolean; bytes: number; contentType: string }> {
-    const { data: signed, error } = await supabase
-      .storage.from(storageBucket)
-      .createSignedUrl(storagePath, 60);
-    if (error || !signed?.signedUrl) return { ok: false, bytes: 0, contentType: '' };
+  /** The stores for a row or a ticket, or null when that provider is unavailable. */
+  async function storesFor(loc: Loc): Promise<Stores | null> {
     try {
-      const resp = await fetch(signed.signedUrl, { method: 'HEAD' });
-      if (!resp.ok) return { ok: false, bytes: 0, contentType: '' };
-      return {
-        ok: true,
-        bytes: Number(resp.headers.get('content-length') ?? 0),
-        contentType: (resp.headers.get('content-type') ?? '').split(';')[0].trim(),
-      };
-    } catch {
-      return { ok: false, bytes: 0, contentType: '' };
+      return await media.forRow(loc);
+    } catch (err) {
+      logger.warn('media store unavailable', { provider: loc.storage_provider, error: err instanceof Error ? err.message : String(err) });
+      return null;
     }
   }
 
-  async function removeObject(storagePath: string | string[]): Promise<void> {
-    try {
-      const paths = Array.isArray(storagePath) ? storagePath : [storagePath];
-      if (paths.length > 0) await supabase.storage.from(storageBucket).remove(paths);
-    } catch {
-      // best-effort cleanup; the sweep script catches leftovers
-    }
+  /** Best-effort cleanup; the sweep script catches leftovers. */
+  async function removeObject(loc: Loc, storagePath: string | string[]): Promise<void> {
+    const paths = Array.isArray(storagePath) ? storagePath : [storagePath];
+    if (paths.length === 0) return;
+    const stores = await storesFor(loc);
+    if (stores) await stores.direct.remove(paths);
   }
 
   async function completeUploads(req: Request, res: Response): Promise<void> {
@@ -1648,7 +1688,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
 
       // Blocked between minting and finishing: the bytes go, no row is made.
       if (p.member_id && (await blockedFor(link.event_id)).has(p.member_id)) {
-        await removeObject(p.storage_path);
+        await removeObject(p, p.storage_path);
         items.push({ media_id: p.media_id, status: 'failed', error: 'guest_blocked' });
         continue;
       }
@@ -1662,21 +1702,26 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       // Idempotent replay: row already exists → return it.
       const { data: existing } = await supabase
         .from('host_media')
-        .select('id, storage_path, mime_type, bytes, width, height, variants, metadata, created_at')
+        .select('id, storage_path, storage_provider, storage_bucket, mime_type, bytes, width, height, variants, metadata, created_at')
         .eq('id', p.media_id)
         .maybeSingle();
+      const stores = await storesFor(p);
+      if (!stores) {
+        items.push({ media_id: p.media_id, status: 'failed', error: 'storage_unavailable' });
+        continue;
+      }
       if (existing) {
-        items.push({ media_id: p.media_id, status: 'already_created', item: mapFeedItem(existing as FeedRow) });
+        items.push({ media_id: p.media_id, status: 'already_created', item: mapFeedItem(existing as FeedRow, stores) });
         continue;
       }
 
-      const head = await headObject(p.storage_path);
+      const head = await stores.direct.head(p.storage_path);
       if (!head.ok) {
         items.push({ media_id: p.media_id, status: 'failed', error: 'object_missing' });
         continue;
       }
       if (head.bytes > p.max_bytes * 1.1) {
-        await removeObject(p.storage_path);
+        await removeObject(p, p.storage_path);
         items.push({ media_id: p.media_id, status: 'failed', error: 'file_too_large' });
         continue;
       }
@@ -1684,7 +1729,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       // this is where the mint-time claim gets enforced. Fail CLOSED on
       // a missing/empty stored Content-Type (security review 2026-09-19).
       if (head.contentType !== p.mime_type) {
-        await removeObject(p.storage_path);
+        await removeObject(p, p.storage_path);
         items.push({ media_id: p.media_id, status: 'failed', error: 'mime_mismatch' });
         continue;
       }
@@ -1699,17 +1744,17 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       const { data: inserted, error: insErr } = await supabase
         .from('host_media')
         .insert(row)
-        .select('id, storage_path, mime_type, bytes, width, height, variants, metadata, created_at')
+        .select('id, storage_path, storage_provider, storage_bucket, mime_type, bytes, width, height, variants, metadata, created_at')
         .single();
       if (insErr) {
         // A concurrent replay may have won the insert race — re-read.
         const { data: raced } = await supabase
           .from('host_media')
-          .select('id, storage_path, mime_type, bytes, width, height, variants, metadata, created_at')
+          .select('id, storage_path, storage_provider, storage_bucket, mime_type, bytes, width, height, variants, metadata, created_at')
           .eq('id', p.media_id)
           .maybeSingle();
         if (raced) {
-          items.push({ media_id: p.media_id, status: 'already_created', item: mapFeedItem(raced as FeedRow) });
+          items.push({ media_id: p.media_id, status: 'already_created', item: mapFeedItem(raced as FeedRow, stores) });
         } else {
           logger.error('guest media insert failed', { error: insErr.message });
           items.push({ media_id: p.media_id, status: 'failed', error: 'db_error' });
@@ -1718,7 +1763,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       }
 
       createdCount += 1;
-      items.push({ media_id: p.media_id, status: 'created', item: mapFeedItem(inserted as FeedRow) });
+      items.push({ media_id: p.media_id, status: 'created', item: mapFeedItem(inserted as FeedRow, stores) });
 
       // Projector layers, but not for a photographer's delivery. Those
       // are the far layer of a parallax effect the professional
@@ -1728,7 +1773,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       // couple removed is several seconds, several megabytes and a few
       // cents per photograph, times the thousands they deliver.
       if (p.mime_type.startsWith('image/') && !p.photographer) {
-        processNewImage(p.media_id, p.storage_path);
+        processNewImage(p.media_id, p.storage_path, p);
       }
     }
 
@@ -1782,7 +1827,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
       // The same view the gallery reads, so "Yours" is in the same order
       // as the album it sits beside (migration 028).
       .from('event_media_gallery')
-      .select('id, storage_path, mime_type, bytes, width, height, variants, metadata, created_at, is_approved')
+      .select('id, storage_path, storage_provider, storage_bucket, mime_type, bytes, width, height, variants, metadata, created_at, is_approved')
       .eq('host_kind', 'event')
       .eq('host_id', link.event_id)
       .contains('metadata', owner)
@@ -1804,8 +1849,8 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
 
     const rows = (data ?? []) as FeedRow[];
     res.status(200).json({
-      items: rows.map((r) => ({
-        ...mapFeedItem(r),
+      items: (await withStores(rows)).map(([r, s]) => ({
+        ...mapFeedItem(r, s),
         // Pending items are invisible to everyone else until approved;
         // show their owner that they are waiting.
         pending: (r as { is_approved?: boolean }).is_approved === false,
@@ -1836,7 +1881,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
 
     const { data: row, error } = await supabase
       .from('host_media')
-      .select('id, storage_path, variants, metadata, host_id, host_kind')
+      .select('id, storage_path, storage_provider, storage_bucket, variants, metadata, host_id, host_kind')
       .eq('id', mediaId)
       .maybeSingle();
     if (error) {
@@ -1875,7 +1920,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
     for (const v of Object.values(variants)) {
       if (typeof v === 'string' && v && !/^https?:\/\//i.test(v)) paths.push(v);
     }
-    await removeObject(paths);
+    await removeObject(row, paths);
 
     res.status(200).json({ deleted: mediaId });
   }

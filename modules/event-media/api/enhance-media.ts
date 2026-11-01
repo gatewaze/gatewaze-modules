@@ -27,6 +27,7 @@
  * same checks a rotation gets.
  */
 import type { Request, Response, Router } from 'express';
+import type { MediaStorage } from '../lib/media-storage.js';
 import { opsFor, worthEnhancing } from '../lib/enhance.js';
 
 interface PlatformLogger {
@@ -39,9 +40,8 @@ export interface EnhanceMediaDeps {
   canAdminEvent: (req: Request, eventId: string) => Promise<boolean | null>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   serviceClient: any;
-  storageBucket: string;
-  /** A URL the model can fetch this stored object from. */
-  publicUrl: (path: string) => string;
+  /** Where each row's files are (lib/media-storage.ts). */
+  media: MediaStorage;
   /** What the model makes of one photograph (lib/booth-provider.ts). */
   runVerdict: (imageUrl: string) => Promise<{ ok: true; verdict: unknown } | { ok: false; error: string }>;
   logger: PlatformLogger;
@@ -60,7 +60,7 @@ function sendError(res: Response, status: number, code: string, message: string)
 }
 
 export function createEnhanceMedia(deps: EnhanceMediaDeps) {
-  const { canAdminEvent, serviceClient: db, storageBucket, publicUrl, runVerdict, logger } = deps;
+  const { canAdminEvent, serviceClient: db, media, runVerdict, logger } = deps;
 
   /**
    * One photograph: ask the model what it needs and write that down.
@@ -87,7 +87,7 @@ export function createEnhanceMedia(deps: EnhanceMediaDeps) {
   }> {
     const { data: row, error } = await db
       .from('host_media')
-      .select('id, host_kind, host_id, storage_path, mime_type, variants, metadata')
+      .select('id, host_kind, host_id, storage_path, storage_provider, storage_bucket, mime_type, variants, metadata')
       .eq('id', mediaId)
       .maybeSingle();
     if (error || !row || row.host_kind !== 'event' || row.host_id !== eventId) {
@@ -122,7 +122,15 @@ export function createEnhanceMedia(deps: EnhanceMediaDeps) {
       };
     }
 
-    const answer = await runVerdict(publicUrl(path));
+    // A direct address, never through a CDN: the model fetches the
+    // original, and the browser draws this same file into a canvas.
+    let source: string;
+    try {
+      source = (await media.forRow(row)).direct.publicUrl(path);
+    } catch {
+      return { id: mediaId, status: 'skipped', reason: 'storage_unavailable' };
+    }
+    const answer = await runVerdict(source);
     if (!answer.ok) return { id: mediaId, status: 'failed', reason: answer.error };
     const verdict = answer.verdict as Parameters<typeof worthEnhancing>[0];
     if (!worthEnhancing(verdict)) {
@@ -174,7 +182,7 @@ export function createEnhanceMedia(deps: EnhanceMediaDeps) {
     }
     return {
       id: mediaId, status: 'needs', note: verdict.note,
-      source: publicUrl(path), ops, of: selfie ? 'selfie' : 'photo', faces,
+      source, ops, of: selfie ? 'selfie' : 'photo', faces,
     };
   }
 
@@ -262,7 +270,7 @@ export function createEnhanceMedia(deps: EnhanceMediaDeps) {
 
     const { data: row, error } = await db
       .from('host_media')
-      .select('id, host_kind, host_id, storage_path, mime_type, variants, metadata')
+      .select('id, host_kind, host_id, storage_path, storage_provider, storage_bucket, mime_type, variants, metadata')
       .eq('id', mediaId)
       .maybeSingle();
     if (error || !row || row.host_kind !== 'event' || row.host_id !== eventId) {
@@ -281,10 +289,16 @@ export function createEnhanceMedia(deps: EnhanceMediaDeps) {
       return;
     }
 
-    // It must exist: a row pointing at nothing is a broken picture.
-    const name = path.slice(path.lastIndexOf('/') + 1);
-    const { data: found } = await db.storage.from(storageBucket).list(dir, { search: name, limit: 100 });
-    if (!found || !found.some((f: { name: string }) => f.name === name)) {
+    // It must exist, in this row's store: a row pointing at nothing is a
+    // broken picture.
+    let store;
+    try {
+      store = (await media.forRow(row)).direct;
+    } catch {
+      sendError(res, 503, 'storage_unavailable', 'this photo is stored somewhere that is not available');
+      return;
+    }
+    if (!(await store.head(path)).ok) {
       sendError(res, 400, 'not_uploaded', 'that copy is not in storage yet');
       return;
     }
@@ -312,7 +326,7 @@ export function createEnhanceMedia(deps: EnhanceMediaDeps) {
     }
     // The copy this one replaces is nobody's now. Best effort.
     if (previous && previous !== path && previous.startsWith(`event/${eventId}/`)) {
-      try { await db.storage.from(storageBucket).remove([previous]); } catch { /* swept later */ }
+      await store.remove([previous]);
     }
     res.status(200).json({ id: mediaId, of, enhanced: path });
   }

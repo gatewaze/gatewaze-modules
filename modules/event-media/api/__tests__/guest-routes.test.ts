@@ -2,6 +2,8 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { createGuestRoutes } from '../public-guest-routes.js';
+import { createMediaStorage, builtInSupabaseStores } from '../../lib/media-storage.js';
+import { fakeMedia } from './fake-media.js';
 import * as provider from '../../lib/booth-provider.js';
 
 // The booth's model calls are replaced wholesale, so no test can reach
@@ -240,6 +242,19 @@ function makeDeps(config = {}) {
     deps: {
       supabase,
       storageBucket: 'media',
+      // The built-in Supabase stores, as on a brand without the storage
+      // module: the addresses these tests check are the ones they always were.
+      media: createMediaStorage({
+        registry: null,
+        fallback: builtInSupabaseStores({
+          supabase, bucket: 'media',
+          publicSupabaseUrl: 'https://supabase.public.example',
+          internalSupabaseUrl: 'http://internal-supabase:8000',
+          cdn: config.cdn ?? { zone: null },
+        }),
+        bucket: 'media',
+        logger: { warn: () => {} },
+      }),
       publicSupabaseUrl: 'https://supabase.public.example',
       internalSupabaseUrl: 'http://internal-supabase:8000',
       rateLimit: async (key, max, windowMs) => {
@@ -1844,5 +1859,64 @@ describe('a photographer\'s link', () => {
       );
       expect(supabase.state.inserted[0].metadata.album).not.toBe('photographer-stream');
     });
+  });
+});
+
+describe('storage location', () => {
+  it('mints into the store chosen for new media, pinning the size and saying which headers to send', async () => {
+    const { deps } = makeDeps({ link: ACTIVE_LINK, event: EVENT_ROW });
+    const fm = fakeMedia({ base: 'https://media.example' });
+    fm.media.forNew = async () => {
+      const s = { ...((await fm.media.forRow({ storage_provider: 'r2', storage_bucket: 'aime-media' })).direct) };
+      return { browser: s, direct: s };
+    };
+    deps.media = fm.media;
+    const res = mockRes();
+    await createGuestRoutes(deps).mintUploads(req({ body: { client_id: CLIENT_ID, guest_name: 'C', files: [{ filename: 'a.jpg', mime_type: 'image/jpeg', bytes: 1234 }] } }), res);
+    expect(res.statusCode).toBe(200);
+    const item = res.body.items[0];
+    expect(item.upload_url).toBe(`https://media.example/upload/${item.storage_path}`);
+    expect(item.upload_headers).toEqual({ 'content-type': 'image/jpeg' });
+    expect(fm.state.signed[0]).toMatchObject({ contentType: 'image/jpeg', bytes: 1234 });
+    const v = verifyTicket(item.ticket, undefined, SECRET);
+    expect(v.ok && v.payload.storage_provider).toBe('r2');
+    expect(v.ok && v.payload.storage_bucket).toBe('aime-media');
+  });
+
+  it('leaves the location off a ticket for the default Supabase bucket', async () => {
+    const { deps } = makeDeps({ link: ACTIVE_LINK, event: EVENT_ROW });
+    const res = mockRes();
+    await createGuestRoutes(deps).mintUploads(req({ body: { client_id: CLIENT_ID, guest_name: 'C', files: [{ filename: 'a.jpg', mime_type: 'image/jpeg', bytes: 10 }] } }), res);
+    const v = verifyTicket(res.body.items[0].ticket, undefined, SECRET);
+    expect(v.ok && v.payload.storage_provider).toBeUndefined();
+    expect(res.body.items[0].upload_headers).toEqual({ 'content-type': 'image/jpeg' });
+  });
+
+  it('records the ticket\'s location on the row, checking the file in that store', async () => {
+    const { deps, supabase } = makeDeps({ link: ACTIVE_LINK, event: EVENT_ROW, existingMedia: null });
+    const fm = fakeMedia({ base: 'https://media.example' });
+    deps.media = fm.media;
+    const res = mockRes();
+    await createGuestRoutes(deps).completeUploads(req({ body: { tickets: [ticketFor({ storage_provider: 'r2', storage_bucket: 'aime-media' })] } }), res);
+    expect(res.body.items[0].status).toBe('created');
+    expect(supabase.state.inserted[0]).toMatchObject({ storage_provider: 'r2', storage_bucket: 'aime-media' });
+    expect(fm.state.rows.some((r) => r.storage_provider === 'r2' && r.storage_bucket === 'aime-media')).toBe(true);
+    expect(fm.state.headed).toContain(`event/${EVENT_ID}/11111111-2222-3333-4444-555555555555/photo.jpg`);
+    expect(res.body.items[0].item.url).toBe(`https://media.example/event/${EVENT_ID}/11111111-2222-3333-4444-555555555555/photo.jpg`);
+  });
+
+  it('fails an upload whose store is unavailable, and makes no row', async () => {
+    const { deps, supabase } = makeDeps({ link: ACTIVE_LINK, event: EVENT_ROW, existingMedia: null });
+    deps.media = fakeMedia({ unavailable: true }).media;
+    const res = mockRes();
+    await createGuestRoutes(deps).completeUploads(req({ body: { tickets: [ticketFor({ storage_provider: 'r2', storage_bucket: 'aime-media' })] } }), res);
+    expect(res.body.items[0]).toMatchObject({ status: 'failed', error: 'storage_unavailable' });
+    expect(supabase.state.inserted ?? []).toHaveLength(0);
+  });
+
+  it('refuses a signed ticket whose location is not a plain name', () => {
+    expect(verifyTicket(ticketFor({ storage_provider: '../x' }), undefined, SECRET)).toEqual({ ok: false, error: 'invalid_ticket' });
+    expect(verifyTicket(ticketFor({ storage_bucket: 'Bad_Bucket' }), undefined, SECRET)).toEqual({ ok: false, error: 'invalid_ticket' });
+    expect(verifyTicket(ticketFor({ storage_provider: 'r2', storage_bucket: 'aime-media' }), undefined, SECRET).ok).toBe(true);
   });
 });

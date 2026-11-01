@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 import { createFaceDetect } from '../face-detect';
+import { fakeMedia } from './fake-media.js';
 
 const EVENT = '99999999-8888-7777-6666-555555555555';
 const OTHER = '11111111-2222-3333-4444-555555555555';
@@ -84,7 +85,7 @@ function fakeDb(photos: Array<{ id: string; created_at: string }>, scanned: Set<
 const deps = (db: any) => ({
   canAdminEvent: async () => true,
   serviceClient: db,
-  sizedUrl: (path: string, w: number) => `https://cdn/${path}?width=${w}`,
+  media: fakeMedia({ base: 'https://cdn' }).media,
   logger,
 });
 

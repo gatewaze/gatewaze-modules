@@ -232,7 +232,8 @@ for (let i = 0; i < queue.length && !stopping; i += MINT_BATCH) {
         const body = await readFile(file.path);
         const put = await request(item.upload_url, {
           method: 'PUT',
-          headers: { 'Content-Type': 'image/jpeg' },
+          // The headers the server minted the upload with: some stores sign them.
+          headers: item.upload_headers && Object.keys(item.upload_headers).length ? item.upload_headers : { 'Content-Type': 'image/jpeg' },
           body,
         }, `upload ${relative(folder, file.path)}`);
         if (!put.ok) throw new Error(`upload answered ${put.status}`);
