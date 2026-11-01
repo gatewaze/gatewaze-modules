@@ -6,9 +6,9 @@ Where module files are kept. Supabase Storage is built in. Provider modules name
 
 Modules that keep files ask the storage registry for a store and never call a provider directly:
 
-```ts
-import { createStorageRegistry } from '../../storage/lib/registry.js';
+The registry comes from `createStorageRegistry` in `storage/lib/registry.ts`, loaded with a dynamic import (see Loading below).
 
+```ts
 const storage = createStorageRegistry({ supabase: serviceClient, logger });
 
 // A new file: goes to the provider chosen for this purpose.
