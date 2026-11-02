@@ -7,7 +7,7 @@ const calendarsModule: GatewazeModule = {
   visibility: 'public',
   name: 'Calendars',
   description: 'Manage event calendars with discovery, CSV import, and scheduling APIs',
-  version: '1.2.2',
+  version: '1.2.3',
   features: [
     'calendars',
     'calendars.discover',

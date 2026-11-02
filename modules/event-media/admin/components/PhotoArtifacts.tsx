@@ -4,6 +4,7 @@ import { CheckCircleIcon, ExclamationTriangleIcon, PencilSquareIcon } from '@her
 import { Button } from '@/components/ui';
 import { supabase } from '@/lib/supabase';
 import type { HostMediaItem } from '../utils/mediaOrganizerService';
+import { urlFor } from '../utils/rotateMedia';
 import {
   MAX_FAR_INSIDE,
   MAX_NEAR_OUTSIDE,
@@ -53,15 +54,23 @@ async function authedFetch(path: string, init?: RequestInit): Promise<Response> 
 }
 
 /**
- * The bucket's public URL, taken from the photo's own cdn_url rather than
+ * A layer's address, worked out from the photo's own cdn_url rather than
  * rebuilt from configuration, so it keeps working whatever the storage
- * host is.
+ * host is (Supabase, or R2's own domain).
  */
 function artifactUrl(item: HostMediaItem, path: string | undefined): string | null {
   if (!path) return null;
-  if (/^https?:/i.test(path)) return path;
-  const m = /^(.*\/storage\/v1\/object\/public\/[^/]+\/)/.exec(item.cdn_url);
-  return m ? m[1] + path : null;
+  try {
+    // Only ever the photo's own host: a full address elsewhere, or a path
+    // that climbs out of the bucket, is not loaded into the admin's browser.
+    if (/^https?:/i.test(path)) {
+      return new URL(path).origin === new URL(item.cdn_url).origin ? path : null;
+    }
+    if (path.split('/').includes('..')) return null;
+    return urlFor(item.cdn_url, item.storage_path ?? '', path);
+  } catch {
+    return null;
+  }
 }
 
 function load(src: string | null): Promise<HTMLImageElement | null> {

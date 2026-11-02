@@ -582,16 +582,32 @@ export async function getCalendarMediaHighlights(
     return []
   }
 
-  // Only files in Supabase's media bucket have an address this page can
-  // build. A photo kept in another provider (modules/storage) is left out
-  // rather than shown as a broken link to the wrong host.
-  const inSupabase = (row: any) =>
-    (row.storage_provider ?? 'supabase') === 'supabase' && !row.storage_bucket
+  // Files in Supabase's media bucket get the Supabase address. A file kept
+  // by another provider (modules/storage, e.g. R2) gets that provider's
+  // public domain, from host-media's host_media_public_base(); a row whose
+  // provider has no public address here is left out rather than shown as
+  // a broken link to the wrong host.
+  const bases = new Map<string, string | null>()
+  for (const row of mediaRows || []) {
+    const provider = (row as any).storage_provider ?? 'supabase'
+    const bucket = (row as any).storage_bucket ?? null
+    if (provider === 'supabase') continue
+    const k = `${provider}|${bucket}`
+    if (bases.has(k)) continue
+    const { data } = await supabase.rpc('host_media_public_base', { p_provider: provider, p_bucket: bucket })
+    bases.set(k, typeof data === 'string' && /^https:\/\/[A-Za-z0-9.-]+$/.test(data) ? data : null)
+  }
+  const urlOf = (row: any): string | null => {
+    const provider = row.storage_provider ?? 'supabase'
+    if (provider === 'supabase') return row.storage_bucket ? null : mediaPublicUrl(row.storage_path)
+    const base = bases.get(`${provider}|${row.storage_bucket ?? null}`)
+    return base ? `${base}/${String(row.storage_path).split('/').map(encodeURIComponent).join('/')}` : null
+  }
 
-  return (mediaRows || []).filter(inSupabase).map((row: any) => {
+  return (mediaRows || []).filter((row: any) => urlOf(row) !== null).map((row: any) => {
     const ev = eventByUuid.get(row.host_id)
     const type: 'photo' | 'video' | 'image' = String(row.mime_type || '').startsWith('video/') ? 'video' : 'photo'
-    const url = mediaPublicUrl(row.storage_path)
+    const url = urlOf(row) as string
     return {
       id: row.id,
       url,
