@@ -473,9 +473,9 @@ async function processEventGuests(
             )
 
             const checkedInAt = parseCheckedInAt(row.checked_in_at)
-            if (regResult.success && regResult.registrationId && checkedInAt) {
-              await markRegistrationCheckedIn(supabase, regResult.registrationId, checkedInAt)
-            }
+            const checkInFailed = regResult.success && regResult.registrationId && checkedInAt
+              ? (await markRegistrationCheckedIn(supabase, regResult.registrationId, checkedInAt)) === 'failed'
+              : false
 
             return {
               email: row.email,
@@ -485,6 +485,7 @@ async function processEventGuests(
               memberProfileId: regResult.memberProfileId,
               registrationId: regResult.registrationId,
               checkedInAt,
+              checkInFailed,
             }
           } catch (error: any) {
             return { email: row.email, success: false, error: error.message }
@@ -499,6 +500,9 @@ async function processEventGuests(
       for (const result of results) {
         if (result.success) {
           registrationsCreated++
+          if (result.checkInFailed) {
+            errors.push({ row: 0, error: `Registered ${result.email} but failed to record their check-in; re-upload to retry` })
+          }
           if (useTracking) {
             await supabase
               .from('integrations_luma_event_registrations')

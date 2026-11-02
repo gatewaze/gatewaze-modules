@@ -387,9 +387,9 @@ async function handleGuestRegistered(data: LumaGuestData): Promise<Response> {
   })
 
   const checkedInAt = extractWebhookCheckedInAt(data)
-  if (checkedInAt && result.registrationId) {
-    await markRegistrationCheckedIn(supabase, result.registrationId, checkedInAt)
-  }
+  const checkedIn = checkedInAt && result.registrationId
+    ? (await markRegistrationCheckedIn(supabase, result.registrationId, checkedInAt)) === 'recorded'
+    : false
 
   // Conversion tracking is now handled by the DB trigger on event_registrations INSERT
   // (send_conversion_on_registration) — no need for fire-and-forget here.
@@ -403,6 +403,7 @@ async function handleGuestRegistered(data: LumaGuestData): Promise<Response> {
     customerId: result.customerId,
     memberProfileId: result.memberProfileId,
     registrationId: result.registrationId,
+    checkedIn,
   }), {
     status: 200,
     headers: { ...corsHeaders, 'Content-Type': 'application/json' }
