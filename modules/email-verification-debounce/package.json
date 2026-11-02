@@ -1,0 +1,19 @@
+{
+  "name": "@gatewaze-modules/email-verification-debounce",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "main": "index.ts",
+  "types": "index.ts",
+  "description": "Debounce mailbox checks for the email-verification module",
+  "exports": {
+    ".": "./index.ts",
+    "./provider": "./provider.ts"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@gatewaze/shared": "*"
+  }
+}
