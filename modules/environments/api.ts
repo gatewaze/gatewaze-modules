@@ -1009,8 +1009,17 @@ export function registerRoutes(app: Express, context?: ModuleContext) {
           await flushProgress();
         }
 
-        // Sync storage
-        for (const bucketName of storageBuckets) {
+        // Sync storage. A brand whose storage has moved off Supabase
+        // (STORAGE_PUBLIC_URL) keeps its files in its provider bucket, so
+        // the source Supabase buckets are stale copies; copying them would
+        // fill the target with old files. Skipped, and said so in the log.
+        const storageMovedOff = String(process.env.STORAGE_PUBLIC_URL ?? '').trim() !== '';
+        if (storageMovedOff && storageBuckets.length > 0) {
+          addLog('warn', `Skipping storage sync of ${storageBuckets.length} bucket(s): STORAGE_PUBLIC_URL is set, so this brand's files are not in Supabase Storage`);
+          console.warn('[environments:sync] storage sync skipped: STORAGE_PUBLIC_URL is set');
+          await flushProgress();
+        }
+        for (const bucketName of storageMovedOff ? [] : storageBuckets) {
           addLog('info', `Syncing bucket: ${bucketName}`);
           await flushProgress();
 

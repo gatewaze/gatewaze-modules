@@ -7,7 +7,7 @@ const offersModule: GatewazeModule = {
   visibility: 'public',
   name: 'Offers',
   description: 'Create and distribute offers with acceptance tracking and conversion analytics',
-  version: '1.1.0',
+  version: '1.1.1',
   features: [
     'offers',
     'offers.manage',

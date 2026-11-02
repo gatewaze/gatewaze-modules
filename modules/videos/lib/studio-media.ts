@@ -18,6 +18,8 @@ import { Readable } from 'node:stream';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { storeFor, externalise, assertSafeKey } from './storage.js';
+import { aliasedBucketStore, downloadObject } from '../../storage/lib/bucket-store.js';
+import { storagePublicConfig, storagePublicUrl } from '../../storage/lib/public-url.js';
 
 export const MEDIA_BUCKET = 'media';
 export const STUDIO_PREFIX = 'video-studio';
@@ -32,12 +34,19 @@ export function studioFolder(videoId: string, studioId: string): string {
 
 export async function putMedia(supabase, path: string, bytes: Buffer, contentType: string): Promise<string> {
   const key = assertSafeKey(path);
+  const moved = await aliasedBucketStore(supabase, MEDIA_BUCKET);
+  if (moved) {
+    await moved.put(key, bytes, { contentType, upsert: true });
+    return key;
+  }
   const up = await supabase.storage.from(MEDIA_BUCKET).upload(key, bytes, { contentType, upsert: true });
   if (up.error) throw new Error(`media upload failed: ${up.error.message}`);
   return key;
 }
 
 export async function getMedia(supabase, path: string): Promise<Buffer> {
+  const moved = await aliasedBucketStore(supabase, MEDIA_BUCKET);
+  if (moved) return downloadObject(moved, assertSafeKey(path));
   const { data, error } = await supabase.storage.from(MEDIA_BUCKET).download(assertSafeKey(path));
   if (error || !data) throw new Error(`media download failed: ${error?.message ?? 'no data'}`);
   return Buffer.from(await data.arrayBuffer());
@@ -45,6 +54,9 @@ export async function getMedia(supabase, path: string): Promise<Buffer> {
 
 /** The browser-reachable URL of a media object. */
 export function mediaUrl(supabase, path: string): string {
+  // A brand that has moved off Supabase Storage serves media from its own origin.
+  const moved = storagePublicUrl(storagePublicConfig(process.env), MEDIA_BUCKET, assertSafeKey(path));
+  if (moved) return moved;
   const { data } = supabase.storage.from(MEDIA_BUCKET).getPublicUrl(assertSafeKey(path));
   return externalise(String(data?.publicUrl ?? ''));
 }
@@ -53,6 +65,13 @@ export function mediaUrl(supabase, path: string): string {
 export async function removeStudioFolder(supabase, videoId: string, studioId: string): Promise<void> {
   try {
     const folder = studioFolder(videoId, studioId);
+    const moved = await aliasedBucketStore(supabase, MEDIA_BUCKET);
+    if (moved) {
+      // One level, as the Supabase listing below.
+      const names = (await moved.list(`${folder}/`, 1000)).map((e) => e.path).filter((p) => p.lastIndexOf('/') === folder.length);
+      if (names.length) await moved.remove(names);
+      return;
+    }
     const { data } = await supabase.storage.from(MEDIA_BUCKET).list(folder, { limit: 1000 });
     const names = (data ?? []).map((e) => `${folder}/${e.name}`);
     if (names.length) await supabase.storage.from(MEDIA_BUCKET).remove(names);

@@ -42,6 +42,8 @@ import { createAbRoutes, mountAbRoutes } from './ab-routes.js';
 import { InternalGitServerImpl } from '../lib/git/internal-git-server-impl.js';
 import { PublishWorker } from '../lib/publish-worker/publish-worker.js';
 import type { InternalRepoRef } from '../lib/git/internal-git-server.js';
+import { storagePublicConfig, storagePublicUrl } from '../../storage/lib/public-url.js';
+import { aliasedBucketStore, downloadObject } from '../../storage/lib/bucket-store.js';
 
 interface PlatformLogger {
   info: (msg: string, meta?: Record<string, unknown>) => void;
@@ -250,8 +252,11 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
     // images served to browsers need the EXTERNAL hostname from
     // SUPABASE_PUBLIC_URL.
     const publicSupabaseUrl = (process.env.SUPABASE_PUBLIC_URL || process.env.SUPABASE_URL || '').replace(/\/+$/, '');
+    // A brand that has moved off Supabase Storage (STORAGE_PUBLIC_URL)
+    // serves the same paths from its own origin.
     const buildPublicUrl = (storagePath: string): string =>
-      `${publicSupabaseUrl}/storage/v1/object/public/${STORAGE_BUCKET}/${storagePath}`;
+      storagePublicUrl(storagePublicConfig(process.env), STORAGE_BUCKET, storagePath)
+        ?? `${publicSupabaseUrl}/storage/v1/object/public/${STORAGE_BUCKET}/${storagePath}`;
 
     const mediaRewriterDeps = {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -698,11 +703,21 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
   const ADAPTER_BUCKET = process.env.STORAGE_BUCKET ?? 'media';
   const adapterPublicSupabaseUrl = (process.env.SUPABASE_PUBLIC_URL || process.env.SUPABASE_URL || '').replace(/\/+$/, '');
   const adapterBuildPublicUrl = (storagePath: string): string =>
-    `${adapterPublicSupabaseUrl}/storage/v1/object/public/${ADAPTER_BUCKET}/${storagePath}`;
+    storagePublicUrl(storagePublicConfig(process.env), ADAPTER_BUCKET, storagePath)
+      ?? `${adapterPublicSupabaseUrl}/storage/v1/object/public/${ADAPTER_BUCKET}/${storagePath}`;
+  // The store the bucket is served from on a brand that has moved off
+  // Supabase Storage (storage module `supabase_alias`), else null and
+  // supabase-js as before.
+  const movedStore = () => aliasedBucketStore(supabase, ADAPTER_BUCKET);
 
   const mediaAdapter = {
     async upload(args: { hostKind: string; hostId: string; filename: string; mimeType: string; buffer: Buffer }) {
       const path = `${args.hostKind}s/${args.hostId}/media/${args.filename}`;
+      const moved = await movedStore();
+      if (moved) {
+        await moved.put(path, args.buffer, { contentType: args.mimeType, upsert: true });
+        return { storagePath: path, cdnUrl: adapterBuildPublicUrl(path) };
+      }
       const { error } = await supabase.storage.from(ADAPTER_BUCKET).upload(path, args.buffer, {
         contentType: args.mimeType,
         upsert: true,
@@ -711,6 +726,12 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
       return { storagePath: path, cdnUrl: adapterBuildPublicUrl(path) };
     },
     async delete(storagePath: string) {
+      const moved = await movedStore();
+      if (moved) {
+        const { failed } = await moved.remove([storagePath]);
+        if (failed.length) throw new Error(`storage delete failed: ${failed.join(', ')}`);
+        return;
+      }
       const { error } = await supabase.storage.from(ADAPTER_BUCKET).remove([storagePath]);
       if (error) throw new Error(`storage delete failed: ${error.message}`);
     },
@@ -720,6 +741,8 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
     // the publish-worker reads the binary here and writes it under
     // public/media/<filename> in the published git tree.
     async download(storagePath: string): Promise<Buffer> {
+      const moved = await movedStore();
+      if (moved) return downloadObject(moved, storagePath);
       const { data, error } = await supabase.storage.from(ADAPTER_BUCKET).download(storagePath);
       if (error) throw new Error(`storage download failed: ${error.message}`);
       if (!data) throw new Error(`storage download returned no body for ${storagePath}`);

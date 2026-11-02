@@ -3,6 +3,26 @@ import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!
 const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
 
+const storagePublicUrl = (Deno.env.get('STORAGE_PUBLIC_URL') ?? '').trim().replace(/\/+$/, '')
+
+/**
+ * The media path of a speaker's own upload on a brand that has moved its
+ * storage to R2, or null. Only the speaker-submissions/ folder is accepted,
+ * so a request cannot point the avatar at any other file. Brands without
+ * STORAGE_PUBLIC_URL always get null and keep today's behaviour.
+ */
+function movedAvatarPath(value: string): string | null {
+  if (!/^https:\/\/[A-Za-z0-9.-]+$/.test(storagePublicUrl)) return null
+  let path = value.trim()
+  if (path.startsWith(`${storagePublicUrl}/`)) path = path.slice(storagePublicUrl.length + 1)
+  try {
+    path = path.split('/').map(decodeURIComponent).join('/')
+  } catch {
+    return null
+  }
+  return /^speaker-submissions\/[A-Za-z0-9][A-Za-z0-9._-]{0,200}$/.test(path) ? path : null
+}
+
 const supabase = createClient(supabaseUrl, supabaseServiceKey, {
   auth: {
     autoRefreshToken: false,
@@ -403,9 +423,18 @@ async function handler(req: Request) {
         console.log('📸 Processing avatar update, URL:', body.avatar_url)
         // Extract storage path from public URL
         // URL format: https://xxx.supabase.co/storage/v1/object/public/customer-avatars/speaker-submissions/xxx.jpg
+        // On a brand that has moved to R2 (STORAGE_PUBLIC_URL) the same
+        // folder is <STORAGE_PUBLIC_URL>/customer-avatars/..., which the split
+        // below also handles; a media-bucket upload arrives as
+        // speaker-submissions/<name>, bare or on that origin.
         const urlParts = body.avatar_url.split('/customer-avatars/')
         console.log('📸 URL parts:', urlParts)
-        if (urlParts.length === 2) {
+        const movedPath = urlParts.length === 2 ? null : movedAvatarPath(String(body.avatar_url))
+        if (movedPath) {
+          personUpdate.avatar_storage_path = movedPath
+          personUpdate.avatar_source = 'uploaded'
+          personUpdate.avatar_updated_at = new Date().toISOString()
+        } else if (urlParts.length === 2) {
           personUpdate.avatar_storage_path = urlParts[1]
           personUpdate.avatar_source = 'uploaded'
           personUpdate.avatar_updated_at = new Date().toISOString()

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { extractMediaReferences, normalizeToStoragePath } from '../reference-tracker.js';
 
 describe('extractMediaReferences', () => {
@@ -60,5 +60,28 @@ describe('normalizeToStoragePath', () => {
 
   it('returns null for opaque external URLs', () => {
     expect(normalizeToStoragePath('https://other.example.com/foo.jpg', 'https://api.brand.com')).toBeNull();
+  });
+});
+
+describe('normalizeToStoragePath on a brand that has moved off Supabase Storage', () => {
+  const saved = { url: process.env.STORAGE_PUBLIC_URL, hosts: process.env.STORAGE_LEGACY_HOSTS };
+  afterEach(() => {
+    if (saved.url === undefined) delete process.env.STORAGE_PUBLIC_URL; else process.env.STORAGE_PUBLIC_URL = saved.url;
+    if (saved.hosts === undefined) delete process.env.STORAGE_LEGACY_HOSTS; else process.env.STORAGE_LEGACY_HOSTS = saved.hosts;
+  });
+
+  it('reads paths from the new origin and from the old Supabase host', () => {
+    process.env.STORAGE_PUBLIC_URL = 'https://media.test';
+    process.env.STORAGE_LEGACY_HOSTS = 'old.supabase.co';
+    const base = 'https://media.test';
+    expect(normalizeToStoragePath('https://media.test/sites/s1/media/a.webp', base)).toBe('sites/s1/media/a.webp');
+    expect(normalizeToStoragePath('https://media.test/cdn-cgi/image/width=640,fit=scale-down,quality=80,format=auto/sites/s1/media/a.webp', base)).toBe('sites/s1/media/a.webp');
+    expect(normalizeToStoragePath('https://old.supabase.co/storage/v1/object/public/media/sites/s1/media/a.webp', base)).toBe('sites/s1/media/a.webp');
+    expect(normalizeToStoragePath('https://other.example/a.webp', base)).toBeNull();
+  });
+
+  it('is unchanged without STORAGE_PUBLIC_URL', () => {
+    delete process.env.STORAGE_PUBLIC_URL;
+    expect(normalizeToStoragePath('https://p.supabase.co/storage/v1/object/public/media/sites/s1/a.webp', 'https://p.supabase.co')).toBe('sites/s1/a.webp');
   });
 });

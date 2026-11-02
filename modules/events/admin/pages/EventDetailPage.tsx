@@ -77,6 +77,7 @@ import { BulkAttendanceUpload } from '@/components/events/BulkAttendanceUpload';
 import { EventImageUpload } from '@/components/events/EventImageUpload';
 import { AccountService } from '@/utils/accountService';
 import { supabase, Account } from '@/lib/supabase';
+import { rewriteStorageUrl } from '../../../storage/browser/storage';
 import type { RealtimePostgresChangesPayload } from '@supabase/supabase-js';
 import { QRCodeService } from '@/utils/qrCodeService';
 import { analyzeGradientColors } from '@/utils/colorUtils';
@@ -934,9 +935,10 @@ const ModuleTabContent = ({ slots, activeTab, props }: {
 const getAbsoluteImageUrl = (url: string | undefined): string | undefined => {
   if (!url) return undefined;
 
-  // If it's already an absolute URL, return as is
+  // Already an absolute URL: return as is, except that an old storage URL for
+  // this brand is pointed at its current storage host
   if (url.startsWith('http://') || url.startsWith('https://')) {
-    return url;
+    return rewriteStorageUrl(url);
   }
 
   // Leading-slash paths point at the portal site (legacy uploads served
@@ -954,7 +956,7 @@ const getAbsoluteImageUrl = (url: string | undefined): string | undefined => {
   // and 404 on the SPA shell.
   const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
   if (supabaseUrl) {
-    return `${supabaseUrl}/storage/v1/object/public/media/${url}`;
+    return rewriteStorageUrl(`${supabaseUrl}/storage/v1/object/public/media/${url}`);
   }
 
   return url;

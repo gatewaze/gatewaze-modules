@@ -30,6 +30,7 @@
  * block event ingestion.
  */
 
+import { movedBucketStore } from './moved-store.js';
 import { fetchImage, guardedFetch } from './guarded-fetch.js';
 
 // A brand-new calendar is first seen before its first event is linked, so
@@ -124,7 +125,20 @@ async function populateCover(supabase, cal, calendar) {
   else if (contentType.includes('gif')) ext = 'gif';
 
   const filePath = `calendars/${cal.calendar_id}-cover.${ext}`;
-  const { error: uploadErr } = await supabase.storage
+  let moved;
+  try {
+    moved = await movedBucketStore(supabase, 'media');
+  } catch (e) {
+    return { skipped: true, reason: `storage-unavailable: ${e.message}` };
+  }
+  if (moved) {
+    try {
+      await moved.put(filePath, img.buffer, { upsert: true, contentType: `image/${ext === 'jpg' ? 'jpeg' : ext}`, cacheControl: 'public, max-age=3600' });
+    } catch (e) {
+      return { skipped: true, reason: `storage-upload-failed: ${e.message}` };
+    }
+  }
+  const { error: uploadErr } = moved ? { error: null } : await supabase.storage
     .from('media')
     .upload(filePath, img.buffer, {
       upsert: true,

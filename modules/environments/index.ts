@@ -6,7 +6,7 @@ const environmentsModule: GatewazeModule = {
   visibility: 'public',
   name: 'Environments',
   description: 'Push and pull content between Supabase environments — sync database rows, edge functions, storage, and auth configuration across local, cloud, and self-hosted instances',
-  version: '1.0.0',
+  version: '1.0.1',
   group: 'platform',
   features: [
     'environments',

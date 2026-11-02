@@ -41,6 +41,7 @@ import { PeopleAvatarService } from '@/utils/peopleAvatarService';
 import { EventQrService, EventSponsor } from '@/utils/eventQrService';
 import { SpeakerLinkService, SpeakerTrackingLink } from './utils/speakerLinkService';
 import { supabase, supabaseUrl } from '@/lib/supabase';
+import { rewriteStorageUrl, uploadToStorage } from '../../storage/browser/storage';
 import { SendSpeakerEmailModal } from '../../bulk-emailing/admin/components/SendSpeakerEmailModal';
 import { PromoKitModal, PromoKitSettingsModal, kitStatusBadge, type PromoKitRow } from './components/PromoKitModal';
 
@@ -49,9 +50,9 @@ import { PromoKitModal, PromoKitSettingsModal, kitStatusBadge, type PromoKitRow 
 function resolveAvatarUrl(avatarUrl: string | null | undefined): string | null {
   if (!avatarUrl) return null;
   // Already a full URL
-  if (avatarUrl.startsWith('http://') || avatarUrl.startsWith('https://')) return avatarUrl;
+  if (avatarUrl.startsWith('http://') || avatarUrl.startsWith('https://')) return rewriteStorageUrl(avatarUrl);
   // Storage path → resolve via the media bucket
-  return `${supabaseUrl}/storage/v1/object/public/media/${avatarUrl}`;
+  return rewriteStorageUrl(`${supabaseUrl}/storage/v1/object/public/media/${avatarUrl}`);
 }
 
 interface TalkDurationOption {
@@ -872,7 +873,7 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
     });
     // Construct the company logo URL from storage path
     const logoPreviewUrl = speaker.companyLogoStoragePath
-      ? `${supabaseUrl}/storage/v1/object/public/speaker-logos/${speaker.companyLogoStoragePath}`
+      ? rewriteStorageUrl(`${supabaseUrl}/storage/v1/object/public/speaker-logos/${speaker.companyLogoStoragePath}`)
       : null;
     setCompanyLogoPreview(logoPreviewUrl);
     setCompanyLogoFile(null);
@@ -946,12 +947,8 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
         const fileExt = trimmedFile.name.split('.').pop();
         const fileName = `${editingSpeaker.speakerId}-${Date.now()}.${fileExt}`;
 
-        const { error: uploadError } = await supabase.storage
-          .from('media')
-          .upload(fileName, trimmedFile, { upsert: true });
-
-        if (uploadError) throw uploadError;
-        logoPath = fileName;
+        const uploaded = await uploadToStorage('media', fileName, trimmedFile, { upsert: true });
+        logoPath = uploaded.path;
       } else if (companyLogoPreview === null && editingSpeaker.companyLogoStoragePath) {
         // Logo was removed
         logoPath = null;
@@ -2029,7 +2026,7 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                       </p>
                       {speakerGroup.companyLogoStoragePath && (
                         <img
-                          src={`${supabaseUrl}/storage/v1/object/public/speaker-logos/${speakerGroup.companyLogoStoragePath}`}
+                          src={rewriteStorageUrl(`${supabaseUrl}/storage/v1/object/public/speaker-logos/${speakerGroup.companyLogoStoragePath}`)}
                           alt={`${speakerGroup.company} logo`}
                           className="h-5 max-w-20 object-contain [filter:brightness(0)] dark:[filter:brightness(0)_invert(1)]"
                         />
@@ -2038,7 +2035,7 @@ export function EventSpeakersTab({ eventUuid, eventId, eventLink, eventTitle, ta
                   )}
                   {!speakerGroup.company && speakerGroup.companyLogoStoragePath && (
                     <img
-                      src={`${supabaseUrl}/storage/v1/object/public/speaker-logos/${speakerGroup.companyLogoStoragePath}`}
+                      src={rewriteStorageUrl(`${supabaseUrl}/storage/v1/object/public/speaker-logos/${speakerGroup.companyLogoStoragePath}`)}
                       alt="Company logo"
                       className="h-6 max-w-24 object-contain [filter:brightness(0)] dark:[filter:brightness(0)_invert(1)]"
                     />
