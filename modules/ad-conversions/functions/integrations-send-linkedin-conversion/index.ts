@@ -368,7 +368,8 @@ Deno.serve(async (req) => {
         hasTrackingSession: !!trackingSession,
         hasClickId: !!liFatId,
         status,
-        response: responsePayload,
+        // LinkedIn's body and any network error stay in integrations_conversion_log,
+        // not in the reply.
       }),
       { status: success ? 200 : 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
     )
