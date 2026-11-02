@@ -1,0 +1,22 @@
+{
+  "name": "@gatewaze-modules/email-verification",
+  "version": "0.1.0",
+  "license": "Apache-2.0",
+  "main": "index.ts",
+  "types": "index.ts",
+  "description": "Checks email addresses (format, typos, disposable domains, DNS, optional paid mailbox checks) and keeps bad addresses out of broadcasts",
+  "exports": {
+    ".": "./index.ts",
+    "./migrations/*": "./migrations/*",
+    "./lib/*": "./lib/*"
+  },
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "peerDependencies": {
+    "@gatewaze/shared": "*",
+    "@supabase/supabase-js": "*",
+    "pg": "*"
+  }
+}
