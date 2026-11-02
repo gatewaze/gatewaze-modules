@@ -6,12 +6,14 @@
  */
 import { emailChannelProvider } from './email.js';
 import { twilioSmsChannelProvider, whatsappChannelProvider } from './twilio.js';
+import { slackChannelProvider } from './slack.js';
 import type { ChannelProvider } from './types.js';
 
 const REGISTRY: Record<string, ChannelProvider> = {
   email: emailChannelProvider,
   sms: twilioSmsChannelProvider,
   whatsapp: whatsappChannelProvider,
+  slack: slackChannelProvider,
 };
 
 export function resolveChannelProvider(channel: string | null | undefined): ChannelProvider {
