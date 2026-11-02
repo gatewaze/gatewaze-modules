@@ -11,6 +11,7 @@ import { toast } from 'sonner';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { useAuthContext } from '@/app/contexts/auth/context';
 import { supabase } from '@/lib/supabase';
+import { publicStorageUrl } from '../../../storage/browser/storage';
 import {
   buildContext,
   replaceVariables,
@@ -255,8 +256,14 @@ export function SendSpeakerEmailModal({
       // at send time (not at modal open) so the bytes match the current kit.
       let attachments;
       if (attachKit && kitZipPath) {
-        const { data: file, error: dlError } = await supabase.storage.from('media').download(kitZipPath);
-        if (dlError || !file) {
+        let file: Blob | null = null;
+        try {
+          const res = await fetch(publicStorageUrl('media', kitZipPath), { cache: 'no-store' });
+          if (res.ok) file = await res.blob();
+        } catch {
+          file = null;
+        }
+        if (!file) {
           toast.error('Could not read the speaker kit — send cancelled so the email does not promise a missing attachment');
           setIsSending(false);
           return;

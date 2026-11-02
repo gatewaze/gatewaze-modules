@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase';
+import { uploadToStorage, removeFromStorage } from '../../../storage/browser/storage';
 
 export interface OfferResource {
   id: string;
@@ -133,11 +134,9 @@ export class OfferResourceService {
 
     // Delete the file from storage if requested
     if (deleteFile && resource.storage_path) {
-      const { error: storageError } = await supabase.storage
-        .from(DOWNLOADS_BUCKET)
-        .remove([resource.storage_path]);
-
-      if (storageError) {
+      try {
+        await removeFromStorage(DOWNLOADS_BUCKET, [resource.storage_path]);
+      } catch (storageError) {
         console.warn('Error deleting file from storage:', storageError);
         // Continue with deleting the record even if file deletion fails
       }
@@ -172,14 +171,12 @@ export class OfferResourceService {
     const storagePath = `${safeOfferId}/${timestamp}_${safeFileName}`;
 
     // Upload file to storage
-    const { error: uploadError } = await supabase.storage
-      .from(DOWNLOADS_BUCKET)
-      .upload(storagePath, file, {
+    try {
+      await uploadToStorage(DOWNLOADS_BUCKET, storagePath, file, {
         contentType: file.type,
         upsert: false,
       });
-
-    if (uploadError) {
+    } catch (uploadError) {
       console.error('Error uploading file:', uploadError);
       throw uploadError;
     }
@@ -201,7 +198,11 @@ export class OfferResourceService {
       });
     } catch (error) {
       // If resource creation fails, try to delete the uploaded file
-      await supabase.storage.from(DOWNLOADS_BUCKET).remove([storagePath]);
+      try {
+        await removeFromStorage(DOWNLOADS_BUCKET, [storagePath]);
+      } catch {
+        // Best effort: the original error is the one worth reporting
+      }
       throw error;
     }
   }

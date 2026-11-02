@@ -2,6 +2,7 @@ import { useState, useRef } from 'react';
 import { PhotoIcon, LinkIcon, TrashIcon } from '@heroicons/react/24/outline';
 import { CompetitionWinner, CompetitionWinnerService } from '@/utils/competitionWinnerService';
 import { Modal, Button } from '@/components/ui';
+import { rewriteStorageUrl } from '../../../storage/browser/storage';
 
 interface EditWinnerModalProps {
   isOpen: boolean;
@@ -15,7 +16,7 @@ export function EditWinnerModal({ isOpen, onClose, winner, onSuccess }: EditWinn
   const [socialPostPlatform, setSocialPostPlatform] = useState(winner.social_post_platform || 'twitter');
   const [notes, setNotes] = useState(winner.notes || '');
   const [selectedImage, setSelectedImage] = useState<File | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(winner.winner_image_url || null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(winner.winner_image_url ? rewriteStorageUrl(winner.winner_image_url) : null);
   const [isUploading, setIsUploading] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);

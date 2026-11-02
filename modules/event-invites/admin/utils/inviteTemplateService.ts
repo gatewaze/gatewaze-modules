@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase';
+import { publicStorageUrl, uploadToStorage, removeFromStorage } from '../../../storage/browser/storage';
 
 export interface InviteTemplate {
   id: string;
@@ -144,10 +145,7 @@ export async function uploadAsset(
   const ext = file.name.split('.').pop() || '';
   const storagePath = `${eventId}/${assetType === 'font' ? 'fonts' : 'backgrounds'}/${assetId}.${ext}`;
 
-  const { error: uploadError } = await supabase.storage
-    .from('invite-templates')
-    .upload(storagePath, file, { upsert: false });
-  if (uploadError) throw uploadError;
+  await uploadToStorage('invite-templates', storagePath, file, { upsert: false });
 
   const { data, error } = await supabase
     .from('invite_template_assets')
@@ -168,13 +166,17 @@ export async function uploadAsset(
 }
 
 export async function deleteAsset(asset: TemplateAsset): Promise<void> {
-  await supabase.storage.from(asset.storage_bucket).remove([asset.storage_path]);
+  // Best effort, as before: a storage failure must not block deleting the row.
+  try {
+    await removeFromStorage(asset.storage_bucket, [asset.storage_path]);
+  } catch {
+    /* ignore */
+  }
   await supabase.from('invite_template_assets').delete().eq('id', asset.id);
 }
 
 export function getAssetPublicUrl(asset: TemplateAsset): string {
-  const { data } = supabase.storage.from(asset.storage_bucket).getPublicUrl(asset.storage_path);
-  return data.publicUrl;
+  return publicStorageUrl(asset.storage_bucket, asset.storage_path);
 }
 
 // --- Template Matching ---

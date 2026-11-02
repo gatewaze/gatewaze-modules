@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase';
+import { uploadToStorage, removeFromStorage } from '../../../storage/browser/storage';
 
 // Competition Winners table interface
 export type WinnerStatus = 'selected' | 'notified' | 'accepted' | 'declined' | 'not_replied';
@@ -393,7 +394,7 @@ export class CompetitionWinnerService {
   }
 
   /**
-   * Upload winner image to Supabase Storage. Files live under the
+   * Upload winner image to storage. Files live under the
    * `winner-images/` prefix inside the shared `media` bucket.
    */
   static async uploadWinnerImage(
@@ -405,28 +406,20 @@ export class CompetitionWinnerService {
       const fileName = `${winnerId}-${Date.now()}.${fileExt}`;
       const filePath = `winner-images/${fileName}`;
 
-      // Upload file to storage
-      const { data: uploadData, error: uploadError } = await supabase.storage
-        .from('media')
-        .upload(filePath, file, {
-          cacheControl: '3600',
-          upsert: true
-        });
-
-      if (uploadError) {
+      // Upload file to storage (returns the stored path and its public URL)
+      let uploaded: { path: string; publicUrl: string };
+      try {
+        uploaded = await uploadToStorage('media', filePath, file, { upsert: true });
+      } catch (uploadError) {
         console.error('Error uploading image:', uploadError);
-        return { success: false, error: uploadError.message };
+        return { success: false, error: uploadError instanceof Error ? uploadError.message : 'Upload failed' };
       }
-
-      // Get public URL
-      const { data: { publicUrl } } = supabase.storage
-        .from('media')
-        .getPublicUrl(filePath);
+      const { path: storedPath, publicUrl } = uploaded;
 
       // Update winner record with image URL
       const updateResult = await this.updateWinnerMedia(winnerId, {
         winner_image_url: publicUrl,
-        winner_image_storage_path: filePath
+        winner_image_storage_path: storedPath
       });
 
       if (!updateResult.success) {
@@ -434,7 +427,7 @@ export class CompetitionWinnerService {
       }
 
       console.log('✅ Winner image uploaded successfully');
-      return { success: true, url: publicUrl, path: filePath };
+      return { success: true, url: publicUrl, path: storedPath };
 
     } catch (error) {
       console.error('Unexpected error uploading winner image:', error);
@@ -450,13 +443,11 @@ export class CompetitionWinnerService {
    */
   static async deleteWinnerImage(storagePath: string): Promise<{ success: boolean; error?: string }> {
     try {
-      const { error } = await supabase.storage
-        .from('media')
-        .remove([storagePath]);
-
-      if (error) {
+      try {
+        await removeFromStorage('media', [storagePath]);
+      } catch (error) {
         console.error('Error deleting image:', error);
-        return { success: false, error: error.message };
+        return { success: false, error: error instanceof Error ? error.message : 'Delete failed' };
       }
 
       console.log('✅ Winner image deleted successfully');
