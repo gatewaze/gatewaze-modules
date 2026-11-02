@@ -1,11 +1,13 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
 import {
   createFullRegistration,
+  markRegistrationCheckedIn,
   parseName,
   type RegistrationData,
   type EventData,
 } from '../_shared/lumaRegistration.ts'
 import { extractTrackingSessionId, sanitizeUtmSource } from '../_shared/utmSource.ts'
+import { parseCheckedInAt } from '../_shared/checkIn.ts'
 
 /**
  * Process Luma CSV Upload
@@ -247,7 +249,7 @@ async function processEventGuests(
       last_name: row.last_name,
       phone_number: row.phone_number || null,
       luma_approval_status: row.approval_status,
-      luma_checked_in_at: row.checked_in_at ? new Date(row.checked_in_at).toISOString() : null,
+      luma_checked_in_at: parseCheckedInAt(row.checked_in_at),
       luma_qr_code_url: row.qr_code_url,
       luma_custom_source: sanitizeUtmSource(row.custom_source),
       luma_ticket_type_id: row.ticket_type_id || null,
@@ -471,6 +473,11 @@ async function processEventGuests(
               registrantMarketingConsent
             )
 
+            const checkedInAt = parseCheckedInAt(row.checked_in_at)
+            if (regResult.success && regResult.registrationId && checkedInAt) {
+              await markRegistrationCheckedIn(supabase, regResult.registrationId, checkedInAt)
+            }
+
             return {
               email: row.email,
               success: regResult.success,
@@ -478,6 +485,7 @@ async function processEventGuests(
               personId: regResult.personId,
               memberProfileId: regResult.memberProfileId,
               registrationId: regResult.registrationId,
+              checkedInAt,
             }
           } catch (error: any) {
             return { email: row.email, success: false, error: error.message }
@@ -501,6 +509,8 @@ async function processEventGuests(
                 created_person_id: result.personId,
                 created_people_profile_id: result.memberProfileId,
                 created_registration_id: result.registrationId,
+                // The staging upsert ignores duplicates, so refresh it here
+                ...(result.checkedInAt ? { luma_checked_in_at: result.checkedInAt } : {}),
               })
               .eq('brand_id', upload.brand_id)
               .eq('luma_event_id', lumaEventId)
@@ -528,6 +538,21 @@ async function processEventGuests(
       processed += batch.length
       await updateProgress(processed, errors, registrationsCreated)
     }
+
+    // Guests processed by an earlier upload skip the loop above, but a
+    // re-export after the event is how their check-ins arrive.
+    if (!upload.event_id && lumaEventId) {
+      const pendingGuestIds = new Set(approvedRows.map(row => row.api_id))
+      const lateCheckIns = allApprovedRows
+        .filter(row => !pendingGuestIds.has(row.api_id))
+        .map(row => ({ guestId: row.api_id as string, checkedInAt: parseCheckedInAt(row.checked_in_at) }))
+        .filter((c): c is { guestId: string; checkedInAt: string } => c.checkedInAt !== null)
+
+      if (lateCheckIns.length > 0) {
+        const recorded = await applyCheckInsToProcessedGuests(upload.brand_id, lumaEventId, lateCheckIns)
+        console.log(`Recorded ${recorded} check-ins on registrations from earlier uploads`)
+      }
+    }
   } else {
     // No internal event - mark all as processed
     processed = lumaRegBatch.length
@@ -535,6 +560,54 @@ async function processEventGuests(
   }
 
   return { processed, errors, registrationsCreated }
+}
+
+/**
+ * Record check-ins for guests whose registrations an earlier upload created,
+ * refreshing their staged luma_checked_in_at as well. Returns how many
+ * registrations gained a check-in.
+ */
+async function applyCheckInsToProcessedGuests(
+  brandId: string,
+  lumaEventId: string,
+  checkIns: Array<{ guestId: string; checkedInAt: string }>
+): Promise<number> {
+  // Keeps the .in() filter well inside PostgREST's URL length limit
+  const CHUNK_SIZE = 200
+  let recorded = 0
+
+  for (let i = 0; i < checkIns.length; i += CHUNK_SIZE) {
+    const chunk = checkIns.slice(i, i + CHUNK_SIZE)
+    const checkedInAtByGuest = new Map(chunk.map(c => [c.guestId, c.checkedInAt]))
+
+    const { data: staged, error } = await supabase
+      .from('integrations_luma_event_registrations')
+      .select('id, luma_guest_id, luma_checked_in_at, created_registration_id')
+      .eq('brand_id', brandId)
+      .eq('luma_event_id', lumaEventId)
+      .in('luma_guest_id', chunk.map(c => c.guestId))
+      .not('created_registration_id', 'is', null)
+
+    if (error) {
+      console.error('Failed to load processed guests for check-in:', error.message)
+      continue
+    }
+
+    const results = await Promise.all((staged ?? []).map(async (row) => {
+      const checkedInAt = checkedInAtByGuest.get(row.luma_guest_id)
+      if (!checkedInAt) return false
+      if (!row.luma_checked_in_at) {
+        await supabase
+          .from('integrations_luma_event_registrations')
+          .update({ luma_checked_in_at: checkedInAt })
+          .eq('id', row.id)
+      }
+      return markRegistrationCheckedIn(supabase, row.created_registration_id, checkedInAt)
+    }))
+    recorded += results.filter(Boolean).length
+  }
+
+  return recorded
 }
 
 /**

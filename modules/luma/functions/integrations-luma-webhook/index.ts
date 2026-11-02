@@ -3,10 +3,12 @@ import {
   createFullRegistration,
   cancelRegistration,
   updateRegistrationStatus,
+  markRegistrationCheckedIn,
   mapApprovalStatus,
   type RegistrationData,
   type EventData,
 } from '../_shared/lumaRegistration.ts'
+import { extractWebhookCheckedInAt } from '../_shared/checkIn.ts'
 import { extractTrackingSessionId, sanitizeUtmSource } from '../_shared/utmSource.ts'
 
 /**
@@ -69,6 +71,8 @@ interface LumaGuestData {
   solana_address?: string
   registration_answers?: LumaRegistrationAnswer[]
   check_in_qr_code?: string
+  checked_in_at?: string | null
+  checked_in?: boolean
   invited_at?: string
   joined_at?: string
   event_tickets?: LumaTicket[]
@@ -90,6 +94,7 @@ interface LumaTicket {
   amount?: number
   currency?: string
   checked_in?: boolean
+  checked_in_at?: string | null
   event_ticket_type_api_id?: string
   ticket_type_name?: string
 }
@@ -288,7 +293,7 @@ async function handleGuestRegistered(data: LumaGuestData): Promise<Response> {
   // Look up event by luma_event_id
   const { data: event } = await supabase
     .from('events')
-    .select('event_id, event_city, event_country_code, venue_address, cvent_event_id, cvent_admission_item_id, cvent_sync_enabled')
+    .select('id, event_id, event_city, event_country_code, venue_address, cvent_event_id, cvent_admission_item_id, cvent_sync_enabled')
     .eq('luma_event_id', lumaEventId)
     .maybeSingle()
 
@@ -382,6 +387,11 @@ async function handleGuestRegistered(data: LumaGuestData): Promise<Response> {
     registrationId: result.registrationId,
   })
 
+  const checkedInAt = extractWebhookCheckedInAt(data)
+  if (checkedInAt && result.registrationId) {
+    await markRegistrationCheckedIn(supabase, result.registrationId, checkedInAt)
+  }
+
   // Conversion tracking is now handled by the DB trigger on event_registrations INSERT
   // (send_conversion_on_registration) — no need for fire-and-forget here.
 
@@ -455,7 +465,7 @@ async function handleGuestUpdated(data: LumaGuestData): Promise<Response> {
   // Look up event
   const { data: event } = await supabase
     .from('events')
-    .select('event_id')
+    .select('id, event_id')
     .eq('luma_event_id', lumaEventId)
     .maybeSingle()
 
@@ -555,6 +565,12 @@ async function handleGuestUpdated(data: LumaGuestData): Promise<Response> {
     newStatus,
   })
 
+  // A check-in reaches us on guest.updated, not as its own webhook type
+  const checkedInAt = extractWebhookCheckedInAt(data)
+  const checkedIn = checkedInAt && result.registrationId
+    ? await markRegistrationCheckedIn(supabase, result.registrationId, checkedInAt)
+    : false
+
   return new Response(JSON.stringify({
     success: true,
     action: 'status_updated',
@@ -563,6 +579,7 @@ async function handleGuestUpdated(data: LumaGuestData): Promise<Response> {
     registrationId: result.registrationId,
     previousStatus: result.previousStatus,
     newStatus,
+    checkedIn,
   }), {
     status: 200,
     headers: { ...corsHeaders, 'Content-Type': 'application/json' }
