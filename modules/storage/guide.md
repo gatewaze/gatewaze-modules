@@ -56,8 +56,16 @@ Callers load this module with a dynamic import and fall back to their own Supaba
 |---------|------|----------|---------|-------------|
 | `default_provider` | string | No | `supabase` | The provider new files go to. |
 | `provider_media` | string | No | -- | The provider for event and host media, when it should differ. |
+| `supabase_alias` | string | No | -- | Serve every Supabase bucket from this provider (e.g. `r2`). |
 
-Env `STORAGE_PROVIDER` and `STORAGE_PROVIDER_<PURPOSE>` win over these settings.
+Env `STORAGE_PROVIDER`, `STORAGE_PROVIDER_<PURPOSE>` and `STORAGE_SUPABASE_ALIAS` win over these settings.
+
+## Moving a brand off Supabase Storage
+
+1. Copy every Supabase bucket into the provider's bucket: `media` at the root, every other bucket under `<bucket>/`. Check every object's size and MD5.
+2. Set `supabase_alias` to the provider id. From then on `registry.bucketStore(b)`, and any row that still says Supabase, read and write the provider under the prefix. Rows and paths do not change.
+3. Set the brand's `STORAGE_PUBLIC_URL` (the provider's public origin) and `STORAGE_LEGACY_HOSTS` (the hosts its old Supabase addresses used: the project host, any custom Supabase domain, any CDN zone). Pages then build and rewrite addresses with the helpers in `lib/public-url.ts`.
+4. Block the prefixes of private buckets on the public domain. Read their files with `signRead`.
 
 ## Writing a provider module
 

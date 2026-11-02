@@ -18,7 +18,7 @@ const storageModule: GatewazeModule = {
   visibility: 'public',
   name: 'Storage',
   description: 'Where module files are kept. Supabase Storage is built in; add a provider module such as storage-r2 to keep new files elsewhere.',
-  version: '0.1.0',
+  version: '0.2.0',
   features: ['storage'],
   migrations: [],
 
@@ -37,6 +37,13 @@ const storageModule: GatewazeModule = {
       required: false,
       validationRegex: '^([a-z0-9][a-z0-9-]{0,30})?$',
       description: 'The provider for event and host media only, when it should differ from the default. STORAGE_PROVIDER_MEDIA wins over this.',
+    },
+    supabase_alias: {
+      key: 'supabase_alias',
+      type: 'string',
+      required: false,
+      validationRegex: '^([a-z0-9][a-z0-9-]{0,30})?$',
+      description: "Serve every Supabase bucket from this provider instead (e.g. r2), after copying them into its bucket: media at the root, other buckets under <bucket>/. Leave empty to stay on Supabase. STORAGE_SUPABASE_ALIAS wins over this.",
     },
   },
 
