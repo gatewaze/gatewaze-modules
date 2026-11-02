@@ -1,5 +1,6 @@
 import { supabase } from '@/lib/supabase';
 import { toPublicUrl } from '@gatewaze/shared';
+import { rewriteStorageUrl } from '../../../storage/browser/storage';
 // These two services still live in core admin (they're shared by other
 // modules too). After the events relocation, the relative './…' paths
 // no longer resolve — switch to the @/ alias which the Vite plugin
@@ -11,8 +12,15 @@ import { publicSupabaseUrl } from './publicSupabaseUrl';
 // Default bucket URL derived from the Supabase project URL; storage paths stored
 // as relative values are resolved through this base at read time.
 // The resolved URLs flow into the edit form and are saved back on update, so
-// they use the real Supabase URL, not the host-session admin origin.
+// they use the real Supabase URL, not the host-session admin origin. On a
+// brand whose storage has moved off Supabase, rewriteStorageUrl turns that
+// address into the brand's storage URL (it is a no-op otherwise).
 const BUCKET_URL = `${publicSupabaseUrl()}/storage/v1/object/public/media`;
+
+function mediaUrl(value: string | null | undefined): string | undefined {
+  const url = toPublicUrl(value, BUCKET_URL);
+  return url ? rewriteStorageUrl(url) : undefined;
+}
 
 // The events table carries a legacy `custom_domain_status` column that nothing
 // keeps in sync — it gets stamped 'pending' on save and is never advanced. The
@@ -207,8 +215,8 @@ export class EventService {
         eventCity: data.event_city,
         eventCountryCode: data.event_country_code,
         eventLink: data.event_link,
-        eventLogo: (toPublicUrl(data.event_logo, BUCKET_URL) ?? undefined),
-        badgeLogo: (toPublicUrl(data.badge_logo, BUCKET_URL) ?? undefined),
+        eventLogo: mediaUrl(data.event_logo),
+        badgeLogo: mediaUrl(data.badge_logo),
         offerSlug: data.offer_slug,
         offerCloseDate: data.offer_close_date,
         eventStart: data.event_start,
@@ -219,7 +227,7 @@ export class EventService {
         eventTopicsUpdatedAt: data.event_topics_updated_at,
         eventType: data.event_type,
         contentCategory: data.content_category,
-        screenshotUrl: (toPublicUrl(data.screenshot_url, BUCKET_URL) ?? undefined),
+        screenshotUrl: mediaUrl(data.screenshot_url),
         screenshotGenerated: data.screenshot_generated,
         screenshotGeneratedAt: data.screenshot_generated_at,
         venueAddress: data.venue_address,
@@ -247,7 +255,7 @@ export class EventService {
         eventLongitude: data.event_longitude,
         eventSource: data.event_source,
         eventTimezone: data.event_timezone,
-        eventFeaturedImage: (toPublicUrl(data.event_featured_image, BUCKET_URL) ?? undefined),
+        eventFeaturedImage: mediaUrl(data.event_featured_image),
         gradientColor1: data.gradient_color_1,
         gradientColor2: data.gradient_color_2,
         gradientColor3: data.gradient_color_3,
@@ -260,7 +268,7 @@ export class EventService {
         pageContent: data.page_content || null,
         recommendedEventId: data.recommended_event_id || null,
         venueContent: data.venue_content || null,
-        venueMapImage: (toPublicUrl(data.venue_map_image, BUCKET_URL) ?? undefined),
+        venueMapImage: mediaUrl(data.venue_map_image),
         nearbyHotels: Array.isArray(data.nearby_hotels) ? data.nearby_hotels : [],
         addedpageContent: data.addedpage_content || null,
         addedpageTitle: data.addedpage_title || null,
@@ -310,8 +318,8 @@ export class EventService {
         eventCity: data.event_city,
         eventCountryCode: data.event_country_code,
         eventLink: data.event_link,
-        eventLogo: (toPublicUrl(data.event_logo, BUCKET_URL) ?? undefined),
-        badgeLogo: (toPublicUrl(data.badge_logo, BUCKET_URL) ?? undefined),
+        eventLogo: mediaUrl(data.event_logo),
+        badgeLogo: mediaUrl(data.badge_logo),
         offerSlug: data.offer_slug,
         offerCloseDate: data.offer_close_date,
         eventStart: data.event_start,
@@ -322,7 +330,7 @@ export class EventService {
         eventTopicsUpdatedAt: data.event_topics_updated_at,
         eventType: data.event_type,
         contentCategory: data.content_category,
-        screenshotUrl: (toPublicUrl(data.screenshot_url, BUCKET_URL) ?? undefined),
+        screenshotUrl: mediaUrl(data.screenshot_url),
         screenshotGenerated: data.screenshot_generated,
         screenshotGeneratedAt: data.screenshot_generated_at,
         venueAddress: data.venue_address,
@@ -350,7 +358,7 @@ export class EventService {
         eventLongitude: data.event_longitude,
         eventSource: data.event_source,
         eventTimezone: data.event_timezone,
-        eventFeaturedImage: (toPublicUrl(data.event_featured_image, BUCKET_URL) ?? undefined),
+        eventFeaturedImage: mediaUrl(data.event_featured_image),
         gradientColor1: data.gradient_color_1,
         gradientColor2: data.gradient_color_2,
         gradientColor3: data.gradient_color_3,
@@ -363,7 +371,7 @@ export class EventService {
         pageContent: data.page_content || null,
         recommendedEventId: data.recommended_event_id || null,
         venueContent: data.venue_content || null,
-        venueMapImage: (toPublicUrl(data.venue_map_image, BUCKET_URL) ?? undefined),
+        venueMapImage: mediaUrl(data.venue_map_image),
         nearbyHotels: Array.isArray(data.nearby_hotels) ? data.nearby_hotels : [],
         addedpageContent: data.addedpage_content || null,
         addedpageTitle: data.addedpage_title || null,
@@ -435,8 +443,8 @@ export class EventService {
         eventCity: event.event_city,
         eventCountryCode: event.event_country_code,
         eventLink: event.event_link,
-        eventLogo: (toPublicUrl(event.event_logo, BUCKET_URL) ?? undefined),
-        badgeLogo: (toPublicUrl(event.badge_logo, BUCKET_URL) ?? undefined),
+        eventLogo: mediaUrl(event.event_logo),
+        badgeLogo: mediaUrl(event.badge_logo),
         offerSlug: event.offer_slug,
         offerCloseDate: event.offer_close_date,
         eventStart: event.event_start,
@@ -460,7 +468,7 @@ export class EventService {
         // Screenshot metadata
         screenshotGenerated: event.screenshot_generated || false,
         screenshotGeneratedAt: event.screenshot_generated_at,
-        screenshotUrl: (toPublicUrl(event.screenshot_url, BUCKET_URL) ?? undefined),
+        screenshotUrl: mediaUrl(event.screenshot_url),
         // Account association
         accountId: event.account_id,
         // Beta offer indicator

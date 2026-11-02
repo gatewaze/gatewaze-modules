@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase';
+import { publicStorageUrl, uploadToStorage } from '../../../storage/browser/storage';
 import { assertUuid, type Guest, type SeatingAssignment, type SeatingPlan, type SeatingTable } from './seatingService';
 import { planSeatNumbers, seatKey } from './seatNumbering';
 import { answerToString, type CourseQuestion } from './cateringExport';
@@ -202,10 +203,7 @@ export async function uploadFontAsset(eventId: string, file: File): Promise<Font
   const ext = /\.otf$/i.test(file.name) ? 'otf' : 'ttf';
   const storagePath = `${eventId}/fonts/${assetId}.${ext}`;
 
-  const { error: uploadError } = await supabase.storage
-    .from('invite-templates')
-    .upload(storagePath, file, { upsert: false });
-  if (uploadError) throw uploadError;
+  await uploadToStorage('invite-templates', storagePath, file, { upsert: false });
 
   const { data, error } = await supabase
     .from('invite_template_assets')
@@ -226,8 +224,7 @@ export async function uploadFontAsset(eventId: string, file: File): Promise<Font
 }
 
 export function fontAssetPublicUrl(asset: FontAsset): string {
-  const { data } = supabase.storage.from(asset.storage_bucket).getPublicUrl(asset.storage_path);
-  return data.publicUrl;
+  return publicStorageUrl(asset.storage_bucket, asset.storage_path);
 }
 
 /**
@@ -239,10 +236,7 @@ export async function uploadBackgroundAsset(eventId: string, file: File): Promis
   const assetId = crypto.randomUUID();
   const storagePath = `${eventId}/backgrounds/${assetId}.pdf`;
 
-  const { error: uploadError } = await supabase.storage
-    .from('invite-templates')
-    .upload(storagePath, file, { upsert: false });
-  if (uploadError) throw uploadError;
+  await uploadToStorage('invite-templates', storagePath, file, { upsert: false });
 
   const { error } = await supabase
     .from('invite_template_assets')
@@ -262,8 +256,7 @@ export async function uploadBackgroundAsset(eventId: string, file: File): Promis
 
 /** Public URL for any path in the shared invite-templates bucket. */
 export function templateAssetUrl(storagePath: string): string {
-  const { data } = supabase.storage.from('invite-templates').getPublicUrl(storagePath);
-  return data.publicUrl;
+  return publicStorageUrl('invite-templates', storagePath);
 }
 
 // ---------------------------------------------------------------------------

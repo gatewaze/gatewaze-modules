@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { Upload, Loader2, ImageIcon } from 'lucide-react';
 import { Button } from '@/components/ui';
-import { supabase } from '@/lib/supabase';
+import { publicStorageUrl, rewriteStorageUrl, uploadToStorage } from '../../../storage/browser/storage';
 import { toStoragePath } from '@gatewaze/shared';
 
 interface Props {
@@ -40,9 +40,8 @@ export function CalendarCoverUploadField({
 
   const displayUrl = (() => {
     if (!value) return '';
-    if (/^https?:\/\//.test(value)) return value;
-    const { data } = supabase.storage.from('media').getPublicUrl(value);
-    return data.publicUrl;
+    if (/^https?:\/\//.test(value)) return rewriteStorageUrl(value);
+    return publicStorageUrl('media', value);
   })();
 
   const normalizedInput = toStoragePath(value) ?? value ?? '';
@@ -55,11 +54,8 @@ export function CalendarCoverUploadField({
     try {
       const ext = file.name.split('.').pop() || 'jpg';
       const filePath = `calendars/${calendarId}-cover.${ext}`;
-      const { error } = await supabase.storage
-        .from('media')
-        .upload(filePath, file, { upsert: true, cacheControl: '3600' });
-      if (error) throw error;
-      onChange(filePath);
+      const { path } = await uploadToStorage('media', filePath, file, { upsert: true });
+      onChange(path);
     } catch (err: any) {
       console.error('[calendar-cover-upload] failed:', err);
       setUploadError(err?.message || 'Upload failed.');

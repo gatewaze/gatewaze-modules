@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase';
+import { publicStorageUrl, uploadToStorage } from '../../../storage/browser/storage';
 import type { SeatNumbering } from './seatNumbering';
 
 // ---------------------------------------------------------------------------
@@ -603,10 +604,7 @@ export async function uploadBackground(eventUuid: string, file: File): Promise<S
   const extension = file.type === 'application/pdf' ? 'pdf' : file.type.split('/')[1];
   const storagePath = `${eventId}/backgrounds/${assetId}.${extension}`;
 
-  const { error: uploadError } = await supabase.storage
-    .from('event-seating')
-    .upload(storagePath, file, { upsert: false, contentType: file.type });
-  if (uploadError) throw uploadError;
+  await uploadToStorage('event-seating', storagePath, file, { upsert: false, contentType: file.type });
 
   const { data, error } = await supabase
     .from('seating_assets')
@@ -625,6 +623,5 @@ export async function uploadBackground(eventUuid: string, file: File): Promise<S
 }
 
 export function getAssetPublicUrl(asset: SeatingAsset): string {
-  const { data } = supabase.storage.from(asset.storage_bucket).getPublicUrl(asset.storage_path);
-  return data.publicUrl;
+  return publicStorageUrl(asset.storage_bucket, asset.storage_path);
 }

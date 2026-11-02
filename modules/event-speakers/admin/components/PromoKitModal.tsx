@@ -27,6 +27,7 @@ import {
 import { Button, Input, Modal } from '@/components/ui';
 import LoadingSpinner from '@/components/shared/LoadingSpinner';
 import { supabase, supabaseUrl } from '@/lib/supabase';
+import { rewriteStorageUrl } from '../../../storage/browser/storage';
 
 export interface PromoKitRow {
   id: string;
@@ -49,7 +50,9 @@ export interface PromoKitRow {
 
 export function mediaPublicUrl(path: string, version?: string | null): string {
   const v = version ? `?v=${encodeURIComponent(version)}` : '';
-  return `${supabaseUrl}/storage/v1/object/public/media/${path}${v}`;
+  // Rewrite the bare object URL, then add the cache-buster: a query on the
+  // input would be read as a render (resize) request.
+  return `${rewriteStorageUrl(`${supabaseUrl}/storage/v1/object/public/media/${path}`)}${v}`;
 }
 
 const CARD_LABELS: Record<string, string> = {
