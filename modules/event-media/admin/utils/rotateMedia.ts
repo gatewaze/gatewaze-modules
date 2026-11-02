@@ -136,7 +136,7 @@ export async function rotateMedia(
  * keeps working whatever the storage host is: the cdn_url is the
  * original's path on some host, so the host part is everything before it.
  */
-function urlFor(cdnUrl: string, original: string, path: string): string {
+export function urlFor(cdnUrl: string, original: string, path: string): string {
   if (/^https?:/i.test(path)) return path;
   const bare = cdnUrl.split(/[?#]/)[0]!;
   for (const tail of [original, original.split('/').map(encodeURIComponent).join('/')]) {
