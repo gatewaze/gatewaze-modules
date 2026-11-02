@@ -25,6 +25,7 @@
 import { createHash } from 'node:crypto';
 
 import type { Request, Response, Router } from 'express';
+import { storagePublicConfig, storagePublicUrl } from '../../storage/lib/public-url.js';
 
 interface ErrorEnvelope {
   error: string;
@@ -150,8 +151,12 @@ export interface PublicMenusRoutesDeps {
 export function createPublicMenusRoutes(deps: PublicMenusRoutesDeps) {
   const { supabase, logger, supabasePublicUrl, storageBucket } = deps;
 
+  // A brand that has moved off Supabase Storage (STORAGE_PUBLIC_URL)
+  // serves the same paths from its own origin.
+  const storagePublic = storagePublicConfig(process.env);
   const buildPublicUrl = (storagePath: string): string =>
-    `${supabasePublicUrl.replace(/\/+$/, '')}/storage/v1/object/public/${storageBucket}/${storagePath}`;
+    storagePublicUrl(storagePublic, storageBucket, storagePath)
+      ?? `${supabasePublicUrl.replace(/\/+$/, '')}/storage/v1/object/public/${storageBucket}/${storagePath}`;
 
   /** Resolve siteSlug → site row. */
   async function loadSite(siteSlug: string): Promise<SiteRow | null> {

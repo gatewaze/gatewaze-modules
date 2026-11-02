@@ -112,6 +112,9 @@ export function createMediaStorage(opts: {
   };
 }
 
+/** The parts of the storage module's aliased store the fallback uses. */
+type StorageStore = Pick<MediaStore, 'put' | 'signUpload' | 'head' | 'remove'>;
+
 /** Minimal supabase-js storage surface. */
 interface SupabaseLike {
   storage: {
@@ -142,6 +145,22 @@ export function builtInSupabaseStores(opts: {
   const v = (version: unknown, joiner: '?' | '&') =>
     version === undefined || version === null || version === '' ? '' : `${joiner}v=${encodeURIComponent(String(version))}`;
 
+  // A brand that serves its Supabase buckets from another provider
+  // (storage module `supabase_alias`) keeps its files there, so every
+  // operation goes to that store. It is loaded at runtime because this
+  // fallback is what runs when the storage module could not be loaded; then
+  // there is no alias and supabase-js is used as before. An alias whose
+  // provider is unavailable throws rather than writing to Supabase again.
+  const moved = async (): Promise<StorageStore | null> => {
+    let mod: { aliasedBucketStore(s: unknown, b: string): Promise<StorageStore | null> };
+    try {
+      mod = await import('../../storage/lib/bucket-store.js');
+    } catch {
+      return null;
+    }
+    return mod.aliasedBucketStore(supabase, bucket);
+  };
+
   const make = (cdn: CdnConfig): MediaStore => ({
     provider: 'supabase',
     bucket,
@@ -149,17 +168,23 @@ export function builtInSupabaseStores(opts: {
     publicUrl: (path, o) => browserObjectUrl(cdn, publicSupabaseUrl, bucket, path) + v(o?.version, '?'),
     sizedUrl: (path, size, o) => browserSizedUrl(cdn, publicSupabaseUrl, bucket, path, size.width, size.quality ?? 80) + v(o?.version, '&'),
     async put(path, body, o) {
+      const m = await moved();
+      if (m) return m.put(path, body, { contentType: o.contentType, upsert: o.upsert === true });
       const { error } = await from().upload(path, body, { contentType: o.contentType, upsert: o.upsert === true });
       if (error) throw new Error(`storage upload failed: ${error.message}`);
       return { bytes: body.byteLength };
     },
     async signUpload(path, o) {
+      const m = await moved();
+      if (m) return m.signUpload(path, o);
       const { data, error } = await from().createSignedUploadUrl(path);
       if (error || !data?.signedUrl) throw new Error(`could not sign an upload: ${error?.message ?? 'no url'}`);
       return { url: externalise(data.signedUrl), method: 'PUT', headers: { 'content-type': o.contentType } };
     },
     async head(path) {
       try {
+        const m = await moved();
+        if (m) return await m.head(path);
         const { data } = await from().createSignedUrl(path, 60);
         if (!data?.signedUrl) return { ok: false, bytes: 0, contentType: '' };
         const r = await fetch(data.signedUrl, { method: 'HEAD', signal: AbortSignal.timeout(15_000) });
@@ -172,6 +197,8 @@ export function builtInSupabaseStores(opts: {
     async remove(paths) {
       if (!paths.length) return { failed: [] };
       try {
+        const m = await moved();
+        if (m) return await m.remove(paths);
         const { error } = await from().remove(paths);
         return { failed: error ? paths : [] };
       } catch {
@@ -179,5 +206,6 @@ export function builtInSupabaseStores(opts: {
       }
     },
   });
-  return { browser: make(opts.cdn), direct: make({ zone: null }) };
+  // `direct` skips Bunny, never the brand's own storage origin.
+  return { browser: make(opts.cdn), direct: make({ zone: null, storage: opts.cdn.storage }) };
 }

@@ -8,6 +8,7 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { movedBucketStore } from '../lib/moved-store.js';
 
 interface PlatformLogger {
   info: (msg: string, meta?: Record<string, unknown>) => void;
@@ -46,7 +47,11 @@ export async function cleanupExpiredChunkedUploads(deps: Deps): Promise<void> {
       paths.push(`${session.host_kind}/${session.host_id}/__chunked/${session.id}/${i}`);
     }
     try {
-      await deps.supabase.storage.from(STORAGE_BUCKET).remove(paths);
+      // A brand whose buckets moved off Supabase (storage module
+      // `supabase_alias`) removes from that store instead.
+      const moved = await movedBucketStore(deps.supabase, STORAGE_BUCKET);
+      if (moved) await moved.remove(paths);
+      else await deps.supabase.storage.from(STORAGE_BUCKET).remove(paths);
     } catch (err) {
       deps.logger.warn('chunked-cleanup: storage remove failed', {
         sessionId: session.id,

@@ -28,6 +28,8 @@
 
 import { createHash } from 'node:crypto';
 
+import { aliasedBucketStore } from '../../storage/lib/bucket-store.js';
+import { storagePublicConfig, storagePublicUrl } from '../../storage/lib/public-url.js';
 import { AVATAR_HOST_ALLOWLIST, FetchRefused, guardedFetchBytes, safeAvatarUrl } from './import-safety.js';
 
 /** The platform's public bucket. Avatars are not secret. */
@@ -107,11 +109,15 @@ export function avatarStoragePath(remoteUrl: string, ext: string): string {
  * speaker submissions) and only some consumers resolve a bare path, so the
  * shape that every consumer already handles is the right one to write.
  *
- * SUPABASE_PUBLIC_URL, not SUPABASE_URL: the latter is an in-cluster hostname
- * a browser cannot resolve. Returns null when neither is configured, and the
- * caller then keeps hot-linking rather than storing a URL nobody can load.
+ * A brand whose storage has moved off Supabase (STORAGE_PUBLIC_URL) gets
+ * its own public address. Otherwise SUPABASE_PUBLIC_URL, not SUPABASE_URL:
+ * the latter is an in-cluster hostname a browser cannot resolve. Returns
+ * null when neither is configured, and the caller then keeps hot-linking
+ * rather than storing a URL nobody can load.
  */
 export function publicAvatarUrl(storagePath: string): string | null {
+  const moved = storagePublicUrl(storagePublicConfig(process.env), AVATAR_BUCKET, storagePath);
+  if (moved) return moved;
   const base = (process.env.SUPABASE_PUBLIC_URL || '').replace(/\/+$/, '');
   if (!base) return null;
   return `${base}/storage/v1/object/public/${AVATAR_BUCKET}/${storagePath}`;
@@ -131,6 +137,11 @@ export interface MirrorResult {
 }
 
 export interface MirrorDeps {
+  /**
+   * The service-role client. When the brand serves its Supabase buckets from
+   * another provider (storage module `supabase_alias`), reads and writes go
+   * there through the storage module instead of this client's storage.
+   */
   supabase: {
     storage: {
       from: (bucket: string) => {
@@ -157,6 +168,17 @@ export interface MirrorDeps {
 /** Every mirrored avatar filename currently in the bucket. */
 export async function listMirroredAvatars(deps: Pick<MirrorDeps, 'supabase'>): Promise<Set<string>> {
   const names = new Set<string>();
+  const moved = await aliasedBucketStore(deps.supabase, AVATAR_BUCKET).catch(() => undefined);
+  if (moved !== null) {
+    // Moved off Supabase: one flat listing of the prefix. As below, a
+    // failure leaves the set incomplete, which only costs a re-download.
+    const listed = moved ? await moved.list(`${AVATAR_PREFIX}/`, 100_000).catch(() => []) : [];
+    for (const o of listed) {
+      const name = o.path.slice(o.path.lastIndexOf('/') + 1);
+      if (o.path === `${AVATAR_PREFIX}/${name}`) names.add(name);
+    }
+    return names;
+  }
   const page = 1000;
   for (let offset = 0; ; offset += page) {
     const res = await deps.supabase.storage
@@ -232,6 +254,20 @@ export async function mirrorAvatar(
   }
 
   const storagePath = avatarStoragePath(remote, AVATAR_TYPES[mime]);
+  let moved;
+  try {
+    moved = await aliasedBucketStore(deps.supabase, AVATAR_BUCKET);
+  } catch (err) {
+    return fallback(`storage unavailable: ${err instanceof Error ? err.message : String(err)}`);
+  }
+  if (moved) {
+    try {
+      await moved.put(storagePath, fetched.bytes, { contentType: mime, cacheControl: 'public, max-age=31536000, immutable', upsert: true });
+    } catch (err) {
+      return fallback(`upload failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+    return { url: publicAvatarUrl(storagePath) ?? moved.publicUrl(storagePath), storagePath, mime, bytes: fetched.bytes.length, reused: false };
+  }
   const up = await deps.supabase.storage
     .from(AVATAR_BUCKET)
     .upload(storagePath, fetched.bytes, {
@@ -258,6 +294,15 @@ export async function mirrorAvatar(
 
 /** One-object existence check, for a caller mirroring a single avatar. */
 async function objectExists(deps: MirrorDeps, path: string, name: string): Promise<boolean> {
+  let moved;
+  try {
+    moved = await aliasedBucketStore(deps.supabase, AVATAR_BUCKET);
+  } catch {
+    // The brand's store is unavailable: say "not there" rather than asking
+    // Supabase, which no longer holds this brand's files.
+    return false;
+  }
+  if (moved) return (await moved.head(path).catch(() => ({ ok: false }))).ok;
   const res = await deps.supabase.storage
     .from(AVATAR_BUCKET)
     .list(path.slice(0, path.lastIndexOf('/')), { search: name, limit: 1 })
@@ -265,7 +310,14 @@ async function objectExists(deps: MirrorDeps, path: string, name: string): Promi
   return Boolean(res?.data?.some((o) => o?.name === name));
 }
 
-/** True when a stored URL is one of ours, so a backfill can skip it. */
+/**
+ * True when a stored URL is one of ours, so a backfill can skip it. The
+ * Supabase address has `/media/` before the prefix; the address on a brand
+ * that has moved off Supabase (STORAGE_PUBLIC_URL) starts with the prefix.
+ */
 export function isMirroredAvatarUrl(value: unknown): boolean {
-  return typeof value === 'string' && value.includes(`/${AVATAR_BUCKET}/${AVATAR_PREFIX}/`);
+  if (typeof value !== 'string') return false;
+  if (value.includes(`/${AVATAR_BUCKET}/${AVATAR_PREFIX}/`)) return true;
+  const { publicUrl } = storagePublicConfig(process.env);
+  return Boolean(publicUrl) && value.startsWith(`${publicUrl}/${AVATAR_PREFIX}/`);
 }

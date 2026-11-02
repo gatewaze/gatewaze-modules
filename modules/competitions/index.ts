@@ -7,7 +7,7 @@ const competitionsModule: GatewazeModule = {
   visibility: 'public',
   name: 'Competitions',
   description: 'Run competitions with entry submissions, judging workflows, and winner selection',
-  version: '1.1.0',
+  version: '1.1.1',
   features: [
     'competitions',
     'competitions.entries',

@@ -18,6 +18,16 @@ import type { Request, Response, Router } from 'express';
 import { isKnownHostKind } from '../lib/registry.js';
 import { paramAsUuid, paramAsString } from '../lib/sanitisers.js';
 import { buildChunkStoragePath } from '../lib/storage-paths.js';
+import { movedBucketStore } from '../lib/moved-store.js';
+
+/** True when the bucket is served from another provider; a broken alias counts as aliased. */
+async function bucketIsAliased(supabase: unknown, bucket: string): Promise<boolean> {
+  try {
+    return (await movedBucketStore(supabase, bucket)) !== null;
+  } catch {
+    return true;
+  }
+}
 
 interface RequestWithUser extends Request {
   userId?: string;
@@ -68,6 +78,16 @@ export function createChunkedRoutes(deps: ChunkedRoutesDeps) {
     const totalChunks = Number(req.body?.total_chunks);
     if (!filename || !mimeType || !Number.isFinite(totalBytes) || totalBytes <= 0 || !Number.isInteger(totalChunks) || totalChunks <= 0 || totalChunks > 10_000) {
       sendError(res, 400, 'invalid_init', 'filename, mime_type, total_bytes, total_chunks (1..10000) required');
+      return;
+    }
+
+    // Chunks are signed Supabase upload addresses, combined by an edge
+    // function that reads Supabase Storage. A brand whose buckets are
+    // served from another provider (storage module `supabase_alias`) has
+    // nowhere for that to work, so it is refused rather than leaving the
+    // chunks in a Supabase bucket the brand no longer reads.
+    if (await bucketIsAliased(supabase, storageBucket)) {
+      sendError(res, 501, 'chunked_unavailable', 'chunked uploads are not available on this brand\'s storage; upload the file in one request');
       return;
     }
 

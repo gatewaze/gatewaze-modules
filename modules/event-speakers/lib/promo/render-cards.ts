@@ -21,6 +21,8 @@ import { isIP } from 'node:net';
 import { existsSync } from 'node:fs';
 import puppeteer from 'puppeteer-core';
 import sharp from 'sharp';
+import { storagePublicConfig } from '../../../storage/lib/public-url.js';
+import { downloadMedia } from './media-store.js';
 
 export const TEMPLATE_VERSION = '1.0.0';
 
@@ -176,6 +178,12 @@ export async function resolveAvatarDataUri(supabase, avatarUrl: string | null | 
       if (storageMatch && isOwnSupabaseHost(storageMatch[1])) {
         return await storageDataUri(supabase, decodeURIComponent(storageMatch[2]));
       }
+      // The same for this brand's own storage origin once it has moved off
+      // Supabase (STORAGE_PUBLIC_URL), where a media path is the whole key.
+      // Resized (/cdn-cgi/) addresses and anything with a query fall through
+      // to the guarded fetch. The media store refuses private bucket folders.
+      const ownPath = ownStoragePath(trimmed);
+      if (ownPath) return await storageDataUri(supabase, ownPath);
       const image = await fetchPublicImage(trimmed);
       if (!image) return null;
       return `data:${image.mime};base64,${image.buf.toString('base64')}`;
@@ -188,6 +196,21 @@ export async function resolveAvatarDataUri(supabase, avatarUrl: string | null | 
   } catch {
     return null;
   }
+}
+
+/** The media path of an address on this brand's own storage origin, or null. */
+export function ownStoragePath(url: string): string | null {
+  const { publicUrl } = storagePublicConfig(process.env);
+  if (!publicUrl || !url.startsWith(`${publicUrl}/`)) return null;
+  const rest = url.slice(publicUrl.length + 1);
+  if (!rest || rest.includes('?') || rest.includes('#') || rest.startsWith('cdn-cgi/')) return null;
+  let path: string;
+  try {
+    path = rest.split('/').map(decodeURIComponent).join('/');
+  } catch {
+    return null;
+  }
+  return /^[\w][\w ./@()+-]*$/.test(path) && !path.split('/').includes('..') ? path : null;
 }
 
 export function isOwnSupabaseHost(host: string): boolean {
@@ -209,9 +232,8 @@ export function isOwnSupabaseHost(host: string): boolean {
 }
 
 async function storageDataUri(supabase, path: string): Promise<string | null> {
-  const { data } = await supabase.storage.from('media').download(path);
-  if (!data) return null;
-  const buf = Buffer.from(await data.arrayBuffer());
+  const buf = await downloadMedia(supabase, path, AVATAR_MAX_BYTES);
+  if (!buf) return null;
   if (buf.length === 0 || buf.length > AVATAR_MAX_BYTES) return null;
   const ext = (path.split('.').pop() ?? '').toLowerCase();
   const mime =

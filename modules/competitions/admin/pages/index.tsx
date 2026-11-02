@@ -28,6 +28,7 @@ import { PeopleService } from '@/utils/peopleService';
 import { supabase } from '@/lib/supabase';
 import { useAccountAccess } from '@/hooks/useAccountAccess';
 import { toPublicUrl } from '@gatewaze/shared';
+import { rewriteStorageUrl } from '../../../storage/browser/storage';
 
 const BUCKET_URL = `${import.meta.env.VITE_SUPABASE_URL}/storage/v1/object/public/media`;
 
@@ -214,7 +215,7 @@ export default function CompetitionsPage() {
           event_title: row.events.event_title,
           event_city: row.events.event_city,
           event_country_code: row.events.event_country_code,
-          event_logo: toPublicUrl(row.events.event_logo, BUCKET_URL) ?? undefined,
+          event_logo: (() => { const u = toPublicUrl(row.events.event_logo, BUCKET_URL); return u ? rewriteStorageUrl(u) : undefined; })(),
           event_start: row.events.event_start,
           event_end: row.events.event_end,
           event_id: row.events.event_id,

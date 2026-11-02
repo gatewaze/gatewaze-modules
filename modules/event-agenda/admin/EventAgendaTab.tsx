@@ -42,6 +42,7 @@ import { AgendaService, AgendaTrack, AgendaEntry, AgendaEntryType, TimelineConfi
 import { SpeakerService, EventSpeakerWithDetails } from '../../event-speakers/admin/utils/speakerService';
 import { TalkService, EventTalkWithSpeakers, SessionType, TalkStatus, SpeakerRole } from './utils/talkService';
 import { toPublicUrl } from '@gatewaze/shared';
+import { rewriteStorageUrl } from '../../storage/browser/storage';
 
 const BUCKET_URL = `${import.meta.env.VITE_SUPABASE_URL}/storage/v1/object/public/media`;
 
@@ -49,7 +50,8 @@ const BUCKET_URL = `${import.meta.env.VITE_SUPABASE_URL}/storage/v1/object/publi
 // Idempotent: passes through values that are already full URLs.
 function wrapSpeakerAvatar<T extends { avatar_url?: string | null | undefined }>(speaker: T): T {
   if (!speaker || !speaker.avatar_url) return speaker;
-  return { ...speaker, avatar_url: toPublicUrl(speaker.avatar_url, BUCKET_URL) ?? undefined };
+  const url = toPublicUrl(speaker.avatar_url, BUCKET_URL);
+  return { ...speaker, avatar_url: url ? rewriteStorageUrl(url) : undefined };
 }
 
 export interface TalkDurationOption {
