@@ -40,6 +40,6 @@ describe('uploadAndSign', () => {
     const put = t.calls.find((c) => c.op === 'put')!;
     expect(put.key).toMatch(/^fetch-screenshots\/[0-9a-f]{12}\/r1\/screenshot\.png$/);
     expect(out.url).toBe(`https://s3.test/${put.key}?sig`);
-    expect(out.url.startsWith('https://media.test')).toBe(false);
+    expect(new URL(out.url).host).not.toBe('media.test');
   });
 });
