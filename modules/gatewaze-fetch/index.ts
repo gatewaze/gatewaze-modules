@@ -23,7 +23,7 @@ const gatewazeFetchModule: GatewazeModule = {
   name: 'Web Fetch',
   description:
     'External-facing web fetch and content extraction. Lets external AI agents fetch URLs via REST or MCP using a Gatewaze API key, with per-tenant quotas, domain governance, and robots.txt enforcement.',
-  version: '1.0.0',
+  version: '1.0.1',
 
   // Disabled by default; enabled per environment by operators (§14.4 Phase A).
   features: ['gatewaze-fetch'],

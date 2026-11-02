@@ -9,6 +9,7 @@
 import { createClient } from '@supabase/supabase-js'
 import { createServerClient } from '@supabase/ssr'
 import { cookies } from 'next/headers'
+import { storagePublicConfig, storagePublicUrl } from '@gatewaze-modules/storage/lib/public-url'
 import type {
   Calendar,
   CalendarEvent,
@@ -91,6 +92,16 @@ const EVENT_SELECT_FIELDS = `
  * means nothing to a visitor's browser.
  */
 function mediaPublicUrl(storagePath: string): string {
+  // A brand that has moved off Supabase Storage serves media from its own
+  // origin (STORAGE_PUBLIC_URL on the server, NEXT_PUBLIC_ in the bundle).
+  const moved = storagePublicUrl(
+    storagePublicConfig({
+      STORAGE_PUBLIC_URL: process.env.STORAGE_PUBLIC_URL || process.env.NEXT_PUBLIC_STORAGE_PUBLIC_URL,
+    }),
+    'media',
+    storagePath,
+  )
+  if (moved) return moved
   const base = process.env.NEXT_PUBLIC_SUPABASE_URL || process.env.SUPABASE_URL || ''
   return `${base.replace(/\/+$/, '')}/storage/v1/object/public/media/${storagePath}`
 }

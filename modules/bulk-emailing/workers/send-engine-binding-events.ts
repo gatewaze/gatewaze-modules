@@ -20,6 +20,7 @@
 import { createHmac } from 'node:crypto';
 import type { EngineDeps, SendContext, SendEngineBinding, Recipient } from '../worker/send-engine/engine.js';
 import type { MessageAttachment } from '../worker/send-engine/channels/types.js';
+import { aliasedBucketStore, downloadObject } from '../../storage/lib/bucket-store.js';
 
 // Storage bucket holding rendered promo-kit artifacts (see event-speakers
 // lib/promo). Kept in sync with that module's BUCKET constant.
@@ -203,6 +204,31 @@ export const eventCommsBinding: SendEngineBinding = {
       .eq('status', 'ready')
       .maybeSingle();
     if (!kit?.zip_storage_path) return null;
+
+    // A brand that has moved off Supabase Storage (storage module
+    // `supabase_alias`) keeps the kit in its provider bucket.
+    let moved: Awaited<ReturnType<typeof aliasedBucketStore>> = null;
+    try {
+      moved = await aliasedBucketStore(deps.supabase, PROMO_KIT_BUCKET);
+    } catch (err) {
+      deps.logger.warn('[send-engine] storage unavailable for promo-kit zip', { talkId, error: err instanceof Error ? err.message : String(err) });
+      return null;
+    }
+    if (moved) {
+      const head = await moved.head(kit.zip_storage_path).catch(() => ({ ok: false, bytes: 0 }));
+      if (head.ok && head.bytes > MAX_ATTACHMENT_BYTES) {
+        deps.logger.warn('[send-engine] promo-kit zip too large to attach', { talkId, bytes: head.bytes });
+        return null;
+      }
+      let bytes: Buffer;
+      try {
+        bytes = await downloadObject(moved, kit.zip_storage_path, { maxBytes: MAX_ATTACHMENT_BYTES });
+      } catch (err) {
+        deps.logger.warn('[send-engine] promo-kit zip download failed', { talkId, path: kit.zip_storage_path, error: err instanceof Error ? err.message : String(err) });
+        return null;
+      }
+      return [{ filename: 'speaker-kit.zip', content: bytes.toString('base64'), type: 'application/zip', disposition: 'attachment' }];
+    }
 
     // Check the object's declared size BEFORE pulling it into memory — a
     // pathological artifact shouldn't be fully buffered just to be rejected.

@@ -13,6 +13,7 @@
 
 import { createHash } from 'node:crypto';
 import type { SupabaseClient } from '@supabase/supabase-js';
+import { aliasedBucketStore } from '../../storage/lib/bucket-store.js';
 
 export interface SignedUrlArtifact {
   kind: 'signed_url';
@@ -48,6 +49,31 @@ export async function uploadAndSign(
 ): Promise<SignedUrlArtifact> {
   const apiKeyHash = sha256Truncated(input.apiKeyId, 12);
   const objectKey = `${apiKeyHash}/${input.requestId}/${input.kind}.${input.ext}`;
+  // A brand whose Supabase buckets are served from another provider
+  // (storage module `supabase_alias`) keeps these private files there. They
+  // are only ever handed out as signed addresses, never a public one.
+  const moved = await aliasedBucketStore(supabase, input.bucket);
+  if (moved) {
+    try {
+      await moved.put(objectKey, input.fileBytes, { contentType: input.mimeType, upsert: false });
+    } catch (err) {
+      if (!(await moved.head(objectKey)).ok) throw new Error(`upload failed: ${(err as Error).message}`);
+    }
+    let url: string;
+    try {
+      url = await moved.signRead(objectKey, input.ttlSeconds);
+    } catch (err) {
+      throw new Error(`sign failed: ${(err as Error).message}`);
+    }
+    return {
+      kind: 'signed_url',
+      url,
+      expires_at: new Date(Date.now() + input.ttlSeconds * 1000).toISOString(),
+      mime_type: input.mimeType,
+      width: input.width,
+      height: input.height,
+    };
+  }
   const upload = await supabase.storage.from(input.bucket).upload(objectKey, input.fileBytes as never, {
     contentType: input.mimeType,
     upsert: false,

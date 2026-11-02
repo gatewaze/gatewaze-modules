@@ -19,6 +19,8 @@ const MAX_DEPTH = 10;
 // under these keys are harmless no-ops at lookup time.
 const MEDIA_KEY_RE = /^(image|image_url|src|href|background_image|url|_ref|.*_image)$/i;
 
+import { rewriteStorageUrl, storagePublicConfig } from '../../../storage/lib/public-url.js';
+
 export interface MediaReference {
   /** Storage path (relative; resolved via storage_bucket_url at render). */
   storagePath: string;
@@ -77,9 +79,13 @@ export function normalizeToStoragePath(raw: string, storageBucketUrl?: string): 
     return clean.replace(/^\/+/, '');
   }
 
-  // Full URL — strip the bucket origin
+  // Full URL — strip the bucket origin. On a brand that has moved off
+  // Supabase Storage (STORAGE_PUBLIC_URL), its old Supabase addresses are
+  // first rewritten to the new origin, where a media path is the whole key.
   try {
-    const url = new URL(clean);
+    const env = typeof process === 'undefined' ? {} : process.env;
+    const url = new URL(rewriteStorageUrl(clean, storagePublicConfig(env)));
+    url.pathname = url.pathname.replace(/^\/cdn-cgi\/image\/[^/]+\//, '/');
     if (storageBucketUrl) {
       const baseUrl = new URL(storageBucketUrl);
       if (url.host === baseUrl.host) {

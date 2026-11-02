@@ -32,6 +32,7 @@ import {
 import { loadTemplateSource, templateLoader, resolveBrandVars } from '../lib/promo/template-source.js';
 import { buildRecipeParams, dispatchPromoTextRun, readPromoTextRun } from '../lib/promo/promo-text.js';
 import { buildPromoKitZip } from '../lib/promo/build-zip.js';
+import { downloadMedia, putMedia } from '../lib/promo/media-store.js';
 import { sendConfirmedEmailIfDue } from '../lib/promo/confirmed-email.js';
 import { buildSpeakerDeck } from '../lib/promo/slide-deck.js';
 import { buildLinkedInQr, renderLinkedInQrPng } from '../lib/promo/linkedin-qr.js';
@@ -42,7 +43,6 @@ interface JobInput {
   data?: { kitId?: string };
 }
 
-const BUCKET = 'media';
 const STORAGE_PREFIX = 'speaker-promo-kits';
 /** Sweep ticks to wait for the text run before shipping without it
  *  (sweep cadence is 2 min → ~40 min ceiling). */
@@ -147,10 +147,11 @@ async function runBuildPhase(supabase, kit, context, ctx, log): Promise<void> {
   const cards = [];
   for (const card of rendered) {
     const path = storagePathFor(context.event.id, context.talk.id, `card-${card.format}.png`);
-    const { error: upErr } = await supabase.storage
-      .from(BUCKET)
-      .upload(path, card.png, { contentType: 'image/png', cacheControl: '0', upsert: true });
-    if (upErr) throw new Error(`card upload failed (${card.format}): ${upErr.message}`);
+    try {
+      await putMedia(supabase, path, card.png, { contentType: 'image/png', noCache: true });
+    } catch (upErr) {
+      throw new Error(`card upload failed (${card.format}): ${(upErr as Error).message}`);
+    }
     cards.push({ format: card.format, storage_path: path, width: card.width, height: card.height });
   }
   log(`rendered ${cards.length} cards`);
@@ -249,11 +250,10 @@ async function runBuildPhase(supabase, kit, context, ctx, log): Promise<void> {
       });
       if (deck) {
         deckPath = storagePathFor(context.event.id, context.talk.id, 'presentation-template.pptx');
-        const { error: deckErr } = await supabase.storage.from(BUCKET).upload(deckPath, deck, {
+        const deckErr = await putMedia(supabase, deckPath, deck, {
           contentType: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-          cacheControl: '0',
-          upsert: true,
-        });
+          noCache: true,
+        }).then(() => null, (e: Error) => e);
         if (deckErr) {
           log(`deck upload failed: ${deckErr.message}`);
           deckPath = null;
@@ -342,15 +342,14 @@ async function finalizeKit(supabase, kit, context, log): Promise<void> {
   // Re-download the card PNGs to bundle (they were uploaded in the build phase).
   const cardsWithBytes = [];
   for (const card of kit.cards ?? []) {
-    const { data } = await supabase.storage.from(BUCKET).download(card.storage_path);
-    if (!data) throw new Error(`card missing from storage: ${card.storage_path}`);
-    cardsWithBytes.push({ ...card, png: Buffer.from(await data.arrayBuffer()) });
+    const png = await downloadMedia(supabase, card.storage_path);
+    if (!png) throw new Error(`card missing from storage: ${card.storage_path}`);
+    cardsWithBytes.push({ ...card, png });
   }
 
   let deckBuffer: Buffer | null = null;
   if (kit.deck_storage_path) {
-    const { data: deckData } = await supabase.storage.from(BUCKET).download(kit.deck_storage_path);
-    if (deckData) deckBuffer = Buffer.from(await deckData.arrayBuffer());
+    deckBuffer = await downloadMedia(supabase, kit.deck_storage_path);
   }
 
   const zipBuffer = await buildPromoKitZip({
@@ -365,10 +364,11 @@ async function finalizeKit(supabase, kit, context, log): Promise<void> {
   // attribute on the link cannot override it, because storage is a different
   // origin, so the name has to be right here.
   const zipPath = storagePathFor(context.event.id, context.talk.id, 'speaker-kit.zip');
-  const { error: zipErr } = await supabase.storage
-    .from(BUCKET)
-    .upload(zipPath, zipBuffer, { contentType: 'application/zip', cacheControl: '0', upsert: true });
-  if (zipErr) throw new Error(`zip upload failed: ${zipErr.message}`);
+  try {
+    await putMedia(supabase, zipPath, zipBuffer, { contentType: 'application/zip', noCache: true });
+  } catch (zipErr) {
+    throw new Error(`zip upload failed: ${(zipErr as Error).message}`);
+  }
 
   await supabase
     .from('speaker_promo_kits')
