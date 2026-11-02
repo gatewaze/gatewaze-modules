@@ -1,4 +1,5 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { AwsClient } from 'https://esm.sh/aws4fetch@1.0.20'
 import { emitIntegrationEvent } from '../_shared/integrationEvents.ts'
 
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!
@@ -10,6 +11,67 @@ const supabase = createClient(supabaseUrl, supabaseServiceKey, {
     persistSession: false
   }
 })
+
+// Files go to the brand's R2 bucket instead of Supabase Storage once the
+// brand has moved off it: STORAGE_PUBLIC_URL plus the four R2 settings must
+// all be set. Without them every write is the Supabase call it always was.
+// Keys follow the storage module's rule: `media` paths at the bucket root,
+// every other bucket under `<bucket>/`.
+const r2Settings = (() => {
+  const publicUrl = (Deno.env.get('STORAGE_PUBLIC_URL') ?? '').trim().replace(/\/+$/, '')
+  const accountId = (Deno.env.get('R2_ACCOUNT_ID') ?? '').trim()
+  const bucket = (Deno.env.get('R2_BUCKET') ?? '').trim()
+  const accessKeyId = (Deno.env.get('R2_ACCESS_KEY_ID') ?? '').trim()
+  const secretAccessKey = (Deno.env.get('R2_SECRET_ACCESS_KEY') ?? '').trim()
+  if (!/^https:\/\/[A-Za-z0-9.-]+$/.test(publicUrl)) return null
+  if (!/^[a-f0-9]{32}$/i.test(accountId) || !/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(bucket)) return null
+  if (!accessKeyId || !secretAccessKey) return null
+  return { publicUrl, accountId, bucket, accessKeyId, secretAccessKey }
+})()
+
+const r2Client = r2Settings
+  ? new AwsClient({ accessKeyId: r2Settings.accessKeyId, secretAccessKey: r2Settings.secretAccessKey, service: 's3', region: 'auto' })
+  : null
+
+function r2Key(bucket: string, path: string): string {
+  return bucket === 'media' ? path : `${bucket}/${path}`
+}
+
+function r2ObjectUrl(key: string): string {
+  const encoded = key.split('/').map(encodeURIComponent).join('/')
+  return `https://${r2Settings!.accountId}.r2.cloudflarestorage.com/${r2Settings!.bucket}/${encoded}`
+}
+
+/**
+ * Writes one object to Supabase Storage, or to R2 when the brand has moved.
+ * Callers use names that are unique (a timestamp), so the R2 write does not
+ * need Supabase's no-overwrite check.
+ */
+async function storagePut(bucket: string, path: string, body: Blob, opts: { contentType: string; cacheControl: string }): Promise<{ error: { message: string } | null }> {
+  if (!r2Client) {
+    return await supabase.storage.from(bucket).upload(path, body, { contentType: opts.contentType, cacheControl: opts.cacheControl, upsert: false })
+  }
+  const res = await r2Client.fetch(r2ObjectUrl(r2Key(bucket, path)), {
+    method: 'PUT',
+    body: new Uint8Array(await body.arrayBuffer()),
+    headers: {
+      'content-type': opts.contentType,
+      'cache-control': `public, max-age=${opts.cacheControl}`,
+    },
+  })
+  return res.ok ? { error: null } : { error: { message: `R2 put failed: HTTP ${res.status}` } }
+}
+
+/** Removes objects from Supabase Storage, or from R2 when the brand has moved. */
+async function storageRemove(bucket: string, paths: string[]): Promise<void> {
+  if (!r2Client) {
+    await supabase.storage.from(bucket).remove(paths)
+    return
+  }
+  for (const p of paths) {
+    await r2Client.fetch(r2ObjectUrl(r2Key(bucket, p)), { method: 'DELETE' }).catch(() => undefined)
+  }
+}
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -336,6 +398,8 @@ async function handler(req: Request) {
       if (company_logo_url) {
         // Extract the path from the full URL
         // URL format: https://xxx.supabase.co/storage/v1/object/public/speaker-logos/speaker-submissions/xxx.png
+        // or, on a brand that has moved to R2: <STORAGE_PUBLIC_URL>/speaker-logos/speaker-submissions/xxx.png.
+        // Both end in /speaker-logos/<path>.
         const match = company_logo_url.match(/\/speaker-logos\/(.+)$/)
         if (match) {
           companyLogoStoragePath = match[1]
@@ -668,13 +732,10 @@ async function downloadAndStoreAvatar(personId: number, imageUrl: string): Promi
     const filePath = `people/${fileName}`
 
     // Upload to storage
-    const { error: uploadError } = await supabase.storage
-      .from('media')
-      .upload(filePath, blob, {
-        contentType: blob.type,
-        cacheControl: '3600',
-        upsert: false
-      })
+    const { error: uploadError } = await storagePut('media', filePath, blob, {
+      contentType: blob.type,
+      cacheControl: '3600',
+    })
 
     if (uploadError) {
       console.error('Failed to upload avatar:', uploadError)
@@ -692,7 +753,7 @@ async function downloadAndStoreAvatar(personId: number, imageUrl: string): Promi
     if (updateError) {
       console.error('Failed to update person avatar:', updateError)
       // Try to clean up uploaded file
-      await supabase.storage.from('media').remove([filePath])
+      await storageRemove('media', [filePath])
       return false
     }
 

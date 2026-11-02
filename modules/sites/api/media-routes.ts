@@ -25,6 +25,7 @@
 
 import type { Request, Response, Router } from 'express';
 import { createHash } from 'node:crypto';
+import { storagePublicConfig, storagePublicUrl } from '../../storage/lib/public-url.js';
 
 interface RequestWithUser extends Request {
   userId?: string;
@@ -323,9 +324,12 @@ export function createMediaRoutes(deps: MediaRoutesDeps) {
     // `media` bucket — see spec-relative-storage-paths.md §4.
     const bucket = process.env.STORAGE_BUCKET ?? 'media';
     const publicBase = (process.env.SUPABASE_PUBLIC_URL || process.env.SUPABASE_URL || '').replace(/\/+$/, '');
+    // A brand that has moved off Supabase Storage serves them from its own origin.
+    const moved = storagePublicConfig(process.env);
     const items = rows.map((r) => ({
       ...r,
-      cdn_url: `${publicBase}/storage/v1/object/public/${bucket}/${r.storage_path}`,
+      cdn_url: storagePublicUrl(moved, bucket, r.storage_path)
+        ?? `${publicBase}/storage/v1/object/public/${bucket}/${r.storage_path}`,
     }));
 
     res.status(200).json({ items });

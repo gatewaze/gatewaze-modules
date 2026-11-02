@@ -70,3 +70,48 @@ describe('createMediaStorage', () => {
     expect(warn).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('the built-in stores on a brand that has moved off Supabase', () => {
+  it('build addresses on the brand storage origin, for browsers and models alike', async () => {
+    const { cdnConfigFromEnv } = await import('../cdn.js');
+    const cdn = cdnConfigFromEnv({ STORAGE_PUBLIC_URL: 'https://media.test' });
+    const s = builtInSupabaseStores({ supabase, bucket: 'media', publicSupabaseUrl: PUB, internalSupabaseUrl: 'http://kong:8000', cdn });
+    expect(s.browser.publicUrl('event/e/m/a.jpg')).toBe('https://media.test/event/e/m/a.jpg');
+    expect(s.direct.publicUrl('event/e/m/a.jpg')).toBe('https://media.test/event/e/m/a.jpg');
+    expect(s.browser.sizedUrl('event/e/m/a.jpg', { width: 350 })).toBe('https://media.test/cdn-cgi/image/width=350,fit=scale-down,quality=80,format=auto/event/e/m/a.jpg');
+  });
+
+  it('write to the aliased store, not Supabase', async () => {
+    const { setSharedStorageRegistry } = await import('../../../storage/lib/bucket-store.js');
+    const { aliasedTestRegistry } = await import('../../../storage/lib/testing.js');
+    const t = aliasedTestRegistry();
+    setSharedStorageRegistry(t.registry);
+    const upload = vi.fn(async () => ({ error: null }));
+    const sb = { storage: { from: () => ({ upload, remove: vi.fn(), createSignedUrl: vi.fn(), createSignedUploadUrl: vi.fn() }) } };
+    try {
+      const s = builtInSupabaseStores({ supabase: sb, bucket: 'media', publicSupabaseUrl: PUB, internalSupabaseUrl: '', cdn: { zone: null } });
+      await s.direct.put('event/e/m/a.jpg', new Uint8Array([1, 2]), { contentType: 'image/jpeg' });
+      expect(upload).not.toHaveBeenCalled();
+      expect(t.calls.map((c) => [c.op, c.key])).toContainEqual(['put', 'event/e/m/a.jpg']);
+      expect(await s.direct.remove(['event/e/m/a.jpg'])).toEqual({ failed: [] });
+    } finally {
+      setSharedStorageRegistry(null);
+    }
+  });
+
+  it('keep using supabase-js when there is no alias', async () => {
+    const { setSharedStorageRegistry } = await import('../../../storage/lib/bucket-store.js');
+    const { supabaseTestRegistry } = await import('../../../storage/lib/testing.js');
+    setSharedStorageRegistry(supabaseTestRegistry());
+    const upload = vi.fn(async () => ({ error: null }));
+    const sb = { storage: { from: () => ({ upload, remove: vi.fn(), createSignedUrl: vi.fn(), createSignedUploadUrl: vi.fn() }) } };
+    try {
+      const s = builtInSupabaseStores({ supabase: sb, bucket: 'media', publicSupabaseUrl: PUB, internalSupabaseUrl: '', cdn: { zone: null } });
+      await s.direct.put('event/e/m/a.jpg', new Uint8Array([1, 2]), { contentType: 'image/jpeg' });
+      expect(upload).toHaveBeenCalledOnce();
+      expect(s.direct.publicUrl('a.jpg')).toBe(`${PUB}/storage/v1/object/public/media/a.jpg`);
+    } finally {
+      setSharedStorageRegistry(null);
+    }
+  });
+});

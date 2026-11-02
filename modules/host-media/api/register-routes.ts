@@ -28,6 +28,8 @@ import { requireJwt } from '../lib/require-jwt.js';
 import { createHostAuthorizer } from '../lib/authorize-host.js';
 import { sanitiseFilename } from '../lib/storage-paths.js';
 import { createStorageMediaAdapter, lazyMediaAdapter, loadStorageRegistry } from '../lib/storage-adapter.js';
+import { movedBucketStore } from '../lib/moved-store.js';
+import { storagePublicConfig, storagePublicUrl, storageSizedUrl } from '../../storage/lib/public-url.js';
 
 // Canonical bucket per spec-relative-storage-paths.md: a single `media`
 // bucket per Gatewaze instance. HOST_MEDIA_BUCKET remains an override for
@@ -94,8 +96,17 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
    *  the Supabase JS client's getPublicUrl shape but using the external
    *  hostname so browsers can resolve it. */
   function buildPublicUrl(storagePath: string): string {
-    return `${publicSupabaseUrl}/storage/v1/object/public/${STORAGE_BUCKET}/${storagePath}`;
+    return storagePublicUrl(storagePublic, STORAGE_BUCKET, storagePath)
+      ?? `${publicSupabaseUrl}/storage/v1/object/public/${STORAGE_BUCKET}/${storagePath}`;
   }
+
+  // A brand that has moved off Supabase Storage: STORAGE_PUBLIC_URL for
+  // addresses, and the storage module's aliased store (supabase_alias) for
+  // the bytes. The built-in adapter below uses them too, so it never writes
+  // to a Supabase bucket the brand no longer reads. The store is loaded at
+  // runtime; without the storage module there is no alias.
+  const storagePublic = storagePublicConfig(process.env);
+  const movedStore = () => movedBucketStore(supabase, STORAGE_BUCKET);
 
   // Built-in media adapter (Supabase Storage). Used when the storage
   // module cannot be loaded, and for any row the storage module says is in
@@ -108,6 +119,11 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
       // bytes the way browsers do — Gmail just refuses to load it.
       const safeName = sanitiseFilename(args.filename);
       const path = `${args.hostKind}/${args.hostId}/${args.mediaId}/${safeName}`;
+      const moved = await movedStore();
+      if (moved) {
+        await moved.put(path, args.buffer, { contentType: args.mimeType, upsert: false });
+        return { storagePath: path, cdnUrl: storagePublicUrl(storagePublic, STORAGE_BUCKET, path) ?? moved.publicUrl(path) };
+      }
       const { error } = await supabase.storage.from(STORAGE_BUCKET).upload(path, args.buffer, {
         contentType: args.mimeType,
         upsert: false,
@@ -116,6 +132,12 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
       return { storagePath: path, cdnUrl: buildPublicUrl(path) };
     },
     async delete(storagePath) {
+      const moved = await movedStore();
+      if (moved) {
+        const { failed } = await moved.remove([storagePath]);
+        if (failed.length) throw new Error(`storage delete failed: ${failed.join(', ')}`);
+        return;
+      }
       const { error } = await supabase.storage.from(STORAGE_BUCKET).remove([storagePath]);
       if (error) throw new Error(`storage delete failed: ${error.message}`);
     },
@@ -123,9 +145,13 @@ export function registerRoutes(app: Express, context?: ModuleContext): void {
       return buildPublicUrl(storagePath);
     },
     getRenderUrl(storagePath, width) {
+      const moved = storageSizedUrl(storagePublic, STORAGE_BUCKET, storagePath, { width, fit: 'contain', quality: 80 });
+      if (moved) return moved;
       return `${publicSupabaseUrl}/storage/v1/render/image/public/${STORAGE_BUCKET}/${storagePath}?width=${width}&resize=contain&quality=80`;
     },
-    async createSignedUrl(storagePath, ttlSeconds) {
+    async createSignedUrl(storagePath, ttlSeconds, _loc, opts) {
+      const moved = await movedStore();
+      if (moved) return moved.signRead(storagePath, ttlSeconds, opts);
       const { data, error } = await supabase.storage.from(STORAGE_BUCKET).createSignedUrl(storagePath, ttlSeconds);
       if (error || !data?.signedUrl) throw new Error(`signed-url failed: ${error?.message ?? 'unknown'}`);
       return data.signedUrl;

@@ -24,6 +24,7 @@
  */
 
 import { Readable } from 'node:stream';
+import { aliasedBucketStore } from '../../storage/lib/bucket-store.js';
 
 export type StorageProvider = 'supabase' | 's3';
 
@@ -167,7 +168,67 @@ export function externalise(url: string, env: Record<string, string | undefined>
   return url.startsWith(internal) ? external + url.slice(internal.length) : url;
 }
 
+/**
+ * A Supabase bucket, or, on a brand that serves its Supabase buckets from
+ * another provider (storage module `supabase_alias`), that provider's copy
+ * of it under the bucket's prefix. Rows keep saying `supabase` and the same
+ * bucket; only where the bytes are changes. Private buckets (video-masters)
+ * are still only read through signed addresses.
+ */
 export function supabaseStore(supabase, bucket: string): MasterStore {
+  return aliasAware(supabase, bucket, plainSupabaseStore(supabase, bucket));
+}
+
+/** Each call asks the storage module first (cached there for a minute). */
+export function aliasAware(supabase, bucket: string, legacy: MasterStore): MasterStore {
+  const moved = () => aliasedBucketStore(supabase, bucket);
+  return {
+    provider: 'supabase',
+    bucket,
+    async signUpload(path, mimeType, expiresSeconds, bytes) {
+      const m = await moved();
+      if (!m) return legacy.signUpload(path, mimeType, expiresSeconds, bytes);
+      return (await m.signUpload(assertSafeKey(path), { contentType: mimeType, bytes, expiresSeconds })).url;
+    },
+    async signRead(path, expiresSeconds) {
+      const m = await moved();
+      return m ? m.signRead(assertSafeKey(path), expiresSeconds) : legacy.signRead(path, expiresSeconds);
+    },
+    async head(path) {
+      try {
+        const m = await moved();
+        return m ? await m.head(assertSafeKey(path)) : await legacy.head(path);
+      } catch {
+        return { ok: false, bytes: 0, contentType: '' };
+      }
+    },
+    async remove(path) {
+      const m = await moved().catch(() => null);
+      if (!m) return legacy.remove(path);
+      await m.remove([assertSafeKey(path)]);
+    },
+    async putStream(path, body, mimeType, maxBytes) {
+      const m = await moved();
+      if (!m) return legacy.putStream(path, body, mimeType, maxBytes);
+      return m.put(assertSafeKey(path), body, { contentType: mimeType, upsert: true, maxBytes });
+    },
+    async copy(from, to, mimeType, ifMatchEtag) {
+      const m = await moved();
+      if (!m) return legacy.copy(from, to, mimeType, ifMatchEtag);
+      return m.copy(assertSafeKey(from), assertSafeKey(to), mimeType ? { contentType: mimeType } : undefined);
+    },
+    async readHead(path, bytes) {
+      const m = await moved();
+      return m ? m.readRange(assertSafeKey(path), bytes) : legacy.readHead(path, bytes);
+    },
+    async listPrefix(prefix, max) {
+      const m = await moved();
+      return m ? m.list(assertFolderPrefix(prefix), max) : legacy.listPrefix(prefix, max);
+    },
+  };
+}
+
+function plainSupabaseStore(supabase, bucket: string): MasterStore {
   const from = () => supabase.storage.from(bucket);
   const from_ = from;
   return {

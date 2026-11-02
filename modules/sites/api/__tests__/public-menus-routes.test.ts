@@ -425,6 +425,36 @@ describe('getSettings', () => {
     expect(payload.logo?.url).toContain('/storage/v1/object/public/media/');
   });
 
+  it('builds the logo URL on the brand storage origin when STORAGE_PUBLIC_URL is set', async () => {
+    const saved = process.env.STORAGE_PUBLIC_URL;
+    process.env.STORAGE_PUBLIC_URL = 'https://media.test';
+    try {
+      const deps = makeDeps({
+        sites: [{ id: 'site-1', slug: 'example', name: 'EXAMPLE', config: {} }],
+        host_media: [
+          {
+            id: 'm1',
+            host_kind: 'site',
+            host_id: 'site-1',
+            storage_path: 'sites/site-1/media/primary-logo-black.svg',
+            filename: 'primary-logo-black.svg',
+            mime_type: 'image/svg+xml',
+          },
+        ],
+      });
+      const routes = createPublicMenusRoutes(deps);
+      // The route sends a cacheable JSON string (status().type().send()).
+      const send = vi.fn();
+      const res = { setHeader: vi.fn(), status: vi.fn(() => res), type: vi.fn(() => res), send, end: vi.fn() } as unknown as Response;
+      await routes.getSettings({ params: { siteSlug: 'example' }, headers: {} } as unknown as Request, res);
+      const payload = JSON.parse(String(send.mock.calls[0]![0])) as { logo: { url: string } | null };
+      expect(payload.logo?.url).toBe('https://media.test/sites/site-1/media/primary-logo-black.svg');
+    } finally {
+      if (saved === undefined) delete process.env.STORAGE_PUBLIC_URL;
+      else process.env.STORAGE_PUBLIC_URL = saved;
+    }
+  });
+
   it('sets Cache-Control header on success', async () => {
     const deps = makeDeps({
       sites: [{ id: 'site-1', slug: 'example', name: 'EXAMPLE', config: {} }],

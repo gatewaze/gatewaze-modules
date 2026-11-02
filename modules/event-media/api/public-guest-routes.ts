@@ -35,6 +35,7 @@ import { READY_PROMPTS, readyPrompt, readyWindow } from '../lib/ready-prompts.js
 import { plateHasPeople, runCardCopy, runCutout, runDepth, runPlate } from '../lib/booth-provider.js';
 import { bounded } from '../lib/bounded.js';
 import type { CdnConfig } from '../lib/cdn.js';
+import { rewriteStorageUrl, storagePublicUrl } from '../../storage/lib/public-url.js';
 import type { MediaStorage, MediaStore } from '../lib/media-storage.js';
 import { albumForUpload, isView, resolveViews, tagView, type View } from '../lib/view-albums.js';
 import eventMediaModule from '../index.js';
@@ -131,9 +132,13 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
   const { supabase, storageBucket, publicSupabaseUrl, media, rateLimit, logger } = deps;
   const cdn: CdnConfig = deps.cdn ?? { zone: null };
 
-  /** The link's logo, which admin uploads into Supabase's bucket. */
+  /**
+   * The link's logo, which admin uploads into Supabase's bucket, or into
+   * the brand's own storage once it has moved off Supabase.
+   */
   function toPublicUrl(storagePath: string): string {
-    return `${publicSupabaseUrl}/storage/v1/object/public/${storageBucket}/${storagePath}`;
+    const moved = cdn.storage ? storagePublicUrl(cdn.storage, storageBucket, storagePath) : null;
+    return moved ?? `${publicSupabaseUrl}/storage/v1/object/public/${storageBucket}/${storagePath}`;
   }
 
   type Stores = { browser: MediaStore; direct: MediaStore };
@@ -444,7 +449,7 @@ export function createGuestRoutes(deps: GuestRoutesDeps) {
           : null,
       },
       logo_url: link.logo_url && /^https?:\/\//.test(link.logo_url)
-        ? link.logo_url
+        ? (cdn.storage ? rewriteStorageUrl(link.logo_url, cdn.storage) : link.logo_url)
         : link.logo_url
           ? toPublicUrl(link.logo_url.replace(/^\/+/, ''))
           : null,

@@ -17,6 +17,8 @@ import {
   publicAvatarUrl,
   sniffImageType,
 } from '../lib/avatar-mirror';
+import { setSharedStorageRegistry } from '../../storage/lib/bucket-store.js';
+import { aliasedTestRegistry, supabaseTestRegistry } from '../../storage/lib/testing.js';
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
 const JPEG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3, 4]);
@@ -262,5 +264,57 @@ describe('isMirroredAvatarUrl', () => {
     expect(isMirroredAvatarUrl('https://avatars.sched.co/a.jpg')).toBe(false);
     expect(isMirroredAvatarUrl('avatars/promo-123.png')).toBe(false);
     expect(isMirroredAvatarUrl(null)).toBe(false);
+  });
+});
+
+describe('on a brand that has moved off Supabase Storage', () => {
+  let savedUrl: string | undefined;
+  beforeEach(() => {
+    savedUrl = process.env.STORAGE_PUBLIC_URL;
+    process.env.STORAGE_PUBLIC_URL = 'https://media.test';
+  });
+  afterEach(() => {
+    setSharedStorageRegistry(null);
+    if (savedUrl === undefined) delete process.env.STORAGE_PUBLIC_URL;
+    else process.env.STORAGE_PUBLIC_URL = savedUrl;
+  });
+
+  it('writes to the aliased store and stores its public address', async () => {
+    const t = aliasedTestRegistry();
+    setSharedStorageRegistry(t.registry);
+    const s = storage();
+    const r = await mirrorAvatar({ supabase: s.supabase, fetchBytes: fetching(PNG) }, REMOTE);
+    const path = avatarStoragePath('https://avatars.sched.co/c/9d/19223528/avatar.jpg?73e', 'png');
+    expect(r?.storagePath).toBe(path);
+    expect(r?.url).toBe(`https://media.test/${path}`);
+    expect(s.uploads).toHaveLength(0);
+    expect(t.calls.find((c) => c.op === 'put')?.key).toBe(path);
+    expect(isMirroredAvatarUrl(r?.url)).toBe(true);
+  });
+
+  it('lists the prefix from the aliased store', async () => {
+    const t = aliasedTestRegistry({ objects: { [`${AVATAR_PREFIX}/abc.jpg`]: Buffer.from('x'), 'other/def.jpg': Buffer.from('y') } });
+    setSharedStorageRegistry(t.registry);
+    expect([...(await listMirroredAvatars(storage()))]).toEqual(['abc.jpg']);
+  });
+
+  it('reuses an avatar already in the aliased store without fetching', async () => {
+    const path = avatarStoragePath('https://avatars.sched.co/c/9d/19223528/avatar.jpg?73e', 'jpg');
+    const t = aliasedTestRegistry({ objects: { [path]: Buffer.from('x') } });
+    setSharedStorageRegistry(t.registry);
+    const fetchBytes = fetching(JPEG);
+    const r = await mirrorAvatar({ supabase: storage().supabase, fetchBytes }, REMOTE);
+    expect(r?.reused).toBe(true);
+    expect(r?.url).toBe(`https://media.test/${path}`);
+    expect(fetchBytes).not.toHaveBeenCalled();
+  });
+
+  it('keeps writing to Supabase when there is no alias', async () => {
+    setSharedStorageRegistry(supabaseTestRegistry());
+    delete process.env.STORAGE_PUBLIC_URL;
+    const s = storage();
+    const r = await mirrorAvatar({ supabase: s.supabase, fetchBytes: fetching(PNG) }, REMOTE);
+    expect(s.uploads).toHaveLength(1);
+    expect(r?.url).toMatch(/^https:\/\/data\.test\.example\/storage\/v1\/object\/public\/media\//);
   });
 });

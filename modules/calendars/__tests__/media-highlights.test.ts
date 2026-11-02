@@ -62,6 +62,18 @@ describe('getCalendarMediaHighlights', () => {
     expect(out[1]!.thumbnail_url).toBe(out[1]!.url);
   });
 
+  it('gives Supabase rows the brand storage origin once it has moved off Supabase', async () => {
+    process.env.STORAGE_PUBLIC_URL = 'https://media.example.com';
+    try {
+      state.media = [row('m1', {})];
+      const { getCalendarMediaHighlights } = await import('../portal/lib/calendars');
+      const out = await getCalendarMediaHighlights('cal');
+      expect(out.map((i) => i.url)).toEqual([`https://media.example.com/event/${EVENT}/m1/a%20b.jpg`]);
+    } finally {
+      delete process.env.STORAGE_PUBLIC_URL;
+    }
+  });
+
   it('asks for each provider and bucket once', async () => {
     state.media = [
       row('m1', { storage_provider: 'r2', storage_bucket: 'autodb-media' }),

@@ -11,14 +11,22 @@
  * project's Supabase URL) and BUNNY_CDN_ENABLED=true. The same names the
  * platform portal uses, so one setting covers both.
  *
+ * A brand that has moved its storage off Supabase (STORAGE_PUBLIC_URL, see
+ * modules/storage lib/public-url.ts) gets that origin instead, with
+ * Cloudflare's /cdn-cgi/image/ resizing. Nothing changes without it.
+ *
  * Only BROWSER-facing URLs go through here. URLs handed to image models
  * stay direct: they include short-lived scratch files that are deleted
  * straight after use, and there is nothing to gain from caching those.
  */
 
+import { storagePublicConfig, storagePublicUrl, storageSizedUrl, type StoragePublicConfig } from '../../storage/lib/public-url.js'
+
 export interface CdnConfig {
   /** e.g. https://example.b-cdn.net — no trailing slash required. */
   zone: string | null
+  /** The brand's storage origin when it has moved off Supabase; wins over the zone. */
+  storage?: StoragePublicConfig
 }
 
 /** Read and validate the CDN settings once, at mount. */
@@ -28,7 +36,8 @@ export function cdnConfigFromEnv(env: Record<string, string | undefined>): CdnCo
   // Only an https origin is accepted. A typo here would otherwise send
   // every photo to a host that does not exist and blank the projector.
   const zone = on && /^https:\/\/[a-z0-9.-]+$/i.test(raw) ? raw : null
-  return { zone }
+  const storage = storagePublicConfig(env)
+  return storage.publicUrl ? { zone, storage } : { zone }
 }
 
 /** An original, as a browser should fetch it. */
@@ -38,6 +47,8 @@ export function browserObjectUrl(
   // Not encoded, deliberately: this must produce exactly the URL the
   // code produced before, so switching the CDN off changes nothing.
   // Stored names are already sanitised on upload.
+  const moved = cfg.storage ? storagePublicUrl(cfg.storage, bucket, path) : null
+  if (moved) return moved
   const rel = `/storage/v1/object/public/${bucket}/${path}`
   return `${cfg.zone ?? supabaseUrl}${rel}`
 }
@@ -55,6 +66,8 @@ export function browserSizedUrl(
 ): string {
   const w = Math.max(16, Math.min(4096, Math.round(width)))
   const q = Math.max(1, Math.min(100, Math.round(quality)))
+  const moved = cfg.storage ? storageSizedUrl(cfg.storage, bucket, path, { width: w, quality: q }) : null
+  if (moved) return moved
   if (cfg.zone) {
     return `${browserObjectUrl(cfg, supabaseUrl, bucket, path)}?width=${w}&quality=${q}`
   }

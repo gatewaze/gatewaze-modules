@@ -35,6 +35,15 @@ if (!url || !key) {
   process.exit(1);
 }
 
+// A brand that has moved its storage off Supabase (STORAGE_PUBLIC_URL)
+// keeps guest uploads in its provider bucket, which this script cannot
+// list with ages. Listing Supabase there would report files that no longer
+// matter, and --delete would remove the old copies, so it stops instead.
+if (String(process.env.STORAGE_PUBLIC_URL ?? '').trim()) {
+  console.error('STORAGE_PUBLIC_URL is set: this brand keeps its files outside Supabase Storage, which this script does not sweep');
+  process.exit(1);
+}
+
 const supabase = createClient(url, key, { auth: { autoRefreshToken: false, persistSession: false } });
 
 // storage list is per-directory: event/<eventId>/ has one folder per

@@ -10,6 +10,7 @@
  */
 
 import { guardedFetch } from './guarded-fetch.js';
+import { movedBucketStore } from './moved-store.js';
 
 const CONTENT_IMAGES_BUCKET = 'event-content-images';
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
@@ -20,6 +21,12 @@ let bucketEnsured = false;
 export async function initializeBucket(supabase) {
   if (bucketEnsured) return { success: true };
   try {
+    // A brand whose buckets moved off Supabase keeps this one in its
+    // provider bucket, where there is nothing to create.
+    if (await movedBucketStore(supabase, CONTENT_IMAGES_BUCKET)) {
+      bucketEnsured = true;
+      return { success: true };
+    }
     const { data: buckets, error: listError } = await supabase.storage.listBuckets();
     if (listError) return { success: false, error: listError.message };
 
@@ -96,6 +103,12 @@ export async function downloadAndUploadImage(supabase, imageUrl, eventId, imageI
     const fileName = `content-${imageIndex}-${timestamp}.${extension}`;
     const storagePath = `${eventId}/${fileName}`;
 
+    const moved = await movedBucketStore(supabase, CONTENT_IMAGES_BUCKET);
+    if (moved) {
+      await moved.put(storagePath, blob, { contentType, cacheControl: 'public, max-age=31536000, immutable', upsert: false });
+      return { success: true, publicUrl: moved.publicUrl(storagePath), storagePath };
+    }
+
     const { error: uploadError } = await supabase.storage
       .from(CONTENT_IMAGES_BUCKET)
       .upload(storagePath, blob, {
@@ -140,6 +153,15 @@ export async function processAllImages(supabase, images, eventId) {
 
 export async function deleteEventImages(supabase, eventId) {
   try {
+    const moved = await movedBucketStore(supabase, CONTENT_IMAGES_BUCKET);
+    if (moved) {
+      const files = await moved.list(`${eventId}/`, 1000);
+      // Only the event's own files, one level down, as the Supabase listing below.
+      const paths = files.map((f) => f.path).filter((p) => p.lastIndexOf('/') === String(eventId).length);
+      if (paths.length === 0) return { success: true };
+      const { failed } = await moved.remove(paths);
+      return failed.length ? { success: false, error: `could not remove ${failed.length} file(s)` } : { success: true };
+    }
     const { data: files, error: listError } = await supabase.storage
       .from(CONTENT_IMAGES_BUCKET).list(eventId);
     if (listError) return { success: false, error: listError.message };
