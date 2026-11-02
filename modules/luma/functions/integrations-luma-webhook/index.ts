@@ -3,12 +3,11 @@ import {
   createFullRegistration,
   cancelRegistration,
   updateRegistrationStatus,
-  markRegistrationCheckedIn,
   mapApprovalStatus,
   type RegistrationData,
   type EventData,
 } from '../_shared/lumaRegistration.ts'
-import { extractWebhookCheckedInAt } from '../_shared/checkIn.ts'
+import { extractWebhookCheckedInAt, markRegistrationCheckedIn } from '../_shared/checkIn.ts'
 import { extractTrackingSessionId, sanitizeUtmSource } from '../_shared/utmSource.ts'
 
 /**
@@ -565,10 +564,10 @@ async function handleGuestUpdated(data: LumaGuestData): Promise<Response> {
     newStatus,
   })
 
-  // A check-in reaches us on guest.updated, not as its own webhook type
+  // Luma has no check-in webhook type; guest.updated carries event_tickets[].checked_in_at
   const checkedInAt = extractWebhookCheckedInAt(data)
   const checkedIn = checkedInAt && result.registrationId
-    ? await markRegistrationCheckedIn(supabase, result.registrationId, checkedInAt)
+    ? (await markRegistrationCheckedIn(supabase, result.registrationId, checkedInAt)) === 'recorded'
     : false
 
   return new Response(JSON.stringify({

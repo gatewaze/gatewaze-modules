@@ -661,36 +661,6 @@ export async function cancelRegistration(
 }
 
 /**
- * Record a Luma check-in on a registration. Only fills an empty checked_in_at,
- * so the first recorded time wins and re-imports are no-ops. The UPDATE fires
- * the engagement module's event.attended trigger. Returns true when a row
- * changed; never throws, so a check-in problem does not fail the import.
- */
-export async function markRegistrationCheckedIn(
-  supabase: SupabaseClient,
-  registrationId: string,
-  checkedInAt: string
-): Promise<boolean> {
-  try {
-    const { data, error } = await supabase
-      .from('events_registrations')
-      .update({ checked_in: true, checked_in_at: checkedInAt })
-      .eq('id', registrationId)
-      .is('checked_in_at', null)
-      .select('id')
-
-    if (error) {
-      console.error(`Failed to record check-in for registration ${registrationId}:`, error.message)
-      return false
-    }
-    return (data?.length ?? 0) > 0
-  } catch (err) {
-    console.error(`Failed to record check-in for registration ${registrationId}:`, (err as Error).message)
-    return false
-  }
-}
-
-/**
  * Update a registration status (e.g., from pending to confirmed, or to waitlist)
  */
 export async function updateRegistrationStatus(

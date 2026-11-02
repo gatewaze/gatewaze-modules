@@ -9,7 +9,9 @@
 --              the ones already captured. Only empty checked_in_at values are
 --              filled, so it is safe to re-run and never overwrites a
 --              check-in recorded another way. The UPDATE fires the
---              engagement module's event.attended trigger where installed.
+--              engagement module's event.attended trigger where installed;
+--              apply engagement 007 first so those signals are dated at the
+--              check-in, not at this migration.
 -- ============================================================================
 
 UPDATE public.events_registrations er
