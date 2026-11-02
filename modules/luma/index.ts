@@ -7,7 +7,7 @@ const lumaIntegrationModule: GatewazeModule = {
   visibility: 'public',
   name: 'Luma.com Integration',
   description: 'Sync events and registrations from Luma — process webhooks, CSV imports, and issue discount codes',
-  version: '1.2.0',
+  version: '1.2.1',
   features: [
     'luma.sync',
     'luma.webhooks',
@@ -27,6 +27,7 @@ const lumaIntegrationModule: GatewazeModule = {
     'migrations/003_registration_action.sql',
     'migrations/004_registration_fk_ondelete_setnull.sql',
     'migrations/005_apply_mappings_by_registration.sql',
+    'migrations/006_backfill_luma_checkins.sql',
   ],
 
   adminSlots: [
