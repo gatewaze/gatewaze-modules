@@ -4,3 +4,5 @@ export { supabaseStore, supabaseSettingsFromEnv, externalise, type SupabaseStore
 export { s3Store, cloudflareImageOptions, type S3StoreSettings } from './s3-store.js';
 export { createStorageRegistry, StorageUnavailableError, SUPABASE, type StorageRegistry, type StorageRegistryDeps, type StoredRow, type DeliveryOptions, type ReadOptions } from './registry.js';
 export { unsealSecret } from './secret-envelope.js';
+export { prefixedStore } from './prefixed-store.js';
+export { storagePublicConfig, storageKey, storagePublicUrl, storageSizedUrl, rewriteStorageUrl, rewriteStorageUrlsInText, type StoragePublicConfig, type PublicSize } from './public-url.js';

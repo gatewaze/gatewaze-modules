@@ -19,6 +19,14 @@
  * `storage_bucket`) and nothing else. If that provider is unavailable the
  * call fails: reading another bucket would return the wrong file, or none.
  *
+ * A brand that has moved off Supabase Storage sets the storage module's
+ * config `supabase_alias` (or env STORAGE_SUPABASE_ALIAS) to a provider id.
+ * Every Supabase bucket is then served from that provider's bucket, `media`
+ * at the root and every other bucket under `<bucket>/` (lib/prefixed-store),
+ * so code and rows that still say "Supabase bucket b, path p" reach the same
+ * file with no change. bucketStore(b) is the call for code that used to say
+ * supabase.storage.from(b).
+ *
  * Provider settings come from env first, then the provider module's row in
  * installed_modules (secrets sealed with GATEWAZE_SECRETS_KEY). Config rows
  * are cached for a minute, so a change in the admin takes effect within one.
@@ -28,6 +36,7 @@ import { existsSync, readdirSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isValidBucket } from './keys.js';
+import { prefixedStore } from './prefixed-store.js';
 import { supabaseSettingsFromEnv, supabaseStore, type SupabaseStorageClient } from './supabase-store.js';
 import type { ObjectStore, StorageProviderId, StorageProviderModule } from './types.js';
 
@@ -97,8 +106,15 @@ export interface StorageRegistry {
   storeForNew(opts?: { purpose?: string; supabaseBucket?: string } & DeliveryOptions): Promise<ObjectStore>;
   /** The store an existing row's file is in. Throws StorageUnavailableError when that provider is unavailable. */
   storeFor(row: StoredRow, fallbackBucket?: string, opts?: ReadOptions): Promise<ObjectStore>;
-  /** Supabase's store for a bucket, without any lookup. */
+  /** Supabase's store for a bucket, without any lookup. Ignores supabase_alias. */
   supabase(bucket: string, opts?: DeliveryOptions): ObjectStore;
+  /**
+   * The store for what was a Supabase bucket: Supabase itself, or the
+   * provider named by supabase_alias with the bucket's prefix. Throws
+   * StorageUnavailableError when the alias provider is unavailable, rather
+   * than quietly writing to Supabase again.
+   */
+  bucketStore(bucket: string, opts?: DeliveryOptions): Promise<ObjectStore>;
 }
 
 /** A provider module's lib/provider file, looked for beside this module and in the clone cache. */
@@ -159,6 +175,8 @@ export function createStorageRegistry(deps: StorageRegistryDeps): StorageRegistr
   const configCache = new Map<string, { at: number; status: string; config: Record<string, unknown> }>();
   const providers = new Map<string, Promise<StorageProviderModule>>();
   const stores = new Map<string, ObjectStore>();
+  // One prefixed store per provider store and Supabase bucket.
+  const aliased = new WeakMap<ObjectStore, Map<string, ObjectStore>>();
 
   function warnOnce(key: string, msg: string, meta?: Record<string, unknown>) {
     if (warned.has(key)) return;
@@ -223,6 +241,37 @@ export function createStorageRegistry(deps: StorageRegistryDeps): StorageRegistr
     return s;
   }
 
+  /** The provider every Supabase bucket is served from, or null when the brand is still on Supabase. */
+  async function supabaseAlias(): Promise<string | null> {
+    const fromEnv = String(env.STORAGE_SUPABASE_ALIAS ?? '').trim();
+    if (fromEnv) return fromEnv === SUPABASE ? null : fromEnv;
+    try {
+      const v = (await moduleRow('storage')).config['supabase_alias'];
+      return typeof v === 'string' && v.trim() && v.trim() !== SUPABASE ? v.trim() : null;
+    } catch (err) {
+      warnOnce('storage-config', '[storage] could not read the storage module config; using supabase', { error: (err as Error).message });
+      return null;
+    }
+  }
+
+  async function bucketStore(bucket: string, opts: DeliveryOptions = {}): Promise<ObjectStore> {
+    if (!isValidBucket(bucket)) throw new StorageUnavailableError(`not a bucket name: ${bucket}`);
+    const alias = await supabaseAlias();
+    if (!alias) return supabase(bucket, opts);
+    const inner = await providerStore(alias, null);
+    let byBucket = aliased.get(inner);
+    if (!byBucket) {
+      byBucket = new Map();
+      aliased.set(inner, byBucket);
+    }
+    let s = byBucket.get(bucket);
+    if (!s) {
+      s = prefixedStore(inner, bucket);
+      byBucket.set(bucket, s);
+    }
+    return s;
+  }
+
   async function chosenProvider(purpose: string | undefined): Promise<string> {
     if (purpose && PURPOSE.test(purpose)) {
       const v = String(env[`STORAGE_PROVIDER_${purpose.toUpperCase()}`] ?? '').trim();
@@ -243,16 +292,17 @@ export function createStorageRegistry(deps: StorageRegistryDeps): StorageRegistr
 
   return {
     supabase,
+    bucketStore,
 
     async storeForNew(opts = {}) {
       const bucket = opts.supabaseBucket ?? 'media';
       const id = await chosenProvider(opts.purpose);
-      if (id === SUPABASE) return supabase(bucket, opts);
+      if (id === SUPABASE) return bucketStore(bucket, opts);
       try {
         return await providerStore(id, null);
       } catch (err) {
         warnOnce(`fallback:${id}`, `[storage] provider ${id} is unavailable for new files; using supabase`, { error: (err as Error).message });
-        return supabase(bucket, opts);
+        return bucketStore(bucket, opts);
       }
     },
 
@@ -264,7 +314,7 @@ export function createStorageRegistry(deps: StorageRegistryDeps): StorageRegistr
         if (b !== fallbackBucket && !(opts.supabaseBuckets ?? []).includes(b)) {
           throw new StorageUnavailableError(`bucket ${b} is not one this caller reads`);
         }
-        return supabase(b, opts);
+        return bucketStore(b, opts);
       }
       return providerStore(id, bucket);
     },
