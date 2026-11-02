@@ -13,6 +13,7 @@
  * here is trusted on the way through.
  */
 import { supabase } from '@/lib/supabase';
+import { uploadBeside } from './uploadBeside';
 
 /**
  * The layers that must turn with the photograph. thumb and medium are
@@ -78,19 +79,23 @@ export async function rotateMedia(
   eventId: string,
   item: RotatableItem,
   quarters: 1 | 2 | 3,
-  bucket = 'media',
+  // Unused: the server now chooses where the file goes. Kept so existing
+  // callers that pass a bucket still compile.
+  _bucket = 'media',
 ): Promise<{ storage_path: string; width: number; height: number }> {
   const original = item.storage_path ?? '';
   if (!original) throw new Error('this photo has no file to turn');
-  const dir = original.slice(0, original.lastIndexOf('/'));
   const stamp = Date.now().toString(36);
 
   // The picture itself, from the original rather than a thumbnail.
-  const base = urlFor(item.cdn_url, original);
+  const base = urlFor(item.cdn_url, original, original);
   const turned = await turn(base, quarters, 'image/jpeg');
-  const path = `${dir}/rot-${stamp}.jpg`;
-  const up = await supabase.storage.from(bucket).upload(path, turned.blob, { contentType: 'image/jpeg', upsert: false });
-  if (up.error) throw new Error(`could not save the turned photo: ${up.error.message}`);
+  let path: string;
+  try {
+    path = await uploadBeside(authedFetch, eventId, item.id, `rot-${stamp}.jpg`, turned.blob);
+  } catch (err) {
+    throw new Error(`could not save the turned photo: ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   // The layers, turned the same way so they still line up.
   const variants: Record<string, string> = {};
@@ -99,12 +104,9 @@ export async function rotateMedia(
     if (!at || /^https?:/i.test(at)) continue;
     try {
       const png = key === 'cutout' || key === 'depth';
-      const out = await turn(urlFor(item.cdn_url, at), quarters, png ? 'image/png' : 'image/jpeg');
+      const out = await turn(urlFor(item.cdn_url, original, at), quarters, png ? 'image/png' : 'image/jpeg');
       const ext = png ? 'png' : 'jpg';
-      const layerPath = `${dir}/rot-${key}-${stamp}.${ext}`;
-      const res = await supabase.storage.from(bucket)
-        .upload(layerPath, out.blob, { contentType: png ? 'image/png' : 'image/jpeg', upsert: false });
-      if (!res.error) variants[key] = layerPath;
+      variants[key] = await uploadBeside(authedFetch, eventId, item.id, `rot-${key}-${stamp}.${ext}`, out.blob);
     } catch {
       // A layer that cannot be turned is left behind rather than left
       // pointing the wrong way: the server only replaces what it is given.
@@ -131,11 +133,14 @@ export async function rotateMedia(
 
 /**
  * A public URL for a stored path, taken from the row's own cdn_url so it
- * keeps working whatever the storage host is.
+ * keeps working whatever the storage host is: the cdn_url is the
+ * original's path on some host, so the host part is everything before it.
  */
-function urlFor(cdnUrl: string, path: string): string {
+function urlFor(cdnUrl: string, original: string, path: string): string {
   if (/^https?:/i.test(path)) return path;
-  const m = /^(.*\/storage\/v1\/object\/public\/[^/]+\/)/.exec(cdnUrl);
-  if (!m) throw new Error('cannot work out where this photo is stored');
-  return m[1] + path;
+  const bare = cdnUrl.split(/[?#]/)[0]!;
+  for (const tail of [original, original.split('/').map(encodeURIComponent).join('/')]) {
+    if (bare.endsWith(`/${tail}`)) return bare.slice(0, bare.length - tail.length) + path;
+  }
+  throw new Error('cannot work out where this photo is stored');
 }

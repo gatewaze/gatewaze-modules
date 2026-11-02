@@ -27,6 +27,7 @@
  * an interrupted run is not paid for twice.
  */
 import type { Request, Response, Router } from 'express';
+import type { MediaStorage } from '../lib/media-storage.js';
 import { aiEnhanceConfigured, runAiEnhance, strengthFor } from '../lib/ai-enhance.js';
 import { expandConfigured, marginsFrom, runExpand } from '../lib/ai-expand.js';
 
@@ -40,8 +41,8 @@ export interface AiEnhanceMediaDeps {
   canAdminEvent: (req: Request, eventId: string) => Promise<boolean | null>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   serviceClient: any;
-  storageBucket: string;
-  publicUrl: (path: string) => string;
+  /** Where each row's files are (lib/media-storage.ts). */
+  media: MediaStorage;
   logger: PlatformLogger;
 }
 
@@ -56,7 +57,17 @@ function sendError(res: Response, status: number, code: string, message: string)
 }
 
 export function createAiEnhanceMedia(deps: AiEnhanceMediaDeps) {
-  const { canAdminEvent, serviceClient: db, storageBucket, publicUrl, logger } = deps;
+  const { canAdminEvent, serviceClient: db, media, logger } = deps;
+
+  /** This row's store, for direct addresses the models and the canvas read. Null when unavailable. */
+  async function storeOf(row: { storage_provider?: string | null; storage_bucket?: string | null }) {
+    try {
+      return (await media.forRow(row)).direct;
+    } catch (err) {
+      logger.warn('ai-enhance: media store unavailable', { error: err instanceof Error ? err.message : String(err) });
+      return null;
+    }
+  }
 
   async function guard(req: Request, res: Response, eventId: unknown): Promise<boolean> {
     if (typeof eventId !== 'string' || !UUID_RE.test(eventId)) {
@@ -90,7 +101,7 @@ export function createAiEnhanceMedia(deps: AiEnhanceMediaDeps) {
   }> {
     const { data: row, error } = await db
       .from('host_media')
-      .select('id, host_kind, host_id, storage_path, mime_type, variants, metadata')
+      .select('id, host_kind, host_id, storage_path, storage_provider, storage_bucket, mime_type, variants, metadata')
       .eq('id', mediaId)
       .maybeSingle();
     if (error || !row || row.host_kind !== 'event' || row.host_id !== eventId) {
@@ -116,6 +127,9 @@ export function createAiEnhanceMedia(deps: AiEnhanceMediaDeps) {
       return { id: mediaId, status: 'unchanged', reason: 'already_done' };
     }
 
+    const store = await storeOf(row);
+    if (!store) return { id: mediaId, status: 'skipped', reason: 'storage_unavailable' };
+    const publicUrl = (p: string) => store.publicUrl(p);
     const made = await runAiEnhance(publicUrl(path), strength);
     if (!made.ok) return { id: mediaId, status: 'failed', reason: made.error };
 
@@ -123,12 +137,10 @@ export function createAiEnhanceMedia(deps: AiEnhanceMediaDeps) {
     // the browser can read it back and so a CDN never serves a stale one.
     const folder = path.slice(0, path.lastIndexOf('/'));
     const draftPath = `${folder}/ai-draft-${Date.now().toString(36)}.jpg`;
-    const up = await db.storage.from(storageBucket).upload(draftPath, made.image, {
-      contentType: 'image/jpeg',
-      upsert: false,
-    });
-    if (up.error) {
-      logger.error('ai-enhance: could not store the draft', { mediaId, error: up.error.message });
+    try {
+      await store.put(draftPath, made.image, { contentType: 'image/jpeg', upsert: false });
+    } catch (err) {
+      logger.error('ai-enhance: could not store the draft', { mediaId, error: err instanceof Error ? err.message : String(err) });
       return { id: mediaId, status: 'failed', reason: 'draft_upload_failed' };
     }
 
@@ -202,7 +214,7 @@ export function createAiEnhanceMedia(deps: AiEnhanceMediaDeps) {
   async function refuse(eventId: string, mediaId: string): Promise<void> {
     const { data: row } = await db
       .from('host_media')
-      .select('id, host_kind, host_id, metadata')
+      .select('id, host_kind, host_id, storage_provider, storage_bucket, metadata')
       .eq('id', mediaId)
       .maybeSingle();
     if (!row || row.host_kind !== 'event' || row.host_id !== eventId) return;
@@ -218,7 +230,8 @@ export function createAiEnhanceMedia(deps: AiEnhanceMediaDeps) {
       },
     }).eq('id', mediaId);
     if (draft && draft.startsWith(`event/${eventId}/`)) {
-      try { await db.storage.from(storageBucket).remove([draft]); } catch { /* swept later */ }
+      const store = await storeOf(row);
+      if (store) await store.remove([draft]);
     }
   }
 
@@ -258,7 +271,7 @@ export function createAiEnhanceMedia(deps: AiEnhanceMediaDeps) {
 
     const { data: row, error } = await db
       .from('host_media')
-      .select('id, host_kind, host_id, storage_path, mime_type, variants, metadata')
+      .select('id, host_kind, host_id, storage_path, storage_provider, storage_bucket, mime_type, variants, metadata')
       .eq('id', mediaId)
       .maybeSingle();
     if (error || !row || row.host_kind !== 'event' || row.host_id !== eventId) {
@@ -277,9 +290,12 @@ export function createAiEnhanceMedia(deps: AiEnhanceMediaDeps) {
       return;
     }
 
-    const name = path.slice(path.lastIndexOf('/') + 1);
-    const { data: found } = await db.storage.from(storageBucket).list(dir, { search: name, limit: 100 });
-    if (!found || !found.some((f: { name: string }) => f.name === name)) {
+    const store = await storeOf(row);
+    if (!store) {
+      sendError(res, 503, 'storage_unavailable', 'this photo is stored somewhere that is not available');
+      return;
+    }
+    if (!(await store.head(path)).ok) {
       sendError(res, 400, 'not_uploaded', 'that copy is not in storage yet');
       return;
     }
@@ -316,7 +332,7 @@ export function createAiEnhanceMedia(deps: AiEnhanceMediaDeps) {
     const sweep = [draft, previous !== path ? previous : null]
       .filter((p): p is string => typeof p === 'string' && p !== path && p.startsWith(`event/${eventId}/`));
     if (sweep.length > 0) {
-      try { await db.storage.from(storageBucket).remove(sweep); } catch { /* swept later */ }
+      await store.remove(sweep);
     }
     res.status(200).json({ id: mediaId, of, enhanced_ai: path });
   }
@@ -349,7 +365,7 @@ export function createAiEnhanceMedia(deps: AiEnhanceMediaDeps) {
 
     const { data: row, error } = await db
       .from('host_media')
-      .select('id, host_kind, host_id, storage_path, mime_type, metadata')
+      .select('id, host_kind, host_id, storage_path, storage_provider, storage_bucket, mime_type, metadata')
       .eq('id', mediaId)
       .maybeSingle();
     if (error || !row || row.host_kind !== 'event' || row.host_id !== eventId) {
@@ -368,6 +384,12 @@ export function createAiEnhanceMedia(deps: AiEnhanceMediaDeps) {
       return;
     }
 
+    const store = await storeOf(row);
+    if (!store) {
+      sendError(res, 503, 'storage_unavailable', 'this photo is stored somewhere that is not available');
+      return;
+    }
+    const publicUrl = (p: string) => store.publicUrl(p);
     const made = await runExpand(publicUrl(path), margins);
     if (!made.ok) {
       sendError(res, 502, made.error, made.detail ?? 'the provider could not reframe that photo');
@@ -375,11 +397,10 @@ export function createAiEnhanceMedia(deps: AiEnhanceMediaDeps) {
     }
     const folder = path.slice(0, path.lastIndexOf('/'));
     const draftPath = `${folder}/frame-draft-${Date.now().toString(36)}.jpg`;
-    const up = await db.storage.from(storageBucket).upload(draftPath, made.image, {
-      contentType: 'image/jpeg', upsert: false,
-    });
-    if (up.error) {
-      logger.error('expand: could not store the draft', { mediaId, error: up.error.message });
+    try {
+      await store.put(draftPath, made.image, { contentType: 'image/jpeg', upsert: false });
+    } catch (err) {
+      logger.error('expand: could not store the draft', { mediaId, error: err instanceof Error ? err.message : String(err) });
       sendError(res, 500, 'draft_upload_failed', 'could not store that draft');
       return;
     }

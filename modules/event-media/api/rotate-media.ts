@@ -22,6 +22,7 @@
  * ones.
  */
 import type { Request, Response, Router } from 'express';
+import type { MediaStorage } from '../lib/media-storage.js';
 
 interface PlatformLogger {
   info: (msg: string, meta?: Record<string, unknown>) => void;
@@ -33,7 +34,7 @@ export interface RotateMediaDeps {
   canAdminEvent: (req: Request, eventId: string) => Promise<boolean | null>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   serviceClient: any;
-  storageBucket: string;
+  media: MediaStorage;
   logger: PlatformLogger;
 }
 
@@ -48,7 +49,7 @@ function sendError(res: Response, status: number, code: string, message: string)
 }
 
 export function createRotateMedia(deps: RotateMediaDeps) {
-  const { canAdminEvent, serviceClient: db, storageBucket, logger } = deps;
+  const { canAdminEvent, serviceClient: db, media, logger } = deps;
 
   async function rotated(req: Request, res: Response): Promise<void> {
     const eventId = req.params['eventId'];
@@ -83,7 +84,7 @@ export function createRotateMedia(deps: RotateMediaDeps) {
 
     const { data: row, error } = await db
       .from('host_media')
-      .select('id, host_kind, host_id, storage_path, variants, metadata, mime_type')
+      .select('id, host_kind, host_id, storage_path, storage_provider, storage_bucket, variants, metadata, mime_type')
       .eq('id', mediaId)
       .maybeSingle();
     if (error || !row || row.host_kind !== 'event' || row.host_id !== eventId) {
@@ -124,17 +125,21 @@ export function createRotateMedia(deps: RotateMediaDeps) {
       variants[key] = next;
     }
 
-    // The files must exist: a row pointing at nothing shows a broken
-    // picture on the projector, which is worse than one on its side.
+    // The files must exist, in the store this row's files are in: a row
+    // pointing at nothing shows a broken picture on the projector, which
+    // is worse than one on its side.
+    let store;
+    try {
+      store = (await media.forRow(row)).direct;
+    } catch (err) {
+      logger.error('rotate: media store unavailable', { mediaId, error: err instanceof Error ? err.message : String(err) });
+      sendError(res, 503, 'storage_unavailable', 'this photo is stored somewhere that is not available');
+      return;
+    }
     const wanted = [path, ...Object.values(variants)];
     const missing: string[] = [];
     for (const p of wanted) {
-      const at = p.slice(0, p.lastIndexOf('/'));
-      const name = p.slice(p.lastIndexOf('/') + 1);
-      // search is a prefix match, so longer names can come back too --
-      // room for those rather than a one-row listing that might miss.
-      const { data: found } = await db.storage.from(storageBucket).list(at, { search: name, limit: 100 });
-      if (!found || !found.some((f: { name: string }) => f.name === name)) missing.push(p);
+      if (!(await store.head(p)).ok) missing.push(p);
     }
     if (missing.length > 0) {
       sendError(res, 400, 'not_uploaded', 'the rotated files are not in storage yet');
@@ -171,7 +176,7 @@ export function createRotateMedia(deps: RotateMediaDeps) {
       .filter((p) => typeof p === 'string' && p && !wanted.includes(p)
         && p.startsWith(prefix) && !p.includes('..'));
     if (stale.length > 0) {
-      try { await db.storage.from(storageBucket).remove(stale); } catch { /* swept later */ }
+      await store.remove(stale);
     }
 
     res.status(200).json({ id: mediaId, storage_path: path, width, height, variants: { ...had, ...variants } });

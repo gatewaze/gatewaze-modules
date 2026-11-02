@@ -2,6 +2,7 @@
 
 import { describe, it, expect, vi } from 'vitest';
 import { createRotateMedia } from '../rotate-media.js';
+import { fakeMedia } from './fake-media.js';
 
 const EVENT = '99999999-8888-4777-8666-555555555555';
 const MEDIA = '11111111-2222-4333-8444-555555555555';
@@ -25,18 +26,15 @@ function setup(over = {}) {
       select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: row, error: null }) }) }),
       update: (fields) => { state.updated = fields; return { eq: () => Promise.resolve({ error: over.updateError ?? null }) }; },
     }),
-    storage: {
-      from: () => ({
-        // Everything the caller offers exists, unless the test says otherwise.
-        list: (dir, opts) => Promise.resolve({ data: over.missing ? [] : [{ name: opts.search }], error: null }),
-        remove: (paths) => { state.removed.push(...paths); return Promise.resolve({ error: null }); },
-      }),
-    },
   };
+  // Everything the caller offers exists, unless the test says otherwise.
+  const fm = fakeMedia({ missing: over.missing });
+  state.removed = fm.state.removed;
+  state.media = fm.state;
   const routes = createRotateMedia({
     canAdminEvent: async () => ('allowed' in over ? over.allowed : true),
     serviceClient: db,
-    storageBucket: 'media',
+    media: fm.media,
     logger,
   });
   return { routes, state };

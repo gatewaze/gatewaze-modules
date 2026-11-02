@@ -179,11 +179,17 @@ function deviceIdFor(eventIdentifier: string): string {
   }
 }
 
-function putWithProgress(url: string, file: File, mime: string, onProgress: (pct: number) => void): Promise<void> {
+function putWithProgress(url: string, file: File, mime: string, onProgress: (pct: number) => void, headers?: Record<string, string>): Promise<void> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
     xhr.open('PUT', url)
-    if (mime) xhr.setRequestHeader('Content-Type', mime)
+    // The headers the server minted the upload with, exactly: some stores
+    // sign them. Older servers send none, and the type alone is enough.
+    if (headers && Object.keys(headers).length) {
+      for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, v)
+    } else if (mime) {
+      xhr.setRequestHeader('Content-Type', mime)
+    }
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100))
     }
@@ -623,10 +629,10 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode, subPath }: 
   // One mint call covers up to MINT_BATCH files (the per-client mint
   // rate limit is 20/min — minting per-file would lock a 100-photo
   // batch out). PUTs then run with bounded concurrency.
-  const putMinted = useCallback(async (item: QueueItem, minted: { upload_url: string; ticket: string }) => {
+  const putMinted = useCallback(async (item: QueueItem, minted: { upload_url: string; ticket: string; upload_headers?: Record<string, string> }) => {
     const mime = effectiveMime(item.file)
     try {
-      await putWithProgress(minted.upload_url, item.file, mime, (pct) => patchItem(item.key, { progress: pct }))
+      await putWithProgress(minted.upload_url, item.file, mime, (pct) => patchItem(item.key, { progress: pct }), minted.upload_headers)
       // "finishing…" until the complete call confirms the row exists —
       // flushCompletes flips it to done/failed per the server's answer.
       patchItem(item.key, { status: 'processing', progress: 100 })
@@ -690,7 +696,7 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode, subPath }: 
         // Mint results come back in request order.
         const jobs: Array<() => Promise<void>> = []
         batch.forEach((q, i) => {
-          const minted = mintData!.items![i] as { status?: string; message?: string; upload_url?: string; ticket?: string } | undefined
+          const minted = mintData!.items![i] as { status?: string; message?: string; upload_url?: string; ticket?: string; upload_headers?: Record<string, string> } | undefined
           if (!minted || minted.status !== 'ready' || !minted.upload_url || !minted.ticket) {
             patchItem(q.key, { status: 'failed', error: minted?.message ?? 'could not start upload' })
             return
@@ -700,7 +706,7 @@ function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode, subPath }: 
             q.onMediaId?.(mediaId)
             patchItem(q.key, { mediaId })
           }
-          jobs.push(() => putMinted(q, { upload_url: minted.upload_url!, ticket: minted.ticket! }))
+          jobs.push(() => putMinted(q, { upload_url: minted.upload_url!, ticket: minted.ticket!, upload_headers: minted.upload_headers }))
         })
 
         // Bounded-concurrency pool over this batch's PUTs.
