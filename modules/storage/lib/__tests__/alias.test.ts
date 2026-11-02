@@ -128,3 +128,44 @@ describe('private buckets behind the media store', () => {
     expect(prefixedStore(store, 'video-masters').publicUrl('x.jpg')).toBe('https://pub.example/video-masters/x.jpg');
   });
 });
+
+describe('when the storage config cannot be read', () => {
+  function flaky(rows: Row[]) {
+    let fail = false;
+    const c = {
+      storage: { from: () => ({}) },
+      from: () => ({
+        select: () => ({
+          in: async (_col: string, ids: string[]) =>
+            fail ? { data: null, error: { message: 'boom' } } : { data: rows.filter((r) => ids.includes(r.id)), error: null },
+        }),
+      }),
+    } as unknown as StorageClient;
+    return { c, setFail: (v: boolean) => (fail = v) };
+  }
+  const rows = [{ id: 'storage', status: 'enabled', config: { supabase_alias: 'r2' } }, R2_ROW];
+
+  it('keeps using the last row it read', async () => {
+    let t = 0;
+    const { c, setFail } = flaky(rows);
+    const reg = createStorageRegistry({ supabase: c, env: {}, loadProvider, now: () => t });
+    expect((await reg.bucketStore('media')).publicUrl('a')).toBe('https://pub.example/a');
+    setFail(true);
+    t = 10 * 60_000;
+    expect((await reg.bucketStore('media')).publicUrl('a')).toBe('https://pub.example/a');
+  });
+
+  it('refuses on a brand whose files moved, rather than writing to Supabase', async () => {
+    const { c, setFail } = flaky(rows);
+    setFail(true);
+    const reg = createStorageRegistry({ supabase: c, env: { STORAGE_PUBLIC_URL: 'https://pub.example' }, loadProvider });
+    await expect(reg.bucketStore('media')).rejects.toThrow("could not tell where this brand's files are");
+  });
+
+  it('stays on Supabase on a brand that never moved', async () => {
+    const { c, setFail } = flaky(rows);
+    setFail(true);
+    const reg = createStorageRegistry({ supabase: c, env: { SUPABASE_URL: 'https://p.supabase.co' }, loadProvider });
+    expect((await reg.bucketStore('media')).publicUrl('a')).toContain('p.supabase.co');
+  });
+});

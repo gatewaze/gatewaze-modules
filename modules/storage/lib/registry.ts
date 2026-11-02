@@ -189,7 +189,12 @@ export function createStorageRegistry(deps: StorageRegistryDeps): StorageRegistr
     const hit = configCache.get(id);
     if (hit && now() - hit.at < CONFIG_TTL_MS) return hit;
     const { data, error } = await deps.supabase.from('installed_modules').select('id, status, config').in('id', [id]);
-    if (error) throw new StorageUnavailableError(`could not read module config: ${error.message}`);
+    if (error) {
+      // Keep using the last row read rather than guessing: a brand whose
+      // files moved must not start writing to Supabase on one failed read.
+      if (hit) return hit;
+      throw new StorageUnavailableError(`could not read module config: ${error.message}`);
+    }
     const r = (data ?? []).find((x) => x.id === id);
     const row = { at: now(), status: r ? String(r.status ?? '') : 'missing', config: (r?.config ?? {}) as Record<string, unknown> };
     configCache.set(id, row);
@@ -249,6 +254,12 @@ export function createStorageRegistry(deps: StorageRegistryDeps): StorageRegistr
       const v = (await moduleRow('storage')).config['supabase_alias'];
       return typeof v === 'string' && v.trim() && v.trim() !== SUPABASE ? v.trim() : null;
     } catch (err) {
+      // Never read yet. A brand that serves its files from a provider
+      // (STORAGE_PUBLIC_URL set) refuses rather than writing to Supabase,
+      // where it no longer reads from; any other brand stays on Supabase.
+      if (String(env.STORAGE_PUBLIC_URL ?? '').trim()) {
+        throw new StorageUnavailableError(`could not tell where this brand's files are: ${(err as Error).message}`);
+      }
       warnOnce('storage-config', '[storage] could not read the storage module config; using supabase', { error: (err as Error).message });
       return null;
     }

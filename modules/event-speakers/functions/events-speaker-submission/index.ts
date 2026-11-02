@@ -51,7 +51,7 @@ async function storagePut(bucket: string, path: string, body: Blob, opts: { cont
   if (!r2Client) {
     return await supabase.storage.from(bucket).upload(path, body, { contentType: opts.contentType, cacheControl: opts.cacheControl, upsert: false })
   }
-  const res = await r2Client.fetch(r2ObjectUrl(r2Key(bucket, path)), {
+  const res = await r2Client.fetch(r2ObjectUrl(r2Key(bucket, path)), { signal: AbortSignal.timeout(20_000),
     method: 'PUT',
     body: new Uint8Array(await body.arrayBuffer()),
     headers: {
@@ -69,7 +69,7 @@ async function storageRemove(bucket: string, paths: string[]): Promise<void> {
     return
   }
   for (const p of paths) {
-    await r2Client.fetch(r2ObjectUrl(r2Key(bucket, p)), { method: 'DELETE' }).catch(() => undefined)
+    await r2Client.fetch(r2ObjectUrl(r2Key(bucket, p)), { signal: AbortSignal.timeout(20_000), method: 'DELETE' }).catch(() => undefined)
   }
 }
 
@@ -740,8 +740,23 @@ async function downloadAndStoreAvatar(personId: number, imageUrl: string): Promi
       return false
     }
 
-    // Get blob
-    const blob = await response.blob()
+    // Read at most 5 MB, whatever the server claims.
+    const reader = response.body?.getReader()
+    if (!reader) return false
+    const chunks: BlobPart[] = []
+    let total = 0
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.byteLength
+      if (total > 5 * 1024 * 1024) {
+        await reader.cancel().catch(() => undefined)
+        console.error('Avatar too large (>5MB)')
+        return false
+      }
+      chunks.push(value)
+    }
+    const blob = new Blob(chunks, { type: (response.headers.get('content-type') ?? '').split(';')[0].trim() })
 
     // Validate size (5MB max)
     if (blob.size > 5 * 1024 * 1024) {

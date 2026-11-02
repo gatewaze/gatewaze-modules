@@ -294,7 +294,14 @@ export async function mirrorAvatar(
 
 /** One-object existence check, for a caller mirroring a single avatar. */
 async function objectExists(deps: MirrorDeps, path: string, name: string): Promise<boolean> {
-  const moved = await aliasedBucketStore(deps.supabase, AVATAR_BUCKET).catch(() => null);
+  let moved;
+  try {
+    moved = await aliasedBucketStore(deps.supabase, AVATAR_BUCKET);
+  } catch {
+    // The brand's store is unavailable: say "not there" rather than asking
+    // Supabase, which no longer holds this brand's files.
+    return false;
+  }
   if (moved) return (await moved.head(path).catch(() => ({ ok: false }))).ok;
   const res = await deps.supabase.storage
     .from(AVATAR_BUCKET)
