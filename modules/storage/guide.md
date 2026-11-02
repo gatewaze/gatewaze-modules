@@ -50,6 +50,16 @@ For a file that is overwritten under the same name, pass `{ version: row.updated
 
 Callers load this module with a dynamic import and fall back to their own Supabase code when it is missing, because the live module tree only holds installed modules (see host-media's `lib/storage-adapter.ts`). Keep everything here server-only. The AWS SDK must not reach an admin or portal bundle.
 
+### Code that used to call supabase.storage.from(bucket)
+
+`aliasedBucketStore(supabase, bucket)` in `lib/bucket-store.ts` returns the store a Supabase bucket is served from when `supabase_alias` is set, and null when it is not. On null, keep the existing supabase-js code, so a brand still on Supabase behaves exactly as before. One registry is shared per process. `downloadObject(store, path)` reads a whole file through a signed address, which is also how private buckets are read. In tests, `lib/testing.ts` has a recording store and registries with and without the alias.
+
+A `media` path whose first folder is a private bucket (photo-booth-feedback, video-masters, fetch-screenshots, fetch-artifacts) is refused by the aliased media store, because those folders hold the private buckets' files.
+
+### Admin pages
+
+`browser/storage.ts` is the browser half: `publicStorageUrl`, `rewriteStorageUrl`, `uploadToStorage` and `removeFromStorage`. With VITE_STORAGE_PUBLIC_URL set it uploads through the API's signed PUT addresses (`/api/storage/sign-upload`, `/api/storage/delete`); without it, or when the API answers `not_enabled`, it makes the supabase-js calls pages made before. It and `lib/public-url.ts` are the only files here that browser code may import.
+
 ## Configuration
 
 | Setting | Type | Required | Default | Description |

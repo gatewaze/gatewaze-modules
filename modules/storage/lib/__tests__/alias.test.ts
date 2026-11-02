@@ -115,3 +115,16 @@ describe('supabase_alias', () => {
     await expect(reg.bucketStore('../media')).rejects.toThrow('not a bucket name');
   });
 });
+
+describe('private buckets behind the media store', () => {
+  it('refuses a media path that would reach a private bucket folder', async () => {
+    const { store, calls } = recordingStore('r2', 'brand-media');
+    const m = prefixedStore(store, 'media');
+    expect(() => m.publicUrl('photo-booth-feedback/x.jpg')).toThrow('private bucket');
+    await expect(Promise.resolve().then(() => m.signRead('video-masters/v.mp4', 60))).rejects.toThrow('private bucket');
+    expect(await m.remove(['fetch-artifacts/a', 'ok.png'])).toEqual({ failed: ['fetch-artifacts/a'] });
+    expect(calls).toContainEqual(['remove', ['ok.png']]);
+    // The private bucket's own store still reaches its files.
+    expect(prefixedStore(store, 'photo-booth-feedback').publicUrl('x.jpg')).toBe('https://pub.example/photo-booth-feedback/x.jpg');
+  });
+});

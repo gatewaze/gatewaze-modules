@@ -9,12 +9,29 @@
  * same file, and puts the bytes in the provider under the prefix.
  */
 
-import { storageKey } from './public-url.js';
+import { isPrivateStorageKey, PRIVATE_BUCKETS, storageKey } from './public-url.js';
 import type { ObjectStore } from './types.js';
+
+/** Private Supabase buckets; see lib/public-url.ts. Kept as an export for callers of this file. */
+export const PRIVATE_BUCKET_PREFIXES = PRIVATE_BUCKETS;
+
+/**
+ * Their files sit under these folders in the provider bucket, so a `media`
+ * path starting with one of them would reach a private file through the
+ * media store (and its public address). Refused.
+ */
+function assertNotPrivate(path: string): void {
+  if (isPrivateStorageKey('media', path)) {
+    throw new Error(`not a media path: ${path.replace(/^\/+/, '').split('/')[0]}/ is a private bucket`);
+  }
+}
 
 export function prefixedStore(inner: ObjectStore, supabaseBucket: string): ObjectStore {
   const prefix = storageKey(supabaseBucket, '');
-  const k = (path: string) => prefix + path;
+  const k = (path: string) => {
+    if (!prefix) assertNotPrivate(path);
+    return prefix + path;
+  };
   const strip = (key: string) => (prefix && key.startsWith(prefix) ? key.slice(prefix.length) : key);
 
   return {
@@ -30,12 +47,20 @@ export function prefixedStore(inner: ObjectStore, supabaseBucket: string): Objec
     signRead: (path, expires, opts) => inner.signRead(k(path), expires, opts),
     head: (path) => inner.head(k(path)),
     async remove(paths) {
-      const r = await inner.remove(paths.map(k));
-      return { failed: r.failed.map(strip) };
+      const ok: string[] = [];
+      const failed: string[] = [];
+      for (const p of paths) {
+        try { ok.push(k(p)); } catch { failed.push(p); }
+      }
+      const r = ok.length ? await inner.remove(ok) : { failed: [] };
+      return { failed: [...failed, ...r.failed.map(strip)] };
     },
     async list(folder, max) {
       const out = await inner.list(k(folder), max);
-      return out.map((e) => ({ ...e, path: strip(e.path) }));
+      // Listing media from the root must not show the private folders.
+      return out
+        .map((e) => ({ ...e, path: strip(e.path) }))
+        .filter((e) => prefix || !isPrivateStorageKey('media', e.path));
     },
     copy: (from, to, opts) => inner.copy(k(from), k(to), opts),
     readRange: (path, bytes) => inner.readRange(k(path), bytes),
