@@ -7,7 +7,7 @@ const engagementModule: GatewazeModule = {
   visibility: 'public',
   name: 'Engagement',
   description: 'Track member engagement, award badges, surface leaderboards across calendars and events',
-  version: '1.0.0',
+  version: '1.0.1',
 
   features: [
     'engagement',
@@ -31,6 +31,7 @@ const engagementModule: GatewazeModule = {
     'migrations/002_engagement_rollup_views.sql',
     'migrations/003_engagement_default_rules.sql',
     'migrations/004_signal_emission_triggers.sql',
+    'migrations/007_attendance_signal_occurred_at.sql',
   ],
 
   adminRoutes: [
