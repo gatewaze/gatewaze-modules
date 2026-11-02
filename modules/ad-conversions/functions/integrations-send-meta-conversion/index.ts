@@ -1,4 +1,6 @@
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2'
+import { isTrustedCaller, unauthorizedResponse } from '../_shared/auth.ts'
+import { sessionConsentsTo } from '../_shared/consent.ts'
 
 /**
  * Send Meta Conversion
@@ -57,6 +59,8 @@ interface TrackingSession {
   ip_address: string | null
   user_agent: string | null
   landing_page: string | null
+  tracking_consent: boolean | null
+  consented_platforms: string[] | null
 }
 
 interface RegistrationData {
@@ -65,6 +69,7 @@ interface RegistrationData {
   amount_paid: number | null
   currency: string | null
   created_at: string
+  registered_at?: string | null
   email: string
 }
 
@@ -119,11 +124,16 @@ async function sendToMetaCAPI(
     ...(config.test_event_code && { test_event_code: config.test_event_code }),
   }
 
-  const url = `https://graph.facebook.com/v18.0/${config.pixel_id}/events?access_token=${config.access_token}`
+  // Token goes in the Authorization header, never the URL: a network error
+  // message carries the URL and would otherwise land in logs and responses.
+  const url = `https://graph.facebook.com/v18.0/${config.pixel_id}/events`
 
   const response = await fetch(url, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${config.access_token}`,
+    },
     body: JSON.stringify(payload),
   })
 
@@ -140,7 +150,7 @@ async function sendToMetaCAPI(
  * Get registration data with email
  */
 async function getRegistrationData(registrationId: string): Promise<RegistrationData | null> {
-  // First get the registration
+  // events_registrations carries person_id directly; people_profiles is optional.
   const { data: registration, error: regError } = await supabase
     .from('events_registrations')
     .select(
@@ -150,7 +160,8 @@ async function getRegistrationData(registrationId: string): Promise<Registration
       amount_paid,
       currency,
       created_at,
-      member_profile_id
+      registered_at,
+      person_id
     `
     )
     .eq('id', registrationId)
@@ -161,22 +172,10 @@ async function getRegistrationData(registrationId: string): Promise<Registration
     return null
   }
 
-  // Get the email from member_profiles -> people
-  const { data: memberProfile } = await supabase
-    .from('people_profiles')
-    .select('person_id')
-    .eq('id', registration.member_profile_id)
-    .single()
-
-  if (!memberProfile) {
-    console.error('Member profile not found')
-    return null
-  }
-
   const { data: person } = await supabase
     .from('people')
     .select('email')
-    .eq('id', memberProfile.person_id)
+    .eq('id', registration.person_id)
     .single()
 
   if (!person?.email) {
@@ -275,7 +274,7 @@ async function findTrackingSession(
   eventId: string,
   trackingSessionId?: string
 ): Promise<TrackingSession | null> {
-  const selectFields = 'id, click_ids, platform_cookies, ip_address, user_agent, landing_page'
+  const selectFields = 'id, click_ids, platform_cookies, ip_address, user_agent, landing_page, tracking_consent, consented_platforms'
 
   // Tier 1: Direct session ID lookup
   if (trackingSessionId) {
@@ -325,6 +324,7 @@ async function findTrackingSession(
     .eq('event_id', eventId)
     .eq('status', 'pending')
     .is('email_hash', null)
+    .eq('tracking_consent', true)
     .is('external_redirect_at', null)
     .gte('created_at', thirtyMinutesAgo)
     .gte('expires_at', new Date().toISOString())
@@ -430,6 +430,10 @@ Deno.serve(async (req) => {
     })
   }
 
+  if (!isTrustedCaller(req)) {
+    return unauthorizedResponse(corsHeaders)
+  }
+
   try {
     const body: MetaConversionRequest = await req.json()
     const { registrationId, competitionEntryId, discountCodeId, trackingSessionId, eventName = 'Lead', config: providedConfig } = body
@@ -485,7 +489,9 @@ Deno.serve(async (req) => {
     }
 
     // 3. Find tracking session
-    const trackingSession = await findTrackingSession(registration.email, registration.event_id, trackingSessionId)
+    // Session data (click id, cookies, IP, user agent) is only used with consent for Meta.
+    const matchedSession = await findTrackingSession(registration.email, registration.event_id, trackingSessionId)
+    const trackingSession = matchedSession && sessionConsentsTo(matchedSession, 'meta') ? matchedSession : null
 
     // 4. Build user_data for Meta
     const hashedEmail = await hashForMeta(registration.email)
@@ -536,7 +542,9 @@ Deno.serve(async (req) => {
 
     // 6. Generate event ID for deduplication
     const eventId = generateEventId(conversionType, conversionId)
-    const eventTime = Math.floor(new Date(registration.created_at).getTime() / 1000)
+    // The moment the person registered, not the moment the row was written —
+    // a Luma webhook or CSV row can arrive well after the registration.
+    const eventTime = Math.floor(new Date(registration.registered_at || registration.created_at).getTime() / 1000)
 
     // 7. Log the conversion attempt
     const { data: logEntry } = await supabase.rpc('integrations_log_conversion_event', {
@@ -606,8 +614,12 @@ Deno.serve(async (req) => {
       }
     )
   } catch (error: unknown) {
-    const errorMessage = error instanceof Error ? error.message : 'Unknown error'
-    console.error('Error sending Meta conversion:', error)
+    // Belt and braces: never echo a token that found its way into an error string.
+    const errorMessage = (error instanceof Error ? error.message : 'Unknown error').replace(
+      /access_token=[^&\s)]*/gi,
+      'access_token=[REDACTED]'
+    )
+    console.error('Error sending Meta conversion:', errorMessage)
     return new Response(
       JSON.stringify({
         success: false,
