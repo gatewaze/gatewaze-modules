@@ -118,6 +118,18 @@ async function supabaseUpload(bucket: string, path: string, file: Blob, opts: { 
   return { path, publicUrl: supabase.storage.from(bucket).getPublicUrl(path).data.publicUrl };
 }
 
+/** Browsers often give fonts (and some other files) no type; work it out from the name. */
+const TYPES_BY_EXTENSION: Record<string, string> = {
+  ttf: 'font/ttf', otf: 'font/otf', woff: 'font/woff', woff2: 'font/woff2',
+  pdf: 'application/pdf', png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+  gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml', avif: 'image/avif',
+};
+
+function typeFromName(path: string): string {
+  const ext = (path.split('.').pop() ?? '').toLowerCase();
+  return TYPES_BY_EXTENSION[ext] ?? '';
+}
+
 /**
  * Uploads a file. Use the returned path and address: for some folders
  * (speaker-submissions/, talks/) the server chooses the final name.
@@ -129,7 +141,7 @@ export async function uploadToStorage(
   opts: { upsert?: boolean; contentType?: string } = {},
 ): Promise<{ path: string; publicUrl: string }> {
   if (!storageConfig().publicUrl) return supabaseUpload(bucket, path, file, opts);
-  const contentType = opts.contentType || file.type || 'application/octet-stream';
+  const contentType = opts.contentType || file.type || typeFromName(path) || 'application/octet-stream';
   const signed = await storageApi<SignedUpload>('sign-upload', {
     bucket,
     path,
