@@ -352,18 +352,11 @@ export function GuestUploadLinksPanel({ eventId }: GuestUploadLinksPanelProps) {
       if (error) { toast.error('Approve failed'); return; }
       toast.success('Approved');
     } else {
-      const { error } = await supabase.from('host_media').delete().eq('id', media.id);
-      if (error) { toast.error('Reject failed'); return; }
-      // Best-effort storage cleanup (original + variants); anything a
-      // policy blocks is picked up by the orphan sweep script.
-      const dir = media.storage_path.replace(/\/[^/]+$/, '');
-      try {
-        await supabase.storage.from('media').remove([
-          media.storage_path,
-          `${dir}/variants/thumb.jpg`,
-          `${dir}/variants/medium.jpg`,
-        ]);
-      } catch { /* sweep script catches leftovers */ }
+      // host-media's delete removes the row and every file it owns --
+      // the original and each stored variant -- from whichever store
+      // they are in, and gives the bytes back to the quota.
+      const res = await authedFetch(`/api/admin/event/${eventId}/media/${media.id}`, { method: 'DELETE' });
+      if (!res.ok) { toast.error('Reject failed'); return; }
       toast.success('Rejected');
     }
     await loadPending();

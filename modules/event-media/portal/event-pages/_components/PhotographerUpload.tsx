@@ -48,6 +48,8 @@ interface Props {
 interface Minted {
   media_id: string
   upload_url: string
+  /** Send these with the PUT, exactly: some stores sign them. */
+  upload_headers?: Record<string, string>
   ticket: string
   filename: string
   status?: string
@@ -148,7 +150,9 @@ export default function PhotographerUpload({ code, credit, allowVideo, eventName
             try {
               const put = await fetch(item.upload_url, {
                 method: 'PUT',
-                headers: { 'Content-Type': file.type || 'image/jpeg' },
+                headers: item.upload_headers && Object.keys(item.upload_headers).length
+                  ? item.upload_headers
+                  : { 'Content-Type': file.type || 'image/jpeg' },
                 body: file,
               })
               if (!put.ok) throw new Error(`upload ${put.status}`)

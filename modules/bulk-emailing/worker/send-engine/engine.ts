@@ -22,7 +22,11 @@ import type { MessageAttachment } from './channels/types.js';
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SB = any; // @supabase/supabase-js client (service role), injected by the worker
 
-export interface Recipient { id: string; send_id: string; person_id: string | null; email: string | null; phone?: string | null; timezone: string | null; }
+export interface Recipient {
+  id: string; send_id: string; person_id: string | null; email: string | null; phone?: string | null; timezone: string | null;
+  slack_user_id?: string | null;   // Slack sends (broadcast_send_recipients.slack_user_id)
+  attempts?: number;               // incremented by every claim
+}
 export interface SendContext {
   sendId: string; brand: string; channel: string;
   subject: string; html: string;
@@ -38,6 +42,9 @@ export interface SendContext {
   // for these sends — correctness over batching. Leave unset and the batched
   // path is unchanged.
   perRecipientAttachments?: boolean;
+  // Per-send credentials for channels that don't read env (Slack). Passed to
+  // the provider as msg.auth; never logged or stored.
+  channelAuth?: { token: string };
 }
 export interface SendEngineBinding {
   domain: 'newsletter' | 'broadcast' | 'bulk' | 'event' | 'play';
@@ -60,6 +67,10 @@ export interface SendEngineBinding {
   // message with no attachment rather than failing the recipient — the binding
   // decides whether an absent file is fatal.
   buildAttachments?: (deps: EngineDeps, ctx: SendContext, r: Recipient) => Promise<MessageAttachment[] | null>;
+  // Called after the engine pauses a send because its provider said every
+  // later message would fail (BatchedResult.haltSend), so the binding can
+  // record the reason where admins will see it.
+  onSendHalted?: (deps: EngineDeps, sendId: string, reason: string) => Promise<void>;
 }
 export interface EngineDeps {
   supabase: SB;
@@ -71,6 +82,12 @@ export interface EngineDeps {
     dailyCap: number;            // per-brand daily cap; default very large
     rampPercent: number;         // IP-warmup throttle 0..100; default 100
     replica: string;
+    // Paced channels (Slack): wait this long between provider calls, and stop
+    // the tick, putting claimed rows back, rather than overrun budgetMs.
+    minIntervalMs?: number;
+    // Retryable failures stop being retried after this many claims; the
+    // recipient is marked failed. Unset = retried until the send ends.
+    maxAttempts?: number;
   };
 }
 
@@ -78,6 +95,7 @@ const BOUNCE_RATE_TRIP = 0.08;   // fast gate: >8% bounced in last 60s -> pause
 const SPAM_RATE_TRIP = 0.005;    // >0.5% spam in last 60s -> pause
 
 function chunk<T>(a: T[], n: number): T[][] { const o: T[][] = []; for (let i = 0; i < a.length; i += n) o.push(a.slice(i, i + n)); return o; }
+const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
 // Retain the exact per-recipient HTML only for these send types (newsletters +
 // broadcasts) — the audit-worthy, personalized ones. Bulk/event/transactional
@@ -114,8 +132,13 @@ export async function runDripTick(deps: EngineDeps, binding: SendEngineBinding):
 
   const ctxCache = new Map<string, SendContext | null>();
   const touched = new Set<string>();
+  // Paced channels: when the last provider call went out, and whether the
+  // tick has stopped (budget spent or the provider asked to back off).
+  const pace = config.minIntervalMs ?? 0;
+  let lastPostAt = 0;
+  let stopTick = false;
 
-  while (Date.now() - start < config.budgetMs) {
+  while (!stopTick && Date.now() - start < config.budgetMs) {
     const { data: claimed, error } = await supabase.rpc(binding.claimRpc, { p_limit: config.claimBatch });
     if (error) { logger.error('[send-engine] claim failed', error); break; }
     const claimedRows: Recipient[] = claimed ?? [];
@@ -126,7 +149,7 @@ export async function runDripTick(deps: EngineDeps, binding: SendEngineBinding):
     const gate = await splitSuppressed(deps, claimedRows);
     if (gate.error) {
       logger.error('[send-engine] suppression check failed; holding the batch', gate.error);
-      await releaseRows(deps, binding, claimedRows.map((r) => r.id));
+      await releaseUntried(deps, binding, claimedRows);
       break;
     }
     if (gate.suppressed.length) {
@@ -140,22 +163,47 @@ export async function runDripTick(deps: EngineDeps, binding: SendEngineBinding):
 
     for (const [sendId, recips] of bySend) {
       touched.add(sendId);
+      if (stopTick) { await releaseUntried(deps, binding, recips); continue; }
       const { data: send } = await supabase.from(binding.sendsTable).select('*').eq('id', sendId).single();
-      if (!send) { await releaseRows(deps, binding, recips.map((r) => r.id)); continue; }
+      if (!send) { await releaseUntried(deps, binding, recips); continue; }
       if (send.status === 'cancelling' || send.status === 'cancelled') { await markRows(deps, binding, recips.map((r) => r.id), 'skipped'); continue; }
-      if (send.status === 'paused') { await releaseRows(deps, binding, recips.map((r) => r.id)); continue; }
+      if (send.status === 'paused') { await releaseUntried(deps, binding, recips); continue; }
 
       let ctx = ctxCache.get(sendId);
       if (ctx === undefined) { ctx = await binding.buildSendContext(deps, sendId); ctxCache.set(sendId, ctx); }
-      if (!ctx) { await releaseRows(deps, binding, recips.map((r) => r.id)); continue; }   // no content yet — retry next tick
+      if (!ctx) { await releaseUntried(deps, binding, recips); continue; }   // no content yet — retry next tick
 
       // Attachments ride on the message, so a send with per-recipient files
-      // cannot share a batch — one personalization per call.
-      const effectiveBatchSize = ctx.perRecipientAttachments ? 1 : config.batchSize;
-      for (const batch of chunk(recips, effectiveBatchSize)) {
+      // cannot share a batch — one personalization per call. A provider may
+      // cap the batch too (Slack: one message per call).
+      const provider = resolveChannelProvider(ctx.channel);
+      const effectiveBatchSize = ctx.perRecipientAttachments ? 1 : Math.min(config.batchSize, provider.maxPerCall ?? config.batchSize);
+      const batches = chunk(recips, effectiveBatchSize);
+      for (let i = 0; i < batches.length; i++) {
+        const batch = batches[i];
+        if (pace > 0) {
+          const wait = lastPostAt + pace - Date.now();
+          // Stop rather than overrun the budget: the rest go back to pending
+          // for the next tick, so a paced send never holds rows in 'sending'
+          // long enough for the stuck-row sweeper to hand them out twice.
+          if (Date.now() + Math.max(wait, 0) - start >= config.budgetMs) {
+            stopTick = true;
+            await releaseUntried(deps, binding, batches.slice(i).flat());
+            break;
+          }
+          if (wait > 0) await sleep(wait);
+          // A paced group takes many seconds, so an admin's Pause or Stop must
+          // land between messages, not after the whole group has gone out.
+          const { data: now } = await supabase.from(binding.sendsTable).select('status').eq('id', sendId).single();
+          if (now?.status !== 'sending') {
+            await releaseUntried(deps, binding, batches.slice(i).flat());
+            break;
+          }
+        }
         // Fast bounce/spam gate (last 60s for this send).
-        if (await shouldAbortForReputation(deps, binding, sendId)) {
-          await releaseRows(deps, binding, batch.map((r) => r.id));
+        if (provider.writesSendLog !== false && await shouldAbortForReputation(deps, binding, sendId)) {
+          // This batch and any later ones claimed for the send go back.
+          await releaseUntried(deps, binding, batches.slice(i).flat());
           await supabase.from(binding.sendsTable).update({ status: 'paused', updated_at: new Date().toISOString() }).eq('id', sendId);
           logger.warn('[send-engine] reputation gate tripped; paused', { sendId });
           break;
@@ -164,12 +212,20 @@ export async function runDripTick(deps: EngineDeps, binding: SendEngineBinding):
         const want = Math.floor(batch.length * (config.rampPercent / 100)) || batch.length;
         const { data: granted } = await supabase.rpc('claim_drip_quota', { p_brand: send.brand ?? 'default', p_channel: send.channel ?? 'email', p_request: want, p_daily_cap: config.dailyCap });
         const grant = typeof granted === 'number' ? granted : want;
-        if (grant <= 0) { await releaseRows(deps, binding, batch.map((r) => r.id)); break; }
+        if (grant <= 0) { await releaseUntried(deps, binding, batches.slice(i).flat()); break; }
         const slice = batch.slice(0, grant);
-        if (slice.length < batch.length) await releaseRows(deps, binding, batch.slice(grant).map((r) => r.id));
+        if (slice.length < batch.length) await releaseUntried(deps, binding, batch.slice(grant));
 
+        lastPostAt = Date.now();
         const out = await postBatch(deps, binding, ctx, send, slice);
         sentTotal += out.sent; failedTotal += out.failed;
+        if (out.halted || out.backOff) {
+          // Halted: the send is paused, so its other claimed rows go back.
+          // Back-off: the provider is rate limiting us; try again next tick.
+          await releaseUntried(deps, binding, batches.slice(i + 1).flat());
+          if (out.backOff) stopTick = true;
+          break;
+        }
       }
     }
   }
@@ -189,7 +245,7 @@ export async function runDripTick(deps: EngineDeps, binding: SendEngineBinding):
   return { claimed: claimedTotal, sent: sentTotal, failed: failedTotal };
 }
 
-async function postBatch(deps: EngineDeps, binding: SendEngineBinding, ctx: SendContext, send: any, recips: Recipient[]): Promise<{ sent: number; failed: number }> {
+async function postBatch(deps: EngineDeps, binding: SendEngineBinding, ctx: SendContext, send: any, recips: Recipient[]): Promise<{ sent: number; failed: number; halted?: boolean; backOff?: boolean }> {
   const { supabase, logger, config } = deps;
   // The channel (email | sms | whatsapp) is the send's channel; the provider
   // owns address resolution + the batched dispatch. Email is byte-identical to
@@ -206,9 +262,9 @@ async function postBatch(deps: EngineDeps, binding: SendEngineBinding, ctx: Send
   }).select('id').single();
   const batchId = batchRow?.id as string | undefined;
 
-  // Non-email channels need the recipient's phone; the recipients queue carries
-  // email, so enrich from people.phone for sms/whatsapp (email path untouched).
-  if (provider.channel !== 'email') await enrichPhones(deps, recips);
+  // SMS/WhatsApp need the recipient's phone; the recipients queue carries
+  // email, so enrich from people.phone (Slack rows carry slack_user_id).
+  if (provider.channel === 'sms' || provider.channel === 'whatsapp') await enrichPhones(deps, recips);
 
   // Build personalizations, addressed via the channel provider.
   if (binding.prepareBatch) await binding.prepareBatch(deps, ctx, recips);
@@ -248,14 +304,19 @@ async function postBatch(deps: EngineDeps, binding: SendEngineBinding, ctx: Send
   const result = await provider.sendBatch({
     from: ctx.fromEmail, fromName: ctx.fromName, replyTo: ctx.replyTo ?? undefined,
     subject: ctx.subject, html: ctx.html, bodyText: ctx.bodyText, disableSubscriptionTracking: ctx.disableSubscriptionTracking,
-    personalizations, attachments,
+    personalizations, attachments, auth: ctx.channelAuth,
   });
+  const writesLog = provider.writesSendLog !== false;
 
   if (result.success) {
     // Sequential accept (idempotent): mark recipients sent + batch_id, insert
     // email_send_log rows, finalise batch row. Recovery covers a crash here.
     const ids = recips.map((r) => r.id);
-    await updateRowsByIds(deps, binding.recipientsTable, ids, { status: 'sent', batch_id: batchId, updated_at: new Date().toISOString() });
+    await updateRowsByIds(deps, binding.recipientsTable, ids, { status: 'sent', batch_id: batchId, updated_at: new Date().toISOString(), ...(writesLog ? {} : { last_error: null }) });
+    if (!writesLog) {
+      await supabase.from(binding.batchesTable).update({ status: 'accepted', provider_batch_id: result.batchMessageId ?? null, http_status: 200, completed_at: new Date().toISOString() }).eq('id', batchId);
+      return { sent: recips.length, failed: 0 };
+    }
     // recipient_customer_id is the recipient row's people UUID (already claimed
     // onto the row — no extra query). The column is uuid on prod (migration 007).
     const logRows = addressed.map((r) => ({
@@ -277,10 +338,39 @@ async function postBatch(deps: EngineDeps, binding: SendEngineBinding, ctx: Send
 
   // Failure: retryable -> release to pending; terminal -> mark failed.
   logger.warn('[send-engine] batch failed', { sendId: ctx.sendId, error: result.error, retryable: result.retryable });
-  if (result.retryable) await releaseRows(deps, binding, recips.map((r) => r.id));
-  else await markRows(deps, binding, recips.map((r) => r.id), 'failed');
-  await supabase.from(binding.batchesTable).update({ status: result.retryable ? 'failed' : 'rejected', http_status: result.statusCode ?? null, error_summary: (result.error ?? '').slice(0, 500), completed_at: new Date().toISOString() }).eq('id', batchId);
-  return { sent: 0, failed: result.retryable ? 0 : recips.length };
+  const now = new Date().toISOString();
+  const batchFailed = { http_status: result.statusCode ?? null, error_summary: (result.error ?? '').slice(0, 500), completed_at: now };
+  // Without a send log, the recipient row is the only place the reason shows.
+  const errorPatch = writesLog ? {} : { last_error: (result.error ?? 'failed').slice(0, 500) };
+  const ids = recips.map((r) => r.id);
+
+  if (result.haltSend) {
+    // Nothing later in this send can succeed (e.g. the token was revoked).
+    // Put the batch back and pause rather than fail every recipient in turn.
+    await updateRowsByIds(deps, binding.recipientsTable, ids, { status: 'pending', updated_at: now, ...errorPatch }, 'sending');
+    await supabase.from(binding.sendsTable).update({ status: 'paused', updated_at: now }).eq('id', ctx.sendId).eq('status', 'sending');
+    logger.warn('[send-engine] provider halted the send; paused', { sendId: ctx.sendId, reason: result.haltSend });
+    if (binding.onSendHalted) {
+      await binding.onSendHalted(deps, ctx.sendId, result.haltSend).catch((e: unknown) => logger.warn('[send-engine] onSendHalted failed', e));
+    }
+    await supabase.from(binding.batchesTable).update({ status: 'failed', ...batchFailed }).eq('id', batchId);
+    return { sent: 0, failed: 0, halted: true };
+  }
+
+  let failed = 0;
+  if (result.retryable) {
+    const max = config.maxAttempts;
+    const exhausted = max ? recips.filter((r) => (r.attempts ?? 0) >= max) : [];
+    const retry = recips.filter((r) => !exhausted.includes(r));
+    if (retry.length) await updateRowsByIds(deps, binding.recipientsTable, retry.map((r) => r.id), { status: 'pending', updated_at: now, ...errorPatch }, 'sending');
+    if (exhausted.length) await updateRowsByIds(deps, binding.recipientsTable, exhausted.map((r) => r.id), { status: 'failed', updated_at: now, ...errorPatch }, 'sending');
+    failed = exhausted.length;
+  } else {
+    await updateRowsByIds(deps, binding.recipientsTable, ids, { status: 'failed', updated_at: now, ...errorPatch }, 'sending');
+    failed = recips.length;
+  }
+  await supabase.from(binding.batchesTable).update({ status: result.retryable ? 'failed' : 'rejected', ...batchFailed }).eq('id', batchId);
+  return { sent: 0, failed, backOff: !!result.retryAfterMs };
 }
 
 // Non-email channels address by phone; the recipients queue only carries email,
@@ -346,10 +436,12 @@ async function shouldAbortForReputation(deps: EngineDeps, binding: SendEngineBin
 // emails had already gone out). Chunk every id-filtered write to a safe size and
 // surface errors instead of swallowing them.
 const ID_CHUNK = 100;
-async function updateRowsByIds(deps: EngineDeps, table: string, ids: string[], patch: Record<string, unknown>): Promise<void> {
+async function updateRowsByIds(deps: EngineDeps, table: string, ids: string[], patch: Record<string, unknown>, onlyIfStatus?: string): Promise<void> {
   for (let i = 0; i < ids.length; i += ID_CHUNK) {
     const chunk = ids.slice(i, i + ID_CHUNK);
-    const { error } = await deps.supabase.from(table).update(patch).in('id', chunk);
+    let q = deps.supabase.from(table).update(patch).in('id', chunk);
+    if (onlyIfStatus) q = q.eq('status', onlyIfStatus);
+    const { error } = await q;
     if (error) deps.logger.error('[send-engine] row update failed', { table, count: chunk.length, error: (error as { message?: string }).message ?? error });
   }
 }
@@ -404,8 +496,26 @@ export async function splitSuppressed(deps: EngineDeps, rows: Recipient[]): Prom
   return { allowed, suppressed };
 }
 
+// Put claimed rows back without having tried them. The claim added one to
+// attempts; where attempts cap retries (maxAttempts), take it off again so a
+// row only spends attempts on real tries, not on ticks that ran out of time or
+// were told to back off. Without a cap this is releaseRows, unchanged.
+async function releaseUntried(deps: EngineDeps, binding: SendEngineBinding, rows: Recipient[]): Promise<void> {
+  if (!deps.config.maxAttempts) { await releaseRows(deps, binding, rows.map((r) => r.id)); return; }
+  const byAttempts = new Map<number, string[]>();
+  for (const r of rows) {
+    const a = Math.max(0, (r.attempts ?? 1) - 1);
+    (byAttempts.get(a) ?? byAttempts.set(a, []).get(a)!).push(r.id);
+  }
+  for (const [attempts, ids] of byAttempts) {
+    await updateRowsByIds(deps, binding.recipientsTable, ids, { status: 'pending', attempts, updated_at: new Date().toISOString() }, 'sending');
+  }
+}
+
+// Only rows still 'sending' (ours from the claim) go back: a cancel sweep that
+// marked them 'skipped' meanwhile must stand.
 async function releaseRows(deps: EngineDeps, binding: SendEngineBinding, ids: string[]): Promise<void> {
-  await updateRowsByIds(deps, binding.recipientsTable, ids, { status: 'pending', updated_at: new Date().toISOString() });
+  await updateRowsByIds(deps, binding.recipientsTable, ids, { status: 'pending', updated_at: new Date().toISOString() }, 'sending');
 }
 async function markRows(deps: EngineDeps, binding: SendEngineBinding, ids: string[], status: string): Promise<void> {
   await updateRowsByIds(deps, binding.recipientsTable, ids, { status, updated_at: new Date().toISOString() });
@@ -439,11 +549,16 @@ async function finalizeSend(deps: EngineDeps, binding: SendEngineBinding, sendId
   const terminal = sent + failed + skipped;
   const isCancelling = send?.status === 'cancelling';
   const allAccountedFor = planned <= 0 || terminal >= planned;
-  if (remaining === 0 && (allAccountedFor || isCancelling)) {
+  // A send already 'cancelled' keeps that status: an in-flight tick that
+  // finishes after the cancel must not relabel it 'sent'.
+  if (remaining === 0 && (allAccountedFor || isCancelling) && send?.status !== 'cancelled') {
     patch.status = isCancelling ? 'cancelled' : (sent === 0 && failed > 0 ? 'failed' : 'sent');
     patch.completed_at = new Date().toISOString();
   }
-  const { error: updErr } = await supabase.from(binding.sendsTable).update(patch).eq('id', sendId);
+  // Compare-and-swap on the status we read, so a concurrent change wins.
+  let upd = supabase.from(binding.sendsTable).update(patch).eq('id', sendId);
+  if (patch.status && send?.status) upd = upd.eq('status', send.status);
+  const { error: updErr } = await upd;
   if (updErr) throw new Error(`update send failed: ${updErr.message}`);
 }
 

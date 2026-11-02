@@ -10,7 +10,21 @@
  * Supabase's render endpoint — so every slide is quietly billed as a
  * Supabase transformation, which is the cost the CDN exists to remove.
  */
-export function sizedDisplayUrl(url: string, width: number, height: number, quality = 82): string {
+export function sizedDisplayUrl(url: string, width: number, height: number, quality = 82, resizer?: string | null): string {
+  const w = Math.max(16, Math.min(4096, Math.round(width)))
+  const h = Math.max(16, Math.min(4096, Math.round(height)))
+  const q = Math.max(1, Math.min(100, Math.round(quality)))
+  // A file kept outside Supabase whose domain Cloudflare resizes (the API
+  // says so per photo): Cloudflare's own path, on the same domain.
+  if (resizer === 'cloudflare') {
+    try {
+      const u = new URL(url)
+      if (u.protocol !== 'https:' || u.pathname.startsWith('/cdn-cgi/')) return url
+      return `${u.origin}/cdn-cgi/image/width=${w},height=${h},fit=scale-down,quality=${q},format=auto${u.pathname}${u.search}`
+    } catch {
+      return url
+    }
+  }
   if (!url.includes('/object/public/')) return url
   let host = ''
   try {
@@ -18,9 +32,6 @@ export function sizedDisplayUrl(url: string, width: number, height: number, qual
   } catch {
     return url
   }
-  const w = Math.max(16, Math.min(4096, Math.round(width)))
-  const h = Math.max(16, Math.min(4096, Math.round(height)))
-  const q = Math.max(1, Math.min(100, Math.round(quality)))
   if (/\.supabase\.(co|in)$/i.test(host)) {
     return `${url.replace('/object/public/', '/render/image/public/')}` +
       `?width=${w}&height=${h}&resize=contain&quality=${q}`

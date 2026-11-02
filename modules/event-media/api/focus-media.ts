@@ -17,6 +17,7 @@
  * arithmetic, and happens in the organiser's browser.
  */
 import type { Request, Response, Router } from 'express';
+import type { MediaStorage } from '../lib/media-storage.js';
 
 interface PlatformLogger {
   info: (msg: string, meta?: Record<string, unknown>) => void;
@@ -28,8 +29,8 @@ export interface FocusMediaDeps {
   canAdminEvent: (req: Request, eventId: string) => Promise<boolean | null>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   serviceClient: any;
-  storageBucket: string;
-  publicUrl: (path: string) => string;
+  /** Where each row's files are (lib/media-storage.ts). */
+  media: MediaStorage;
   /** Monocular depth, near is bright (lib/booth-provider.ts). */
   runDepth: (imageUrl: string) => Promise<
     { ok: true; image: Uint8Array; contentType: string } | { ok: false; error: string }>;
@@ -48,7 +49,7 @@ function sendError(res: Response, status: number, code: string, message: string)
 }
 
 export function createFocusMedia(deps: FocusMediaDeps) {
-  const { canAdminEvent, serviceClient: db, storageBucket, publicUrl, runDepth, runCutout, logger } = deps;
+  const { canAdminEvent, serviceClient: db, media, runDepth, runCutout, logger } = deps;
 
   /**
    * One photograph: make sure a depth map and a cutout exist beside it,
@@ -64,7 +65,7 @@ export function createFocusMedia(deps: FocusMediaDeps) {
   }> {
     const { data: row, error } = await db
       .from('host_media')
-      .select('id, host_kind, host_id, storage_path, mime_type, variants, metadata')
+      .select('id, host_kind, host_id, storage_path, storage_provider, storage_bucket, mime_type, variants, metadata')
       .eq('id', mediaId)
       .maybeSingle();
     if (error || !row || row.host_kind !== 'event' || row.host_id !== eventId) {
@@ -80,6 +81,15 @@ export function createFocusMedia(deps: FocusMediaDeps) {
       return { id: mediaId, status: 'skipped', reason: 'unsupported_layout' };
     }
 
+    // Direct addresses: the models fetch these, and the browser draws them.
+    let store;
+    try {
+      store = (await media.forRow(row)).direct;
+    } catch {
+      return { id: mediaId, status: 'skipped', reason: 'storage_unavailable' };
+    }
+    const publicUrl = (p: string) => store.publicUrl(p);
+
     const had = (row.variants ?? {}) as Record<string, unknown>;
     // Depth and cutout belong to the photograph, not to a run. If they
     // are already there, this costs nothing.
@@ -93,11 +103,10 @@ export function createFocusMedia(deps: FocusMediaDeps) {
     const url = publicUrl(path);
     const put = async (bytes: Uint8Array, name: string): Promise<string | null> => {
       const at = `${folder}/variants/${name}`;
-      const up = await db.storage.from(storageBucket).upload(at, bytes, {
-        contentType: 'image/png', upsert: true,
-      });
-      if (up.error) {
-        logger.warn('focus: could not store a measurement', { mediaId, name, error: up.error.message });
+      try {
+        await store.put(at, bytes, { contentType: 'image/png', upsert: true });
+      } catch (err) {
+        logger.warn('focus: could not store a measurement', { mediaId, name, error: err instanceof Error ? err.message : String(err) });
         return null;
       }
       return at;

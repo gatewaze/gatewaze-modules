@@ -76,6 +76,8 @@ interface DisplayItem {
   id: string
   kind: string
   url: string
+  /** 'cloudflare' when the file's domain resizes with /cdn-cgi/image/ (display-url.ts). */
+  resizer?: string | null
   variants: Record<string, string>
   guest_name: string | null
   /** Browse-card copy, generated per photo. Absent until it lands. */
@@ -992,7 +994,7 @@ export default function DisplayView({ code: rawCode }: DisplayViewProps) {
     // Prefer the upscaled copy where one exists. Upscaling only helps if
     // the projector actually fetches it; reading item.url here would
     // keep showing the small original the upscale was paid to replace.
-    return sizedDisplayUrl(item.variants?.hires || item.url, w, h)
+    return sizedDisplayUrl(item.variants?.hires || item.url, w, h, 82, item.resizer)
   }, [])
 
   // Fetch the NEXT slide's image during the current one, so the

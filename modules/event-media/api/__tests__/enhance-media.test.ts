@@ -2,6 +2,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { createEnhanceMedia } from '../enhance-media.js';
+import { fakeMedia } from './fake-media.js';
 
 const EVENT = '99999999-8888-4777-8666-555555555555';
 const MEDIA = '11111111-2222-4333-8444-555555555555';
@@ -27,17 +28,13 @@ function setup(over = {}) {
       select: () => ({ eq: () => ({ maybeSingle: () => Promise.resolve({ data: over.row === undefined ? PHOTO : over.row, error: null }) }) }),
       update: (fields) => { state.updated.push(fields); return { eq: () => Promise.resolve({ error: null }) }; },
     }),
-    storage: { from: () => ({
-      list: (_dir, opts) => Promise.resolve({ data: over.missing ? [] : [{ name: opts.search }], error: null }),
-      upload: () => Promise.resolve({ error: null }),
-      remove: () => Promise.resolve({ error: null }),
-    }) },
   };
+  const fm = fakeMedia({ missing: over.missing });
+  state.media = fm.state;
   const routes = createEnhanceMedia({
     canAdminEvent: async () => ('allowed' in over ? over.allowed : true),
     serviceClient: db,
-    storageBucket: 'media',
-    publicUrl: (p) => `https://cdn.example/${p}`,
+    media: fm.media,
     runVerdict: async (url) => {
       state.asked.push(url);
       return over.verdict === undefined ? { ok: true, verdict: FINE } : over.verdict;

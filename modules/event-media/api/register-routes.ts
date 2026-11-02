@@ -143,17 +143,36 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
   // Browser-facing image host, also resolved once. A malformed value
   // fails closed to Supabase rather than pointing every photo at a host
   // that does not exist.
-  const { cdnConfigFromEnv, browserSizedUrl } = await import('../lib/cdn.js');
+  const { cdnConfigFromEnv } = await import('../lib/cdn.js');
   const cdn = cdnConfigFromEnv(process.env);
   if (process.env.BUNNY_CDN_ENABLED === 'true' && !cdn.zone) {
     logger.warn('BUNNY_CDN_ENABLED is set but BUNNY_PULLZONE_URL is not a bare https origin — serving from Supabase');
   }
+
+  // Where each photo's files are, and where new ones go: the storage
+  // module when it can be loaded (modules/storage), else the built-in
+  // Supabase stores, which build the addresses this module always has.
+  const { createMediaStorage, builtInSupabaseStores } = await import('../lib/media-storage.js');
+  let registry = null;
+  try {
+    const { loadStorageRegistry } = await import('../../host-media/lib/storage-adapter.js');
+    registry = await loadStorageRegistry({ supabase: serviceSupabase, logger });
+  } catch (err) {
+    logger.warn('storage module not loaded; using the built-in Supabase stores', { error: err instanceof Error ? err.message : String(err) });
+  }
+  const media = createMediaStorage({
+    registry,
+    fallback: builtInSupabaseStores({ supabase: serviceSupabase, bucket: STORAGE_BUCKET, publicSupabaseUrl, internalSupabaseUrl: supabaseUrl, cdn }),
+    bucket: STORAGE_BUCKET,
+    logger,
+  });
 
   // Public guest endpoints — /api/public/event-media/*.
   const publicRouter = Router();
   const guestRoutes = createGuestRoutes({
     supabase: serviceSupabase,
     storageBucket: STORAGE_BUCKET,
+    media,
     publicSupabaseUrl,
     internalSupabaseUrl: supabaseUrl,
     rateLimit: rateLimiter.check.bind(rateLimiter),
@@ -230,7 +249,7 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
   mountRotateMedia(adminRouter, createRotateMedia({
     canAdminEvent,
     serviceClient: serviceSupabase,
-    storageBucket: STORAGE_BUCKET,
+    media,
     logger,
   }));
 
@@ -240,8 +259,7 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
   mountEnhanceMedia(adminRouter, createEnhanceMedia({
     canAdminEvent,
     serviceClient: serviceSupabase,
-    storageBucket: STORAGE_BUCKET,
-    publicUrl: (path) => `${publicSupabaseUrl}/storage/v1/object/public/${STORAGE_BUCKET}/${path}`,
+    media,
     runVerdict: runEnhanceVerdict,
     logger,
   }));
@@ -252,8 +270,7 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
   mountAiEnhanceMedia(adminRouter, createAiEnhanceMedia({
     canAdminEvent,
     serviceClient: serviceSupabase,
-    storageBucket: STORAGE_BUCKET,
-    publicUrl: (path) => `${publicSupabaseUrl}/storage/v1/object/public/${STORAGE_BUCKET}/${path}`,
+    media,
     logger,
   }));
 
@@ -263,8 +280,7 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
   mountFocusMedia(adminRouter, createFocusMedia({
     canAdminEvent,
     serviceClient: serviceSupabase,
-    storageBucket: STORAGE_BUCKET,
-    publicUrl: (path) => `${publicSupabaseUrl}/storage/v1/object/public/${STORAGE_BUCKET}/${path}`,
+    media,
     runDepth,
     runCutout,
     logger,
@@ -276,7 +292,16 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
   mountFaceDetect(adminRouter, createFaceDetect({
     canAdminEvent,
     serviceClient: serviceSupabase,
-    sizedUrl: (path, width) => browserSizedUrl(cdn, publicSupabaseUrl, STORAGE_BUCKET, path, width),
+    media,
+    logger,
+  }));
+
+  // Somewhere for the browser to put a file it has made for a photo.
+  const { createMediaUploadUrl, mountMediaUploadUrl } = await import('./media-upload-url.js');
+  mountMediaUploadUrl(adminRouter, createMediaUploadUrl({
+    canAdminEvent,
+    serviceClient: serviceSupabase,
+    media,
     logger,
   }));
 

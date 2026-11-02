@@ -55,10 +55,21 @@ export interface MediaUploadInput {
   buffer: Buffer;
 }
 
+/**
+ * Where a row's files are kept (host_media.storage_provider and
+ * storage_bucket, migration 016). Rows from before that migration read as
+ * Supabase's `media` bucket.
+ */
+export interface StorageLocation {
+  storage_provider?: string | null;
+  storage_bucket?: string | null;
+}
+
 export interface MediaAdapter {
   /**
    * Upload buffer to storage. mediaId is server-generated and fed in so
-   * the path is collision-free.
+   * the path is collision-free. Returns where the file went, which the
+   * caller records on the row.
    */
   upload(args: {
     hostKind: string;
@@ -67,17 +78,17 @@ export interface MediaAdapter {
     filename: string;
     mimeType: string;
     buffer: Buffer;
-  }): Promise<{ storagePath: string; cdnUrl: string }>;
-  delete(storagePath: string): Promise<void>;
+  }): Promise<{ storagePath: string; cdnUrl: string; storageProvider?: string; storageBucket?: string }>;
+  delete(storagePath: string, loc?: StorageLocation): Promise<void>;
   /** Build the public CDN URL for a stored object. */
-  getPublicUrl(storagePath: string): string;
+  getPublicUrl(storagePath: string, loc?: StorageLocation): string | Promise<string>;
   /** Issue a 1 h signed URL for a stored object (for access_level='signed'). */
-  createSignedUrl(storagePath: string, ttlSeconds: number): Promise<string>;
+  createSignedUrl(storagePath: string, ttlSeconds: number, loc?: StorageLocation, opts?: { forServer?: boolean }): Promise<string>;
   /**
-   * Optional on-the-fly resized image URL (Supabase image transformation).
+   * Optional resized image URL, from the provider's resizer.
    * Used for grid/viewer previews of images that have no stored variant.
    */
-  getRenderUrl?(storagePath: string, width: number): string;
+  getRenderUrl?(storagePath: string, width: number, loc?: StorageLocation): string | Promise<string>;
 }
 
 export interface RoutesDeps {
@@ -95,7 +106,7 @@ function sendError(res: Response, status: number, code: string, message: string,
   res.status(status).json(body);
 }
 
-const LIST_COLUMNS = 'id, host_kind, host_id, storage_path, filename, mime_type, bytes, width, height, duration, variants, in_repo, used_in, uploaded_by, access_level, youtube_video_id, youtube_url, youtube_embed_url, youtube_thumbnail_url, youtube_upload_status, album_id, metadata, caption, alt_text, sponsor_id, is_featured, is_approved, display_order, created_at, updated_at';
+const LIST_COLUMNS = 'id, host_kind, host_id, storage_path, storage_provider, storage_bucket, filename, mime_type, bytes, width, height, duration, variants, in_repo, used_in, uploaded_by, access_level, youtube_video_id, youtube_url, youtube_embed_url, youtube_thumbnail_url, youtube_upload_status, album_id, metadata, caption, alt_text, sponsor_id, is_featured, is_approved, display_order, created_at, updated_at';
 
 /** Storage paths a media row owns: the original plus any stored variants. */
 function ownedStoragePaths(row: { storage_path: string; variants?: unknown }): string[] {
@@ -188,27 +199,34 @@ export function createMediaRoutes(deps: RoutesDeps) {
 
     interface Row { id: string; storage_path: string; [key: string]: unknown }
     const rows = (result.data ?? []) as Row[];
-    const items = rows.map(withUrls);
+    const items = await Promise.all(rows.map(withUrls));
 
     // next_cursor is the next offset while a full page came back.
     res.status(200).json({ items, next_cursor: rows.length === limit ? String(offset + limit) : null });
   }
 
-  function withUrls<T extends { storage_path: string; mime_type?: unknown; variants?: unknown }>(r: T) {
+  async function withUrls<T extends { storage_path: string; mime_type?: unknown; variants?: unknown } & StorageLocation>(r: T) {
     const variants = (r.variants && typeof r.variants === 'object' ? r.variants : {}) as Record<string, unknown>;
     const isImage = typeof r.mime_type === 'string' && r.mime_type.startsWith('image/');
-    const preview = (key: string, width: number): string | null => {
+    // Variants are stored beside their original, so they share its location.
+    const loc: StorageLocation = { storage_provider: r.storage_provider ?? null, storage_bucket: r.storage_bucket ?? null };
+    const preview = async (key: string, width: number): Promise<string | null> => {
       const v = variants[key];
-      if (typeof v === 'string' && v) return /^https?:/i.test(v) ? v : mediaAdapter.getPublicUrl(v);
-      if (isImage && mediaAdapter.getRenderUrl) return mediaAdapter.getRenderUrl(r.storage_path, width);
+      if (typeof v === 'string' && v) return /^https?:/i.test(v) ? v : mediaAdapter.getPublicUrl(v, loc);
+      if (isImage && mediaAdapter.getRenderUrl) return mediaAdapter.getRenderUrl(r.storage_path, width, loc);
       return null;
     };
-    return {
-      ...r,
-      cdn_url: mediaAdapter.getPublicUrl(r.storage_path),
-      thumb_url: preview('thumb', 350),
-      medium_url: preview('medium', 800),
-    };
+    try {
+      const [cdnUrl, thumbUrl, mediumUrl] = await Promise.all([
+        mediaAdapter.getPublicUrl(r.storage_path, loc), preview('thumb', 350), preview('medium', 800),
+      ]);
+      return { ...r, cdn_url: cdnUrl, thumb_url: thumbUrl, medium_url: mediumUrl };
+    } catch (err) {
+      // A row whose provider is switched off still lists, without addresses,
+      // rather than failing the whole page.
+      logger.warn('host_media url build failed', { mediaId: (r as { id?: unknown }).id, provider: loc.storage_provider, error: err instanceof Error ? err.message : String(err) });
+      return { ...r, cdn_url: null, thumb_url: null, medium_url: null };
+    }
   }
 
   // ────────────────────────────────────────────────────────────────────
@@ -239,7 +257,7 @@ export function createMediaRoutes(deps: RoutesDeps) {
       sendError(res, 404, 'media_not_found', 'media not found');
       return;
     }
-    res.status(200).json(withUrls(data));
+    res.status(200).json(await withUrls(data));
   }
 
   // ────────────────────────────────────────────────────────────────────
@@ -346,12 +364,16 @@ export function createMediaRoutes(deps: RoutesDeps) {
         });
         const storagePath: string = out.storagePath;
         const cdnUrl: string = out.cdnUrl;
+        const loc: StorageLocation = { storage_provider: out.storageProvider ?? null, storage_bucket: out.storageBucket ?? null };
 
         const insertRow: Record<string, unknown> = {
           id: mediaId,
           host_kind: hostKind,
           host_id: hostId,
           storage_path: storagePath,
+          // Server-chosen, never from the request.
+          ...(out.storageProvider ? { storage_provider: out.storageProvider } : {}),
+          ...(out.storageBucket ? { storage_bucket: out.storageBucket } : {}),
           filename: sanitiseFilename(file.filename),
           mime_type: file.mimeType,
           bytes: file.bytes,
@@ -377,7 +399,7 @@ export function createMediaRoutes(deps: RoutesDeps) {
 
         if (inserted.error) {
           // Rollback: delete the storage object + decrement quota.
-          try { await mediaAdapter.delete(storagePath); } catch { /* swallow */ }
+          try { await mediaAdapter.delete(storagePath, loc); } catch { /* swallow */ }
           await supabase.rpc('host_media_quota_decrement', {
             p_host_kind: hostKind,
             p_host_id: hostId,
@@ -463,7 +485,7 @@ export function createMediaRoutes(deps: RoutesDeps) {
       sendError(res, 404, 'media_not_found', 'media not found');
       return;
     }
-    res.status(200).json(withUrls(data));
+    res.status(200).json(await withUrls(data));
   }
 
   // ────────────────────────────────────────────────────────────────────
@@ -524,13 +546,13 @@ export function createMediaRoutes(deps: RoutesDeps) {
 
     const { data: rows, error: fetchErr } = await supabase
       .from('host_media')
-      .select('id, storage_path, variants, bytes, used_in')
+      .select('id, storage_path, storage_provider, storage_bucket, variants, bytes, used_in')
       .in('id', ids)
       .eq('host_kind', params.hostKind)
       .eq('host_id', params.hostId);
     if (fetchErr) { sendError(res, 500, 'fetch_failed', fetchErr.message); return; }
 
-    interface DelRow { id: string; storage_path: string; variants: unknown; bytes: number; used_in: unknown }
+    interface DelRow extends StorageLocation { id: string; storage_path: string; variants: unknown; bytes: number; used_in: unknown }
     const found = (rows ?? []) as DelRow[];
     const inUse = found.filter((r) => Array.isArray(r.used_in) && r.used_in.length > 0);
     const deletable = found.filter((r) => !inUse.includes(r));
@@ -546,7 +568,7 @@ export function createMediaRoutes(deps: RoutesDeps) {
 
       for (const r of deletable) {
         for (const path of ownedStoragePaths(r)) {
-          try { await mediaAdapter.delete(path); } catch (err) {
+          try { await mediaAdapter.delete(path, r); } catch (err) {
             logger.warn('host_media storage delete failed (row already deleted)', {
               mediaId: r.id,
               storagePath: path,
@@ -607,7 +629,7 @@ export function createMediaRoutes(deps: RoutesDeps) {
     // storage object after the row.
     const { data: item, error: fetchErr } = await supabase
       .from('host_media')
-      .select('id, storage_path, variants, bytes, used_in')
+      .select('id, storage_path, storage_provider, storage_bucket, variants, bytes, used_in')
       .eq('id', mediaId)
       .eq('host_kind', params.hostKind)
       .eq('host_id', params.hostId)
@@ -625,7 +647,7 @@ export function createMediaRoutes(deps: RoutesDeps) {
     if (delErr) { sendError(res, 500, 'delete_failed', delErr.message); return; }
 
     for (const path of ownedStoragePaths(item)) {
-      try { await mediaAdapter.delete(path); } catch (err) {
+      try { await mediaAdapter.delete(path, item); } catch (err) {
         logger.warn('host_media storage delete failed (row already deleted)', {
           mediaId,
           storagePath: path,
@@ -656,7 +678,7 @@ export function createMediaRoutes(deps: RoutesDeps) {
 
     const { data: item, error } = await supabase
       .from('host_media')
-      .select('id, storage_path, mime_type, bytes')
+      .select('id, storage_path, storage_provider, storage_bucket, mime_type, bytes')
       .eq('id', mediaId)
       .eq('host_kind', params.hostKind)
       .eq('host_id', params.hostId)
@@ -668,7 +690,7 @@ export function createMediaRoutes(deps: RoutesDeps) {
     // Use a short-lived signed URL internally to download bytes and
     // pipe them through. Adds a hop but keeps the CDN URL out of
     // browser history / cache for authenticated assets.
-    const signedUrl = await mediaAdapter.createSignedUrl(item.storage_path, 60);
+    const signedUrl = await mediaAdapter.createSignedUrl(item.storage_path, 60, item, { forServer: true });
     const upstream = await fetch(signedUrl);
     if (!upstream.ok) {
       sendError(res, 500, 'stream_failed', `upstream returned ${upstream.status}`);
@@ -714,7 +736,7 @@ export function createMediaRoutes(deps: RoutesDeps) {
 
     const { data: item, error } = await supabase
       .from('host_media')
-      .select('id, storage_path, access_level')
+      .select('id, storage_path, storage_provider, storage_bucket, access_level')
       .eq('id', mediaId)
       .eq('host_kind', params.hostKind)
       .eq('host_id', params.hostId)
@@ -724,7 +746,7 @@ export function createMediaRoutes(deps: RoutesDeps) {
     if (!item) { sendError(res, 404, 'media_not_found', 'media not found'); return; }
 
     const ttl = 3600;
-    const signedUrl = await mediaAdapter.createSignedUrl(item.storage_path, ttl);
+    const signedUrl = await mediaAdapter.createSignedUrl(item.storage_path, ttl, item);
 
     const expiresAt = new Date(Date.now() + ttl * 1000).toISOString();
     await supabase.from('host_media_signed_url_log').insert({

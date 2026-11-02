@@ -14,6 +14,7 @@
  * else's.
  */
 import { supabase } from '@/lib/supabase';
+import { uploadBeside } from './uploadBeside';
 import { applyOps, darkPoint, meanLuma, withMeasuredTone, type EnhanceOps } from '../../lib/enhance';
 import { applyGrade, gradeFor, profileOf } from '../../lib/grade';
 import { cropped, shapeFor, type Frame, type FrameMode } from './reframeMedia';
@@ -159,7 +160,9 @@ export async function enhanceMedia(
   ids: string[],
   onProgress: (p: EnhanceProgress) => void,
   keepGoing: () => boolean = () => true,
-  bucket = 'media',
+  // Unused: the server now chooses where the file goes. Kept so existing
+  // callers that pass a bucket still compile.
+  _bucket = 'media',
   /** Look again at photographs already looked at, and remake the copies. */
   force = false,
   /** The shape this album's copies are delivered in. */
@@ -205,11 +208,7 @@ export async function enhanceMedia(
         const blob = await improve(r.source, r.ops, frameMode, lens, focus === 'off' ? 'gentle' : focus, r.faces ?? []);
         // Beside the photograph, under a new name each time: a CDN caches
         // by name and would go on serving the copy this replaces.
-        const dir = new URL(r.source).pathname.replace(/^.*\/public\/[^/]+\//, '');
-        const folder = dir.slice(0, dir.lastIndexOf('/'));
-        const path = `${folder}/enhanced-${Date.now().toString(36)}.jpg`;
-        const up = await supabase.storage.from(bucket).upload(path, blob, { contentType: 'image/jpeg', upsert: false });
-        if (up.error) throw new Error(up.error.message);
+        const path = await uploadBeside(authedFetch, eventId, r.id, `enhanced-${Date.now().toString(36)}.jpg`, blob);
         const rec = await authedFetch(`/api/admin/events/${eventId}/media/enhanced`, {
           method: 'POST',
           body: JSON.stringify({ media_id: r.id, storage_path: path, bytes: blob.size, of: r.of ?? 'photo' }),

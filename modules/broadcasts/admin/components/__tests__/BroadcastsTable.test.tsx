@@ -21,6 +21,7 @@ function makeBroadcast(overrides: Partial<Broadcast>): Broadcast {
     name: 'Fall Launch Internal',
     brand: 'gatewaze',
     channel: 'email',
+    slack_sender: 'bot',
     audience_type: 'segment',
     segment_id: null,
     list_ids: [],
@@ -46,6 +47,20 @@ function makeBroadcast(overrides: Partial<Broadcast>): Broadcast {
 
 describe('BroadcastsTable', () => {
   afterEach(cleanup);
+
+  it('labels a Slack broadcast and counts its sent messages from its sends', async () => {
+    const broadcast = makeBroadcast({
+      id: 'b9', name: 'VAF Slack', channel: 'slack', subject: 'VAF Slack',
+      sends: [{
+        id: 's9', broadcast_id: 'b9', status: 'sent', schedule_type: 'immediate', delivery_strategy: 'global',
+        scheduled_at: null, started_at: null, completed_at: null, total_recipients: 0, sent_count: 1234, failed_count: 0,
+        created_at: '2026-10-29T00:00:00Z',
+      }],
+    });
+    render(<BroadcastsTable broadcasts={[broadcast]} />);
+    expect(screen.getByText('Slack message')).toBeTruthy();
+    expect(await screen.findByText('1,234')).toBeTruthy();
+  });
 
   it('shows the header label for the new Name column', () => {
     render(<BroadcastsTable broadcasts={[makeBroadcast({})]} />);

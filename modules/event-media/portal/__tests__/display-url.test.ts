@@ -41,3 +41,18 @@ describe('sizedDisplayUrl', () => {
     expect(sizedDisplayUrl(CDN, 99999, 1, 500)).toContain('width=4096&height=16&quality=100');
   });
 });
+
+describe('sizedDisplayUrl on a domain Cloudflare resizes', () => {
+  const R2 = 'https://media.example.com/event/e/m/img.jpeg';
+  it('asks Cloudflare for a screen-sized copy on the same domain', () => {
+    expect(sizedDisplayUrl(R2, 1920, 1080, 82, 'cloudflare')).toBe(
+      'https://media.example.com/cdn-cgi/image/width=1920,height=1080,fit=scale-down,quality=82,format=auto/event/e/m/img.jpeg',
+    );
+  });
+  it('leaves the address alone without the hint, and never resizes twice', () => {
+    expect(sizedDisplayUrl(R2, 1920, 1080)).toBe(R2);
+    const once = sizedDisplayUrl(R2, 1920, 1080, 82, 'cloudflare');
+    expect(sizedDisplayUrl(once, 1920, 1080, 82, 'cloudflare')).toBe(once);
+    expect(sizedDisplayUrl('http://media.example.com/a.jpg', 100, 100, 82, 'cloudflare')).toBe('http://media.example.com/a.jpg');
+  });
+});

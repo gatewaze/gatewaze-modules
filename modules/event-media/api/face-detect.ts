@@ -22,6 +22,7 @@
  * between an album that scans in minutes and one that does not.
  */
 import type { Request, Response, Router } from 'express';
+import type { MediaStorage } from '../lib/media-storage.js';
 
 interface PlatformLogger {
   info: (msg: string, meta?: Record<string, unknown>) => void;
@@ -33,8 +34,8 @@ export interface FaceDetectDeps {
   canAdminEvent: (req: Request, eventId: string) => Promise<boolean | null>;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   serviceClient: any;
-  /** A browser-sized copy of a stored object, through the CDN. */
-  sizedUrl: (path: string, width: number) => string;
+  /** Where each row's files are (lib/media-storage.ts). */
+  media: MediaStorage;
   logger: PlatformLogger;
 }
 
@@ -83,7 +84,7 @@ function int(v: unknown, lo: number, hi: number): number | null {
 }
 
 export function createFaceDetect(deps: FaceDetectDeps) {
-  const { canAdminEvent, serviceClient: db, sizedUrl, logger } = deps;
+  const { canAdminEvent, serviceClient: db, media, logger } = deps;
 
   /** The organiser, or nobody. */
   async function gate(req: Request, res: Response): Promise<string | null> {
@@ -155,7 +156,7 @@ export function createFaceDetect(deps: FaceDetectDeps) {
         // already knows how to do costs one round trip and no url.
         let q = db
           .from('host_media')
-          .select('id, storage_path, width, height, created_at, events_media_face_scans(model_id)')
+          .select('id, storage_path, storage_provider, storage_bucket, width, height, created_at, events_media_face_scans(model_id)')
           .eq('host_kind', 'event')
           .eq('host_id', eventId)
           .like('mime_type', 'image/%')
@@ -168,15 +169,21 @@ export function createFaceDetect(deps: FaceDetectDeps) {
         if (error) throw new Error(error.message);
         const page = (rows ?? []) as Array<{
           id: string; storage_path: string; width: number | null; height: number | null;
+          storage_provider?: string | null; storage_bucket?: string | null;
           created_at: string;
           events_media_face_scans: { model_id: string } | Array<{ model_id: string }> | null;
         }>;
         if (page.length === 0) { exhausted = true; break; }
         cursor = page[page.length - 1]!.created_at;
         if (page.length < WINDOW) exhausted = true;
+        const storesOf = await media.forRows(page);
 
         for (const r of page) {
           if (items.length >= limit) break;
+          const stores = storesOf(r);
+          // A photo kept somewhere that is switched off cannot be fetched
+          // by the browser either, so it is not offered.
+          if (!stores) continue;
           if (!force) {
             // media_id is the scans table's primary key, so this is
             // one row at most -- but take either shape, because which
@@ -189,7 +196,7 @@ export function createFaceDetect(deps: FaceDetectDeps) {
           items.push({
             id: r.id,
             // A small copy, not the original. See the header.
-            url: sizedUrl(r.storage_path, DETECT_WIDTH),
+            url: stores.browser.sizedUrl(r.storage_path, { width: DETECT_WIDTH }),
             width: r.width ?? null,
             height: r.height ?? null,
           });
