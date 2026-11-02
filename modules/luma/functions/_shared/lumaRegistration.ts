@@ -31,6 +31,7 @@ export interface RegistrationData {
   source?: 'luma_webhook' | 'luma_csv_upload' | 'luma_email_notification' | 'gradual_webhook' // registration source
   gradualUserId?: string // Gradual user ID
   trackingSessionId?: string // from Luma custom_source for conversion attribution
+  utmSource?: string // raw Luma custom_source / email "UTM source" value, kept for attribution reporting
 }
 
 export interface EventData {
@@ -445,6 +446,14 @@ export async function createFullRegistration(
         newMetadata.luma_survey_responses = registration.surveyResponses
         metadataUpdated = true
       }
+      if (registration.utmSource && !existingMetadata.utm_source) {
+        newMetadata.utm_source = registration.utmSource
+        metadataUpdated = true
+      }
+      if (registration.trackingSessionId && !existingMetadata.tracking_session_id) {
+        newMetadata.tracking_session_id = registration.trackingSessionId
+        metadataUpdated = true
+      }
       if (metadataUpdated) {
         updates.registration_metadata = newMetadata
       }
@@ -513,6 +522,11 @@ export async function createFullRegistration(
     // Tracking session ID from Luma custom_source for conversion attribution
     if (registration.trackingSessionId) {
       registrationMetadata.tracking_session_id = registration.trackingSessionId
+    }
+    // Raw utm_source (Luma custom_source) so attribution survives into the
+    // warehouse even when the click never went through our redirect.
+    if (registration.utmSource) {
+      registrationMetadata.utm_source = registration.utmSource
     }
 
     // Create event registration

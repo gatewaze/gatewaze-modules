@@ -6,6 +6,7 @@ import {
   type EventData,
 } from '../_shared/lumaRegistration.ts'
 import { splitCompanyAnswer } from '../_shared/companyAnswer.ts'
+import { extractTrackingSessionId, extractUtmSource } from '../_shared/utmSource.ts'
 
 /**
  * Process Luma Registration Email
@@ -83,7 +84,8 @@ interface ParsedRegistration {
   ticketQuantity: number          // Number of tickets purchased (default 1)
   ticketAmount: number | null     // Amount paid in cents (e.g., 30000 for $300.00)
   registrationAnswers: Array<{ label: string; value: any; answer: any; question_type?: string }>
-  trackingSessionId: string | null // From UTM source in email body
+  utmSource: string | null        // Raw "UTM source for the registration was X" value (Luma custom_source)
+  trackingSessionId: string | null // Session half of a {platform}__{session} utmSource
 }
 
 /**
@@ -319,26 +321,6 @@ function extractTicketInfo(text: string, html: string): { ticketType: string | n
 }
 
 /**
- * Extract UTM source / custom_source from email body
- * Format: "UTM source for the registration was {value}."
- */
-function extractUtmSource(text: string): string | null {
-  const match = text?.match(/UTM source for the registration was\s+([^\s.]+)/i)
-  return match ? match[1] : null
-}
-
-/**
- * Extract tracking session ID from a custom_source value
- * Format: "{platform}__{session_id}" e.g. "meta__ml7xo47p-dmsby75m"
- */
-function extractTrackingSessionId(customSource: string): string | null {
-  if (customSource?.includes('__')) {
-    return customSource.split('__')[1] || null
-  }
-  return null
-}
-
-/**
  * Extract registration question/answer pairs from email body
  *
  * Luma emails contain Q&A after the registration sentence, formatted as:
@@ -530,9 +512,10 @@ function parseRegistrationEmail(email: SendGridInboundEmail): ParsedRegistration
   // Extract registration question/answer pairs from email body
   const registrationAnswers = extractRegistrationAnswers(email.text)
 
-  // Extract tracking session ID from UTM source
+  // Raw utm_source (Luma's custom_source) plus the tracking session id when
+  // the click came through the Gatewaze redirect ({platform}__{session}).
   const utmSource = extractUtmSource(email.text)
-  const trackingSessionId = utmSource ? extractTrackingSessionId(utmSource) : null
+  const trackingSessionId = extractTrackingSessionId(utmSource)
 
   return {
     userName,
@@ -545,6 +528,7 @@ function parseRegistrationEmail(email: SendGridInboundEmail): ParsedRegistration
     ticketQuantity,
     ticketAmount,
     registrationAnswers,
+    utmSource,
     trackingSessionId,
   }
 }
@@ -615,6 +599,7 @@ async function storePendingRegistration(
         headers: emailData.headers?.substring(0, 2000),
         ticket_type: parsed.ticketType,
         ticket_amount: parsed.ticketAmount,
+        utm_source: parsed.utmSource,
       },
     })
     .select('id')
@@ -711,6 +696,8 @@ async function handler(req: Request) {
       ticketType: parsed.ticketType,
       ticketQuantity: parsed.ticketQuantity,
       ticketAmount: parsed.ticketAmount,
+      utmSource: parsed.utmSource,
+      trackingSessionId: parsed.trackingSessionId,
     })
 
     // Validate we have the essential data
@@ -853,6 +840,7 @@ async function handler(req: Request) {
       ticketAmount: parsed.ticketAmount || undefined,
       registrationAnswers: parsed.registrationAnswers.length > 0 ? parsed.registrationAnswers : undefined,
       trackingSessionId: parsed.trackingSessionId || undefined,
+      utmSource: parsed.utmSource || undefined,
       source: 'luma_email_notification',
     }
 
