@@ -561,7 +561,10 @@ export async function getCalendarMediaHighlights(
   // host_media schema (host-media module 001): id, host_kind, host_id,
   // storage_path (a path in the media bucket, not a URL), mime_type,
   // caption, created_at. Photo vs video is the mime type's family.
-  let query = publicEventMedia(supabase, eventUuids)('id, storage_path, mime_type, caption, host_id, created_at')
+  // `*` rather than a list so storage_provider and storage_bucket come
+  // back where host-media migration 016 has added them, and nothing
+  // breaks where it has not.
+  let query = publicEventMedia(supabase, eventUuids)('*')
     .order('created_at', { ascending: false })
     .range(offset, offset + limit - 1)
 
@@ -579,7 +582,13 @@ export async function getCalendarMediaHighlights(
     return []
   }
 
-  return (mediaRows || []).map((row: any) => {
+  // Only files in Supabase's media bucket have an address this page can
+  // build. A photo kept in another provider (modules/storage) is left out
+  // rather than shown as a broken link to the wrong host.
+  const inSupabase = (row: any) =>
+    (row.storage_provider ?? 'supabase') === 'supabase' && !row.storage_bucket
+
+  return (mediaRows || []).filter(inSupabase).map((row: any) => {
     const ev = eventByUuid.get(row.host_id)
     const type: 'photo' | 'video' | 'image' = String(row.mime_type || '').startsWith('video/') ? 'video' : 'photo'
     const url = mediaPublicUrl(row.storage_path)

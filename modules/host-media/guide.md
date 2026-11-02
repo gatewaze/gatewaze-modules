@@ -59,6 +59,10 @@ The default media adapter writes to Supabase Storage. Uploads pass through a mul
 
 The `used_in` array is normally kept current by per-consumer triggers calling `host_media_sync_refs()`; the nightly rebuild is belt-and-braces.
 
+### Where files are kept
+
+Each row records the provider and bucket holding its file and variants (`storage_provider`, `storage_bucket`, migration 016). Older rows, and files in host-media's own Supabase bucket, have `supabase` and a NULL bucket. Only the server can set these columns; a trigger refuses PostgREST callers other than the service role. When the `storage` module is present, uploads go to the provider it chooses for the `media` purpose, and every read, signed URL and delete uses the store the row names. Without it, host-media uses its built-in Supabase adapter and refuses rows kept anywhere else. See the storage module's guide.
+
 ## Configuration
 
 This module has no `configSchema`. Behavior is driven by the consumer registry. Two environment variables affect storage:
