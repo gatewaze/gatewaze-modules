@@ -203,9 +203,12 @@ export function aliasAware(supabase, bucket: string, legacy: MasterStore): Maste
       }
     },
     async remove(path) {
-      const m = await moved().catch(() => null);
+      // Like putStream: an unavailable provider fails the call rather than
+      // removing from Supabase, where this brand's files no longer are.
+      const m = await moved();
       if (!m) return legacy.remove(path);
-      await m.remove([assertSafeKey(path)]);
+      const { failed } = await m.remove([assertSafeKey(path)]);
+      if (failed.length) throw new Error(`could not remove ${failed.join(', ')}`);
     },
     async putStream(path, body, mimeType, maxBytes) {
       const m = await moved();

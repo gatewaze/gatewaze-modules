@@ -89,6 +89,7 @@ async function storageApi<T>(route: 'sign-upload' | 'delete', body: unknown): Pr
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...(await authHeaders()) },
     body: JSON.stringify(body),
+    signal: AbortSignal.timeout(30_000),
   });
   if (res.status === 404) {
     const msg = await errorText(res);
@@ -137,7 +138,15 @@ export async function uploadToStorage(
     upsert: opts.upsert === true,
   });
   if (!signed) return supabaseUpload(bucket, path, file, opts);
-  const put = await fetch(signed.url, { method: signed.method || 'PUT', headers: signed.headers, body: file });
+  if (!/^https:\/\//i.test(signed.url)) throw new Error('upload failed: the signed address is not https');
+  const put = await fetch(signed.url, {
+    method: 'PUT',
+    headers: signed.headers,
+    body: file,
+    credentials: 'omit',
+    redirect: 'error',
+    signal: AbortSignal.timeout(10 * 60_000),
+  });
   if (!put.ok) throw new Error(`upload failed: HTTP ${put.status}`);
   return { path: signed.path, publicUrl: signed.publicUrl };
 }
