@@ -6,3 +6,4 @@ export { createStorageRegistry, StorageUnavailableError, SUPABASE, type StorageR
 export { unsealSecret } from './secret-envelope.js';
 export { prefixedStore } from './prefixed-store.js';
 export { storagePublicConfig, storageKey, storagePublicUrl, storageSizedUrl, rewriteStorageUrl, rewriteStorageUrlsInText, type StoragePublicConfig, type PublicSize } from './public-url.js';
+export { aliasedBucketStore, downloadObject, sharedStorageRegistry, setSharedStorageRegistry } from './bucket-store.js';

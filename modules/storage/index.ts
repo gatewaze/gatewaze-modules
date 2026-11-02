@@ -8,8 +8,9 @@ import type { GatewazeModule } from '@gatewaze/shared';
  * createStorageRegistry (lib/registry.ts) and never talk to a provider
  * directly; see guide.md.
  *
- * Server code only: nothing here may be imported from admin or portal code,
- * because the AWS SDK must not reach a browser bundle.
+ * Server code only, except browser/storage.ts and lib/public-url.ts, which
+ * admin and portal code may import: the AWS SDK must not reach a browser
+ * bundle.
  */
 const storageModule: GatewazeModule = {
   id: 'storage',
@@ -18,7 +19,7 @@ const storageModule: GatewazeModule = {
   visibility: 'public',
   name: 'Storage',
   description: 'Where module files are kept. Supabase Storage is built in; add a provider module such as storage-r2 to keep new files elsewhere.',
-  version: '0.2.0',
+  version: '0.3.0',
   features: ['storage'],
   migrations: [],
 
