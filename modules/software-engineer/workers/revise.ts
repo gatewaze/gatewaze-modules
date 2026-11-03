@@ -87,7 +87,7 @@ export default async function revise(job, ctx) {
     }
     const codeRepos = (await getCodeRepos(supabase, run.project_id))
       .filter((r) => affected.has(`${r.repoOwner}/${r.repoName}`) && (!conflictMode || canRepairRepo(r,run)))
-      .map((r) => ({ ...r, checkoutRef: undefined, writeMode: 'writable' }));
+      .map((r) => ({ ...r, writeMode: 'writable' }));
     if (conflictMode && !codeRepos.length) throw new Error('No writable repository still needs conflict repair');
     const commitId = await resolveCommitIdentity(supabase, project, token);
     ws = await makeMultiWorkspace(codeRepos, token, run.branch_name, commitId, true);

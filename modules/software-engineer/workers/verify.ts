@@ -43,7 +43,7 @@ export default async function verify(job, ctx) {
     const changedRepos = prs.filter((p) => p.state !== 'error');
     const codeRepos = (await getCodeRepos(supabase, run.project_id))
       .filter((r) => changedRepos.some((p) => p.repo_owner === r.repoOwner && p.repo_name === r.repoName))
-      .map((r) => ({ ...r, checkoutRef: undefined, writeMode: 'read_only', baseBranch: run.branch_name }));
+      .map((r) => ({ ...r, writeMode: 'read_only', baseBranch: run.branch_name }));
     ws = codeRepos.length ? await makeMultiWorkspace(codeRepos, token, run.branch_name) : { repos: [], root: '/tmp', cleanup: async () => {} };
 
     const verifiedHeads = new Map();

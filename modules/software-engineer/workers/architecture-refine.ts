@@ -1,4 +1,3 @@
-import { getRunCodeRepos } from '../lib/run-code-repos.js';
 // @ts-nocheck
 /**
  * architecture-refine — applies the human's chat feedback to a run's architecture proposal while it is
@@ -70,7 +69,7 @@ export default async function architectureRefine(job, ctx) {
   let ws;
   try {
     const codeRepos = archOwner
-      ? (await getRunCodeRepos(supabase, run)).slice(0, project.maxCodeReposPerRun)
+      ? (await getCodeRepos(supabase, run.project_id)).slice(0, project.maxCodeReposPerRun)
       : [];
     const repos = [
       ...(archOwner ? [{ repoOwner: archOwner, repoName: archName, writeMode: 'read_only', baseBranch: String(project.architectureRef ?? '') || 'main' }] : []),
