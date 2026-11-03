@@ -1,0 +1,472 @@
+/**
+ * The projector's models, on fal.
+ *
+ * Depth maps, people cutouts, background plates and the vision calls
+ * that check a plate and write a Picflix card all run here: everything
+ * the display builds for a photo once it is posted.
+ *
+ * Runs on hosted GPUs because the models are orders of magnitude too
+ * heavy for a phone browser. fal was chosen over Replicate after
+ * testing both against real photos on 2026-09-20: Replicate rejects
+ * bursts with 429 at the account level, which with a room full of
+ * guests on one account is the failure that matters; fal queues.
+ *
+ * Configure with:
+ *   EVENT_MEDIA_PROVIDER=fal
+ *   FAL_API_KEY=<key>
+ *   EVENT_MEDIA_PLATE_MODEL=<model>    (optional override for the plate)
+ *   EVENT_MEDIA_DEPTH_MODEL, EVENT_MEDIA_CUTOUT_MODEL,
+ *   EVENT_MEDIA_VISION_MODEL           (optional overrides for the rest)
+ *
+ * Absent by default: with nothing configured the layers are simply not
+ * made and the display shows the photo flat. Nothing on the ordinary
+ * upload path depends on any of this.
+ */
+
+import { ENHANCE_PROMPT, parseVerdict, type EnhanceVerdict } from './enhance.js';
+import { CARD_GENRES as SHARED_CARD_GENRES, cardIsSuitable } from './card-copy.js';
+
+export type ModelResult =
+  | { ok: true; image: Uint8Array; contentType: string }
+  | { ok: false; error: 'not_configured' | 'provider_error' | 'no_face' | 'timeout'; detail?: string };
+
+const SUBMIT_TIMEOUT_MS = 30_000;
+const POLL_TIMEOUT_MS = 120_000;
+const POLL_INTERVAL_MS = 2_000;
+const DOWNLOAD_TIMEOUT_MS = 30_000;
+/** A generated image far larger than this means something is wrong. */
+const MAX_OUTPUT_BYTES = 25 * 1024 * 1024;
+
+const DEFAULT_PLATE_MODEL = 'fal-ai/nano-banana/edit';
+const DEFAULT_DEPTH_MODEL = 'fal-ai/image-preprocessors/depth-anything/v2';
+const DEFAULT_CUTOUT_MODEL = 'fal-ai/birefnet/v2';
+const DEFAULT_VISION_MODEL = 'fal-ai/any-llm/vision';
+
+/**
+ * fal model slugs reach the request URL, so they are constrained to the
+ * shape fal actually uses rather than trusted from the environment.
+ */
+const MODEL_RE = /^[a-z0-9][a-z0-9-]*(?:\/[a-z0-9][a-z0-9._-]*){1,3}$/;
+
+function falKey(): string | null {
+  const key = process.env.FAL_API_KEY ?? '';
+  return key.trim() ? key.trim() : null;
+}
+
+function falEnabled(): boolean {
+  const provider = (process.env.EVENT_MEDIA_PROVIDER ?? '').toLowerCase();
+  return provider === 'fal' && falKey() !== null;
+}
+
+function model(envVar: string, fallback: string): string {
+  const raw = (process.env[envVar] ?? '').trim();
+  return raw && MODEL_RE.test(raw) ? raw : fallback;
+}
+
+/** Whether the projector's models can be called at all. */
+export function falConfigured(): boolean {
+  return falEnabled();
+}
+
+async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return Promise.race([
+    p,
+    new Promise<T>((_, reject) => setTimeout(() => reject(new Error('timeout')), ms)),
+  ]);
+}
+
+interface FalQueued {
+  status_url?: string;
+  response_url?: string;
+  detail?: unknown;
+}
+
+interface FalImage {
+  url?: unknown;
+}
+
+/** fal returns either `images: [...]` or a single `image`. */
+function outputUrl(res: Record<string, unknown>): string {
+  const images = res['images'];
+  const first = Array.isArray(images) ? (images[0] as FalImage | undefined) : undefined;
+  const single = res['image'] as FalImage | undefined;
+  const url = first?.url ?? single?.url;
+  return typeof url === 'string' ? url : '';
+}
+
+/**
+ * Submit to fal's queue, wait for it, and download the result.
+ *
+ * `input` is built entirely from our own catalogue and our own storage
+ * URLs — no guest-supplied string reaches it.
+ */
+async function runFal(modelSlug: string, input: Record<string, unknown>): Promise<ModelResult> {
+  const key = falKey();
+  if (!key) return { ok: false, error: 'not_configured' };
+  const headers = { Authorization: `Key ${key}`, 'Content-Type': 'application/json' };
+
+  try {
+    const submit = await withTimeout(
+      fetch(`https://queue.fal.run/${modelSlug}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(input),
+      }),
+      SUBMIT_TIMEOUT_MS,
+    );
+    if (!submit.ok) {
+      const detail = (await submit.text().catch(() => '')).slice(0, 300);
+      return { ok: false, error: 'provider_error', detail: `${submit.status} ${detail}` };
+    }
+
+    const queued = await submit.json() as FalQueued;
+    if (!queued.status_url || !queued.response_url) {
+      return { ok: false, error: 'provider_error', detail: 'no queue urls' };
+    }
+    // fal hands back absolute URLs on its own host; refuse anything else
+    // rather than following a redirect off-domain.
+    if (!queued.status_url.startsWith('https://queue.fal.run/') ||
+        !queued.response_url.startsWith('https://queue.fal.run/')) {
+      return { ok: false, error: 'provider_error', detail: 'unexpected queue host' };
+    }
+
+    const deadline = Date.now() + POLL_TIMEOUT_MS;
+    let done = false;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+      const poll = await withTimeout(fetch(queued.status_url, { headers }), SUBMIT_TIMEOUT_MS);
+      if (!poll.ok) continue;
+      const state = await poll.json() as { status?: string };
+      if (state.status === 'COMPLETED') { done = true; break; }
+      if (state.status !== 'IN_QUEUE' && state.status !== 'IN_PROGRESS') {
+        return { ok: false, error: 'provider_error', detail: String(state.status ?? 'unknown') };
+      }
+    }
+    if (!done) return { ok: false, error: 'timeout' };
+
+    const resp = await withTimeout(fetch(queued.response_url, { headers }), SUBMIT_TIMEOUT_MS);
+    if (!resp.ok) {
+      const detail = (await resp.text().catch(() => '')).slice(0, 300);
+      return { ok: false, error: 'provider_error', detail: `result ${resp.status} ${detail}` };
+    }
+    const result = await resp.json() as Record<string, unknown>;
+    // Pin the output host too. This URL comes from fal's own
+    // authenticated response rather than from a guest, so it is not an
+    // SSRF guests can reach — but a fetch driven by a remote JSON field
+    // should not be able to point anywhere it likes.
+    const url = outputUrl(result);
+    if (!/^https:\/\/([a-z0-9-]+\.)*fal\.(run|media|ai)\//.test(url)) {
+      return { ok: false, error: 'provider_error', detail: 'no usable output image' };
+    }
+
+    const img = await withTimeout(fetch(url), DOWNLOAD_TIMEOUT_MS);
+    if (!img.ok) return { ok: false, error: 'provider_error', detail: `fetch output ${img.status}` };
+    const contentType = (img.headers.get('content-type') ?? 'image/jpeg').split(';')[0]!.trim();
+    if (!contentType.startsWith('image/')) {
+      return { ok: false, error: 'provider_error', detail: `unexpected type ${contentType}` };
+    }
+    const buf = new Uint8Array(await img.arrayBuffer());
+    if (buf.length === 0 || buf.length > MAX_OUTPUT_BYTES) {
+      return { ok: false, error: 'provider_error', detail: `output ${buf.length} bytes` };
+    }
+    return { ok: true, image: buf, contentType };
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, error: msg === 'timeout' ? 'timeout' : 'provider_error', detail: msg.slice(0, 200) };
+  }
+}
+
+/**
+ * Monocular depth map for a photo, near = white.
+ *
+ * Depth is a property of the PHOTO, not of the viewing session, so it
+ * is computed once here and cached alongside the image. The previous
+ * approach ran the model in every projector browser, on the main
+ * thread, for every photo in the library — which froze the display for
+ * seconds at a time (p95 frame gap 3.9 s, measured 2026-09-20). Doing
+ * it once, server-side, costs pennies and leaves the projector with
+ * nothing to do but sample a texture.
+ */
+export async function runDepth(imageUrl: string): Promise<ModelResult> {
+  if (!falEnabled()) return { ok: false, error: 'not_configured' };
+  return runFal(model('EVENT_MEDIA_DEPTH_MODEL', DEFAULT_DEPTH_MODEL), { image_url: imageUrl });
+}
+
+export interface CardCopy {
+  title: string;
+  words: string[];
+  kind: string;
+  genre: string;
+  eyebrow: string;
+}
+
+// The genre list lives with the card's other rules in card-copy.ts, so
+// the generator and a person editing a card in the admin are held to the
+// same set. The model was picking 'comedy' for most of the album, which
+// is why the list is wide.
+const CARD_GENRES: readonly string[] = SHARED_CARD_GENRES;
+
+/**
+ * Browse-screen copy for one photo: a spoof programme invented from
+ * what is actually IN the picture.
+ *
+ * The register is the whole point and took several attempts to land.
+ * Greeting-card phrasing ("Love Is In The Air") reads as cheesy
+ * and was rejected repeatedly. Banning wordplay outright fixed that but
+ * overcorrected: the titles became flat description ("The Lunch
+ * Gathering"). What works is a real programme name that happens to carry
+ * a second meaning — "Deep End" for a poolside photo — where the joke is
+ * in the double meaning rather than in announcing itself.
+ */
+/**
+ * Read the card fields out of the model's reply.
+ *
+ * Strict JSON first. When that fails it is almost always one specific
+ * fault — a comma left out between two descriptors, so `words` arrives
+ * as `["Sun Kissed" "Poolside"]` — which sank about 3% of an album-wide
+ * run. The schema here is five known fields of plain text, so pulling
+ * them out directly is both safer than repairing arbitrary JSON and
+ * immune to that whole class of malformation.
+ *
+ * Everything returned is still clamped and allowlisted by the caller.
+ */
+export function parseCard(json: string): Partial<CardCopy> | null {
+  try {
+    return JSON.parse(json) as Partial<CardCopy>;
+  } catch {
+    const str = (field: string): string | undefined =>
+      new RegExp(`"${field}"\\s*:\\s*"([^"]*)"`).exec(json)?.[1];
+    const arr = /"words"\s*:\s*\[([^\]]*)\]/.exec(json)?.[1];
+    const words = arr ? [...arr.matchAll(/"([^"]*)"/g)].map((m) => m[1]!) : undefined;
+    const title = str('title');
+    if (!title || !words?.length) return null;
+    return {
+      title,
+      words,
+      kind: str('kind'),
+      genre: str('genre'),
+      eyebrow: str('eyebrow'),
+    } as Partial<CardCopy>;
+  }
+}
+
+export async function runCardCopy(imageUrl: string): Promise<
+  { ok: true; copy: CardCopy } | { ok: false; error: string }
+> {
+  // The model occasionally emits JSON it cannot itself parse (an
+  // unescaped quote inside a descriptor is the usual culprit), and a
+  // photo that misses here has no title for the rest of the night. One
+  // retry costs a fraction of a penny and clears it.
+  const first = await cardCopyOnce(imageUrl);
+  if (first.ok || first.error === 'not_configured') return first;
+  return cardCopyOnce(imageUrl);
+}
+
+/**
+ * Ask the vision model about one image; its plain-text answer. The URL is
+ * ours (storage), the prompt is ours; the answer is treated as untrusted.
+ */
+async function askVision(imageUrl: string, prompt: string): Promise<{ ok: true; text: string } | { ok: false; error: string }> {
+  if (!falEnabled()) return { ok: false, error: 'not_configured' };
+  const headers = { Authorization: `Key ${falKey()!}`, 'Content-Type': 'application/json' };
+  try {
+    const submit = await withTimeout(
+      fetch(`https://queue.fal.run/${model('EVENT_MEDIA_VISION_MODEL', DEFAULT_VISION_MODEL)}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ model: 'google/gemini-flash-1.5', prompt, image_url: imageUrl }),
+      }),
+      SUBMIT_TIMEOUT_MS,
+    );
+    if (!submit.ok) return { ok: false, error: `submit ${submit.status}` };
+    const queued = await submit.json() as FalQueued;
+    if (!queued.status_url?.startsWith('https://queue.fal.run/') ||
+        !queued.response_url?.startsWith('https://queue.fal.run/')) {
+      return { ok: false, error: 'unexpected queue host' };
+    }
+    const deadline = Date.now() + POLL_TIMEOUT_MS;
+    let done = false;
+    while (Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, POLL_INTERVAL_MS));
+      const poll = await withTimeout(fetch(queued.status_url, { headers }), SUBMIT_TIMEOUT_MS);
+      if (!poll.ok) continue;
+      const state = await poll.json() as { status?: string };
+      if (state.status === 'COMPLETED') { done = true; break; }
+      if (state.status !== 'IN_QUEUE' && state.status !== 'IN_PROGRESS') {
+        return { ok: false, error: String(state.status ?? 'unknown') };
+      }
+    }
+    if (!done) return { ok: false, error: 'timeout' };
+    const resp = await withTimeout(fetch(queued.response_url, { headers }), SUBMIT_TIMEOUT_MS);
+    if (!resp.ok) return { ok: false, error: `result ${resp.status}` };
+    const body = await resp.json() as { output?: unknown; text?: unknown };
+    const text = typeof body.output === 'string' ? body.output : typeof body.text === 'string' ? body.text : '';
+    return { ok: true, text };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * What one photograph needs to look its best, as the model sees it.
+ *
+ * Nothing is drawn: the answer is a handful of numbers that lib/enhance.ts
+ * turns into arithmetic on the pixels. A model that will not answer, or
+ * answers with something unreadable, means the photograph is left alone.
+ */
+export async function runEnhanceVerdict(imageUrl: string): Promise<
+  { ok: true; verdict: EnhanceVerdict } | { ok: false; error: string }
+> {
+  const answer = await askVision(imageUrl, ENHANCE_PROMPT);
+  if (!answer.ok) return answer;
+  const verdict = parseVerdict(answer.text);
+  return verdict ? { ok: true, verdict } : { ok: false, error: 'unreadable' };
+}
+
+/** Read a yes/no answer; null when it is neither. */
+export function parseYesNo(text: string): boolean | null {
+  const t = text.trim().toUpperCase();
+  const yes = /\bYES\b/.test(t), no = /\bNO\b/.test(t);
+  // Both, or neither: not an answer.
+  return yes === no ? null : yes;
+}
+
+/**
+ * Does this background plate still show a person in the foreground?
+ * true, false, or null
+ * when the model could not be asked or gave no clear answer. A plate that
+ * kept its person makes the projector draw them twice (reported
+ * 2026-09-22), and a pixel comparison cannot tell a person removed from a
+ * person redrawn -- so a model looks.
+ */
+export async function plateHasPeople(plateUrl: string): Promise<boolean | null> {
+  // Foreground only. Small or distant people behind are harmless -- the
+  // projector only moves the main subjects -- and asking about "any
+  // person" flagged nearly half of all plates (scan, 2026-09-22).
+  const r = await askVision(plateUrl,
+    'Look at this photograph. Is there a person in the foreground, close to the camera and large in ' +
+    'the frame -- their face, head or upper body taking up a noticeable part of the picture? Small or ' +
+    'distant people in the background do not count. Answer with exactly one word: YES or NO.');
+  return r.ok ? parseYesNo(r.text) : null;
+}
+
+async function cardCopyOnce(imageUrl: string): Promise<
+  { ok: true; copy: CardCopy } | { ok: false; error: string }
+> {
+  if (!falEnabled()) return { ok: false, error: 'not_configured' };
+  const prompt = [
+    'You are writing browse-screen copy for a spoof streaming service at an event.',
+    'Invent a programme based on WHAT YOU ACTUALLY SEE in the photograph.',
+    'Return ONLY minified JSON:',
+    '{"title":"","words":["","",""],"kind":"Series|Films","genre":"' + CARD_GENRES.join('|') + '","eyebrow":""}',
+    'title: one to three words that could be a real TV series or film on a',
+    '  streaming service. Aim for a phrase that describes the photo literally',
+    '  AND carries a second, funnier meaning — the wit comes from the double',
+    '  meaning landing quietly, never from announcing itself.',
+    '  Good: "Deep End" (people in a pool). "Floor Filler" (dancing).',
+    '  "Table Manners" (dinner). "Last Orders" (the bar). "Plus One".',
+    '  "Open Bar". "Heavy Pour". "The Long Game" (a very long speech).',
+    '  Bad, because they are greeting-card phrases: "Love Is In The Air",',
+    '  "Best Day Ever", "Making Memories".',
+    '  Bad, because they are flat description with no second meaning:',
+    '  "The Lunch Gathering", "The Group Photo", "The Extended Table".',
+    '  Never explain the joke. Never use an exclamation mark.',
+    'words: exactly three streaming descriptors, Title Case, one or two words each.',
+    '  Vary them; do not open every one with "Candid". They should quietly',
+    '  comment on the photo rather than describe the event.',
+    'kind: "Series" or "Films".',
+    'genre: pick the one whose title-card styling suits the photo. Spread your',
+    '  choices across the list rather than defaulting to comedy — judge by the',
+    '  light, colour and mood of the picture, not only by the joke.',
+    'eyebrow: 1-3 words, Title Case, e.g. "Season One", "Limited Series",',
+    '  "New Episodes", "A Picflix Original".',
+    'Never guess who anyone is or how they are related: no parent, partner, in-law or',
+    '  family roles, in the title, the words or the eyebrow. You do not know these',
+    '  people, and a wrong guess is awkward. Describe what they are doing, not who they are.',
+    'Never comment on anyone\'s sexuality, gender, race, religion, age, body, weight, looks',
+    '  or relationship status. The title must make sense as a real programme name.',
+    'Most cards should read like ordinary TV.',
+  ].join('\n');
+
+  try {
+    const said = await askVision(imageUrl, prompt);
+    if (!said.ok) return said;
+    const raw = said.text;
+    const match = /\{[\s\S]*\}/.exec(raw);
+    if (!match) return { ok: false, error: 'no json' };
+    const parsed = parseCard(match[0]);
+    if (!parsed) return { ok: false, error: 'bad json' };
+
+    // The model is writing display copy, so everything is clamped and
+    // allowlisted before it can reach the projector.
+    const clean = (v: unknown, max: number) =>
+      typeof v === 'string' ? v.replace(/[\u0000-\u001f]/g, '').trim().slice(0, max) : '';
+    const title = clean(parsed.title, 48);
+    const words = Array.isArray(parsed.words)
+      ? parsed.words.map((w) => clean(w, 24)).filter(Boolean).slice(0, 3)
+      : [];
+    if (!title || words.length !== 3) return { ok: false, error: 'incomplete' };
+    // Enforced, not just asked for: see card-copy.ts.
+    if (!cardIsSuitable({ title, words, eyebrow: clean(parsed.eyebrow, 28) })) return { ok: false, error: 'unsuitable' };
+
+    return {
+      ok: true,
+      copy: {
+        title,
+        words,
+        kind: parsed.kind === 'Films' ? 'Films' : 'Series',
+        genre: CARD_GENRES.includes(String(parsed.genre)) ? String(parsed.genre) : 'doc',
+        eyebrow: clean(parsed.eyebrow, 28),
+      },
+    };
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message.slice(0, 120) : 'failed' };
+  }
+}
+
+/**
+ * The people, cut out with a soft alpha edge.
+ *
+ * Half of the projector's 3D effect: the near layer. Paired with the
+ * plate below, the two can be moved at different rates to give real
+ * parallax — as opposed to displacing one flat image by a depth map,
+ * which smears at every edge because there is nothing behind the
+ * subject to reveal.
+ */
+export async function runCutout(imageUrl: string): Promise<ModelResult> {
+  if (!falEnabled()) return { ok: false, error: 'not_configured' };
+  return runFal(model('EVENT_MEDIA_CUTOUT_MODEL', DEFAULT_CUTOUT_MODEL), { image_url: imageUrl });
+}
+
+/**
+ * The scene as if nobody had been standing in it — the far layer.
+ *
+ * This is the piece that makes parallax honest. When the camera drifts
+ * and the people move against the background, what is revealed behind
+ * them is real reconstructed scene rather than stretched neighbouring
+ * pixels.
+ */
+export async function runPlate(imageUrl: string, strict = false): Promise<ModelResult> {
+  if (!falEnabled()) return { ok: false, error: 'not_configured' };
+  return runFal(model('EVENT_MEDIA_PLATE_MODEL', DEFAULT_PLATE_MODEL), {
+    prompt:
+      'Remove the people from this photograph completely, and with them everything they are ' +
+      'holding, wearing or standing behind -- a microphone and its stand, an instrument, a glass, ' +
+      'a phone, a bouquet, any object that overlaps them or sits in front of them. ' +
+      'Reconstruct the scene behind them plausibly and seamlessly, continuing the walls, ' +
+      'furniture, floor and background exactly as they would appear with nobody standing there ' +
+      'and none of those objects present. Keep the camera angle, framing, lighting, ' +
+      'colour and every remaining detail identical. The result must contain no people at all, ' +
+      'and nothing left hanging in mid-air where a person was holding it.' +
+      // The second attempt, after a first that left someone in: say it
+      // every way the model might otherwise wriggle out of it.
+      (strict
+        ? ' There must be no person, face, head, hair, body, arm, hand, silhouette, reflection or ' +
+          'partial figure anywhere in the image, including at the edges and in the background, and ' +
+          'no object that was in front of a person or held by one. Where a person and their things ' +
+          'were, show only what would be behind them.'
+        : ''),
+    image_urls: [imageUrl],
+    output_format: 'jpeg',
+  });
+}

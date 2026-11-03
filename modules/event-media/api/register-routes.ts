@@ -140,16 +140,45 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
     );
   }
 
+  // Browser-facing image host, also resolved once. A malformed value
+  // fails closed to Supabase rather than pointing every photo at a host
+  // that does not exist.
+  const { cdnConfigFromEnv } = await import('../lib/cdn.js');
+  const cdn = cdnConfigFromEnv(process.env);
+  if (process.env.BUNNY_CDN_ENABLED === 'true' && !cdn.zone) {
+    logger.warn('BUNNY_CDN_ENABLED is set but BUNNY_PULLZONE_URL is not a bare https origin — serving from Supabase');
+  }
+
+  // Where each photo's files are, and where new ones go: the storage
+  // module when it can be loaded (modules/storage), else the built-in
+  // Supabase stores, which build the addresses this module always has.
+  const { createMediaStorage, builtInSupabaseStores } = await import('../lib/media-storage.js');
+  let registry = null;
+  try {
+    const { loadStorageRegistry } = await import('../../host-media/lib/storage-adapter.js');
+    registry = await loadStorageRegistry({ supabase: serviceSupabase, logger });
+  } catch (err) {
+    logger.warn('storage module not loaded; using the built-in Supabase stores', { error: err instanceof Error ? err.message : String(err) });
+  }
+  const media = createMediaStorage({
+    registry,
+    fallback: builtInSupabaseStores({ supabase: serviceSupabase, bucket: STORAGE_BUCKET, publicSupabaseUrl, internalSupabaseUrl: supabaseUrl, cdn }),
+    bucket: STORAGE_BUCKET,
+    logger,
+  });
+
   // Public guest endpoints — /api/public/event-media/*.
   const publicRouter = Router();
   const guestRoutes = createGuestRoutes({
     supabase: serviceSupabase,
     storageBucket: STORAGE_BUCKET,
+    media,
     publicSupabaseUrl,
     internalSupabaseUrl: supabaseUrl,
     rateLimit: rateLimiter.check.bind(rateLimiter),
     logger,
     ticketSecret,
+    cdn,
   });
   mountGuestRoutes(publicRouter, guestRoutes);
   app.use('/api', publicRouter);
@@ -185,6 +214,97 @@ export async function registerRoutes(app: Express, context?: ModuleContext): Pro
     logger,
   });
   mountAdminLinksRoutes(adminRouter, adminRoutes);
+
+  // The same question host-media's organiser asks, asked as the caller
+  // and failing closed. See admin-media-routes.ts for why the rows are
+  // not simply queried under the caller's own RLS.
+  const canAdminEvent = async (req: Request, eventId: string): Promise<boolean | null> => {
+    const token = extractBearer(req);
+    if (!token || !supabaseAnonKey) return null;
+    const asCaller = createClient(supabaseUrl, supabaseAnonKey, {
+      auth: { autoRefreshToken: false, persistSession: false },
+      global: { headers: { Authorization: `Bearer ${token}` } },
+    });
+    const { data, error } = await asCaller.rpc('can_admin_host_media', {
+      p_host_kind: 'event',
+      p_host_id: eventId,
+    });
+    if (error) {
+      logger.error('admin: can_admin_host_media failed', { eventId, error: error.message });
+      return false;
+    }
+    return data === true;
+  };
+
+  // Card edits share the same router: same rate limit, same requireJwt.
+  const { createAdminMediaRoutes, mountAdminMediaRoutes } = await import('./admin-media-routes.js');
+  mountAdminMediaRoutes(adminRouter, createAdminMediaRoutes({
+    canAdminEvent,
+    serviceClient: serviceSupabase,
+    logger,
+  }));
+
+  // Turning a photograph that came in on its side.
+  const { createRotateMedia, mountRotateMedia } = await import('./rotate-media.js');
+  mountRotateMedia(adminRouter, createRotateMedia({
+    canAdminEvent,
+    serviceClient: serviceSupabase,
+    media,
+    logger,
+  }));
+
+  // Improving a photograph without redrawing it.
+  const { createEnhanceMedia, mountEnhanceMedia } = await import('./enhance-media.js');
+  const { runEnhanceVerdict } = await import('../lib/fal-models.js');
+  mountEnhanceMedia(adminRouter, createEnhanceMedia({
+    canAdminEvent,
+    serviceClient: serviceSupabase,
+    media,
+    runVerdict: runEnhanceVerdict,
+    logger,
+  }));
+
+  // Relighting a photograph with a model: the other half of "improve",
+  // kept apart because it can invent what the standard one cannot.
+  const { createAiEnhanceMedia, mountAiEnhanceMedia } = await import('./ai-enhance-media.js');
+  mountAiEnhanceMedia(adminRouter, createAiEnhanceMedia({
+    canAdminEvent,
+    serviceClient: serviceSupabase,
+    media,
+    logger,
+  }));
+
+  // What a photograph needs before a lens can be put in front of it.
+  const { createFocusMedia, mountFocusMedia } = await import('./focus-media.js');
+  const { runDepth, runCutout } = await import('../lib/fal-models.js');
+  mountFocusMedia(adminRouter, createFocusMedia({
+    canAdminEvent,
+    serviceClient: serviceSupabase,
+    media,
+    runDepth,
+    runCutout,
+    logger,
+  }));
+
+  // Where the faces are, for framing and covers. Boxes only -- the
+  // detector runs in the organiser's browser and this takes numbers.
+  const { createFaceDetect, mountFaceDetect } = await import('./face-detect.js');
+  mountFaceDetect(adminRouter, createFaceDetect({
+    canAdminEvent,
+    serviceClient: serviceSupabase,
+    media,
+    logger,
+  }));
+
+  // Somewhere for the browser to put a file it has made for a photo.
+  const { createMediaUploadUrl, mountMediaUploadUrl } = await import('./media-upload-url.js');
+  mountMediaUploadUrl(adminRouter, createMediaUploadUrl({
+    canAdminEvent,
+    serviceClient: serviceSupabase,
+    media,
+    logger,
+  }));
+
   app.use('/api/admin', adminRouter);
 
   void context;

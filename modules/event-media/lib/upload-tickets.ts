@@ -28,6 +28,24 @@ export interface UploadTicketPayload {
   guest_name: string;
   client_id: string;
   captured: boolean;
+  /**
+   * Delivered through a photographer's link. Set by the server from the
+   * link, never by the uploader: it puts the file in the photographer's
+   * album and credits it to them.
+   */
+  photographer?: boolean;
+  /** Which of the morning's asks this photo answers (ready-prompts.ts). */
+  prompt?: string | null;
+  /** When it was taken, from its EXIF; picks the album. */
+  taken_at?: string | null;
+  /** The invitation guest who uploaded, when the event has a guest list. */
+  member_id?: string | null;
+  /**
+   * Where mint sent the file (host-media migration 016), when it is not
+   * the default Supabase bucket. Absent on tickets minted before this.
+   */
+  storage_provider?: string;
+  storage_bucket?: string;
   exp: number; // unix seconds
 }
 
@@ -105,6 +123,15 @@ export function verifyTicket(
     typeof payload.client_id !== 'string' ||
     typeof payload.captured !== 'boolean' ||
     typeof payload.exp !== 'number'
+  ) {
+    return { ok: false, error: 'invalid_ticket' };
+  }
+
+  // Signed, so these are ours -- but a ticket names where the server will
+  // read and delete, so their shape is checked as well.
+  if (
+    (payload.storage_provider !== undefined && (typeof payload.storage_provider !== 'string' || !/^[a-z0-9][a-z0-9-]{0,30}$/.test(payload.storage_provider))) ||
+    (payload.storage_bucket !== undefined && (typeof payload.storage_bucket !== 'string' || !/^[a-z0-9][a-z0-9.-]{1,61}[a-z0-9]$/.test(payload.storage_bucket)))
   ) {
     return { ok: false, error: 'invalid_ticket' };
   }

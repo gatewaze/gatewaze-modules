@@ -1,0 +1,78 @@
+/**
+ * Which picture a tile shows.
+ *
+ * A photograph in the gallery can be up to three things: the photograph
+ * as it was taken, the enhanced copy of it, and -- for a picture made
+ * from one -- the selfie somebody actually took before anything was made
+ * of it.
+ * The album decides which is shown by default, and a viewer can switch
+ * while looking at one (asked 2026-09-28).
+ *
+ * X-ray wins over enhanced: a selfie is the thing behind the picture, and
+ * there is no enhanced copy of it to choose between.
+ */
+
+export interface FaceItem {
+  url: string
+  variants?: Record<string, string> | null
+  /** The selfie a picture was made from, where one was kept. */
+  selfie?: string | null
+  /** url and variants are the enhanced copy. */
+  enhanced?: boolean
+  /** The photograph as it was taken, where an enhanced one is shown. */
+  original?: { url: string; thumb?: string; medium?: string } | null
+  /** The selfie as it was taken, where an enhanced one is being shown. */
+  selfieOriginal?: string | null
+}
+
+export interface FaceChoice {
+  /** Show the selfie behind a made picture. */
+  xray?: boolean
+  /** Show the enhanced copy rather than the photograph as it was taken. */
+  enhanced?: boolean
+}
+
+/** The same object asked for at a width, which the CDN resizes. */
+export function sized(url: string, width: number): string {
+  return url.includes('?') ? url : `${url}?width=${width}&quality=80`
+}
+
+/** Anything under this asks for the thumbnail rather than the preview. */
+const SMALL = 400
+
+/**
+ * The same face as `faceOf`, at the size it was stored.
+ *
+ * `faceOf` answers "what goes in this tile", so it hands back a thumbnail
+ * or a CDN resize. Saving a photograph is the other question: a guest
+ * keeping a picture of themselves wants the picture, not the 800px copy
+ * the page happened to be showing. So this picks the same face by the
+ * same rules and skips the sizing.
+ *
+ * It mirrors `faceOf` deliberately, switch for switch. If one grows a
+ * case the other needs it too, which is what the tests pin.
+ */
+export function fullFaceOf(item: FaceItem, choice: FaceChoice = {}): string {
+  if (choice.xray && item.selfie) {
+    return choice.enhanced === false && item.selfieOriginal ? item.selfieOriginal : item.selfie
+  }
+  if (choice.enhanced === false && item.original) return item.original.url
+  return item.url
+}
+
+export function faceOf(item: FaceItem, width: number, choice: FaceChoice = {}): string {
+  // A selfie has an enhanced copy of its own -- selfies are often taken
+  // in very dark rooms -- so the same switch applies to it.
+  if (choice.xray && item.selfie) {
+    const which = choice.enhanced === false && item.selfieOriginal ? item.selfieOriginal : item.selfie
+    return sized(which, width)
+  }
+
+  const small = width <= SMALL
+  if (choice.enhanced === false && item.original) {
+    const from = item.original
+    return (small ? from.thumb : from.medium) || from.url
+  }
+  const v = item.variants ?? {}
+  return (small ? v['thumb'] : v['medium']) || item.url
+}

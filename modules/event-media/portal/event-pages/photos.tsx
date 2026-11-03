@@ -19,10 +19,16 @@
  * Per spec-event-media-guest-uploads §6.2.
  */
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { Suspense, useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { createPortal } from 'react-dom'
 import { useSearchParams } from 'next/navigation'
 import DisplayView from './_components/DisplayView'
+import AlbumGallery from './_components/AlbumGallery'
+import PhotographerUpload from './_components/PhotographerUpload'
+import GuestPicker from './_components/GuestPicker'
+import UploadApp, { type UploadTile } from './_components/UploadApp'
+import { takenAtOf } from './_components/_lib/taken-at'
+import { uploadCodeOf } from './_components/_lib/visit-code'
 
 // Same-origin ALWAYS: the portal proxies /api/public/* to the api
 // service (next.config rewrites). NEXT_PUBLIC_API_URL is unreliable in
@@ -30,12 +36,27 @@ import DisplayView from './_components/DisplayView'
 // a phone can't resolve (found live on autodb 2026-09-19).
 const API_BASE = ''
 const MINT_BATCH = 20
+/**
+ * How long an upload waits on the EXIF read before going without it.
+ * Reading it is a slice of the file's first 128KB, so this is a ceiling
+ * for a phone that has the file somewhere slow (iCloud, a memory card),
+ * not a delay anyone should notice.
+ */
+const EXIF_WAIT_MS = 4000
+
 const CONCURRENCY = 3
 const GALLERY_PAGE = 50
-const GALLERY_REFRESH_MS = 30_000
+// Everyone's photos refresh while the guest is looking at them.
+const GALLERY_REFRESH_MS = 8_000
 
 interface Props {
   eventIdentifier: string
+  /**
+   * What the address asked for after the page's own name: the album in
+   * /photos/getting-ready (asked 2026-09-28). Given as the portal found
+   * it; the gallery decides what it means and 404s what it cannot match.
+   */
+  subPath?: string[]
   primaryColor: string
   brandName: string
   darkMode?: boolean
@@ -45,12 +66,20 @@ interface LinkInfo {
   event: { identifier: string | null; slug: string | null; event_id?: string | null; name: string | null }
   settings: {
     require_name: boolean
+    /** Guests choose their name from the invitation list. */
+    guest_list?: boolean
     allow_video: boolean
     show_gallery: boolean
     max_photo_bytes: number
     max_video_bytes: number
   }
   logo_url: string | null
+  /** The morning before the event (lib/ready-prompts.ts). */
+  ready?: {
+    active: boolean
+    starts_at: string | null
+    prompts: Array<{ id: string; label: string; blurb: string; camera: 'user' | 'environment' }>
+  } | null
 }
 
 interface GalleryItem {
@@ -72,6 +101,25 @@ type QueueStatus = 'waiting' | 'uploading' | 'processing' | 'done' | 'failed'
 interface QueueItem {
   key: string
   file: File
+  /** When the photograph was taken, read from its own EXIF. */
+  takenAt?: string | null
+  /**
+   * True until the EXIF read has been tried. The upload waits for it:
+   * takenAt decides the album, and the mint request used to win the race
+   * -- 686 photographs were filed by the clock with no capture time
+   * recorded at all (found 2026-09-27).
+   */
+  exifPending?: boolean
+  /** Which of the morning's asks this answers (lib/ready-prompts.ts). */
+  prompt?: string | null
+  /** Told the upload's id once minted, so it can be removed later. */
+  onMediaId?: (mediaId: string) => void
+  /** Local preview while it uploads (object URL). */
+  preview?: string
+  /** The server's id for it, once minted. */
+  mediaId?: string
+  /** The guest removed it mid-upload: delete it the moment it lands. */
+  discard?: boolean
   status: QueueStatus
   progress: number
   error?: string
@@ -90,11 +138,44 @@ function effectiveMime(file: File): string {
   return map[ext] ?? ''
 }
 
-function putWithProgress(url: string, file: File, mime: string, onProgress: (pct: number) => void): Promise<void> {
+/**
+ * This phone's id, kept for the event whoever the guest says they are:
+ * the name a phone holds is tied to it, so switching names and back must
+ * not mint a new one.
+ */
+function deviceIdFor(eventIdentifier: string): string {
+  const key = `event_media_device:${eventIdentifier}`
+  const fresh = () => (typeof crypto !== 'undefined' && crypto.randomUUID
+    ? crypto.randomUUID()
+    : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+      const r = (Math.random() * 16) | 0
+      return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16)
+    }))
+  try {
+    let id = localStorage.getItem(key)
+    if (!id || !/^[0-9a-f-]{36}$/i.test(id)) {
+      // An older phone already has an id inside its saved guest.
+      const saved = JSON.parse(localStorage.getItem(`event_media_guest:${eventIdentifier}`) || 'null')
+      id = saved && typeof saved.client_id === 'string' ? saved.client_id : fresh()
+      localStorage.setItem(key, id!)
+    }
+    return id!
+  } catch {
+    return fresh()
+  }
+}
+
+function putWithProgress(url: string, file: File, mime: string, onProgress: (pct: number) => void, headers?: Record<string, string>): Promise<void> {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest()
     xhr.open('PUT', url)
-    if (mime) xhr.setRequestHeader('Content-Type', mime)
+    // The headers the server minted the upload with, exactly: some stores
+    // sign them. Older servers send none, and the type alone is enough.
+    if (headers && Object.keys(headers).length) {
+      for (const [k, v] of Object.entries(headers)) xhr.setRequestHeader(k, v)
+    } else if (mime) {
+      xhr.setRequestHeader('Content-Type', mime)
+    }
     xhr.upload.onprogress = (e) => {
       if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100))
     }
@@ -107,8 +188,49 @@ function putWithProgress(url: string, file: File, mime: string, onProgress: (pct
   })
 }
 
-export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMode }: Props) {
+/**
+ * What a phone shows before the page's own code has run: a full-screen
+ * cover in the upload screen's colours, so the event page underneath
+ * does not flash up first. It is the Suspense fallback, which the server
+ * renders into the HTML -- the page itself reads the URL, so it can only
+ * render in the browser. Phones only: a desktop visitor to the photos tab
+ * without an upload code should just see the event page.
+ */
+const COVER_CSS = `
+.em-cover{display:none}
+@media (max-width:767px){.em-cover{display:flex;position:fixed;inset:0;z-index:60;align-items:center;justify-content:center;
+  background:radial-gradient(120% 80% at 50% -10%,#2a2140 0%,#141019 55%,#0b0a0f 100%)}}
+.em-cover i{width:34px;height:34px;border-radius:50%;border:3px solid rgba(255,255,255,.2);border-top-color:rgba(255,255,255,.85);
+  animation:em-spin 900ms linear infinite}
+@keyframes em-spin{to{transform:rotate(360deg)}}
+@media (prefers-reduced-motion:reduce){.em-cover i{animation:none}}
+`
+
+function PhotosCover() {
+  return (
+    <div className="em-cover" aria-busy="true" aria-label="Loading">
+      <style>{COVER_CSS}</style>
+      <i />
+    </div>
+  )
+}
+
+export default function GuestPhotosPage(props: Props) {
+  return (
+    <Suspense fallback={<PhotosCover />}>
+      <GuestPhotosInner {...props} />
+    </Suspense>
+  )
+}
+
+function GuestPhotosInner({ eventIdentifier, primaryColor, darkMode, subPath }: Props) {
   const searchParams = useSearchParams()
+  // The upload code on the address, and nothing else. Read fresh on
+  // every render rather than latched: a latch outlived the address that
+  // set it, so a guest who arrived with ?u= and then followed any link
+  // back to /photos stayed in the app at an address that no longer had
+  // a code. See _components/_lib/visit-code.ts.
+  const urlCode = uploadCodeOf(searchParams.toString())
 
   const codeKey = `event_media_upload_code:${eventIdentifier}`
   const guestKey = `event_media_guest:${eventIdentifier}`
@@ -116,8 +238,12 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
   const [code, setCode] = useState<string | null>(null)
   const [link, setLink] = useState<LinkInfo | null>(null)
   const [loading, setLoading] = useState(true)
-  const [guest, setGuest] = useState<{ name: string; client_id: string } | null>(null)
+  // member_id: the invitation guest they chose, on an event with a list.
+  const [guest, setGuest] = useState<{ name: string; client_id: string; member_id?: string | null } | null>(null)
   const [nameInput, setNameInput] = useState('')
+  // Said plainly when the server turns this guest away, rather than a row
+  // of "retry" links that can never succeed.
+  const [uploadNotice, setUploadNotice] = useState<string | null>(null)
 
   const [queue, setQueue] = useState<QueueItem[]>([])
   const queueRef = useRef<QueueItem[]>([])
@@ -143,7 +269,6 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
   const [mineLoading, setMineLoading] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
-
   const fileInputRef = useRef<HTMLInputElement | null>(null)
   const cameraInputRef = useRef<HTMLInputElement | null>(null)
 
@@ -182,6 +307,10 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
     for (const el of Array.from(document.body.children)) {
       if (!(el instanceof HTMLElement)) continue
       if (el === node || el.contains(node)) continue
+      // Our own other full-screen layers (the slideshow player) are body
+      // children too, and hiding them hid them on every phone (harness,
+      // 2026-09-21).
+      if (el.dataset.eventMediaOverlay !== undefined) continue
       const cs = getComputedStyle(el)
       const decorative = cs.position === 'fixed' && cs.pointerEvents === 'none'
       if (decorative) continue
@@ -199,10 +328,12 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
   // ── Code + guest bootstrap ────────────────────────────────────────
 
   useEffect(() => {
-    const fromUrl = searchParams.get('u')
+    // The same reading of the address the render uses, so the state and
+    // the screen can never disagree about what counts as a code.
+    const fromUrl = uploadCodeOf(searchParams.toString())
     let candidate: string | null = null
     try {
-      if (fromUrl && /^[a-z0-9]{6,16}$/.test(fromUrl)) {
+      if (fromUrl) {
         localStorage.setItem(codeKey, fromUrl)
         candidate = fromUrl
       } else {
@@ -274,12 +405,40 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
     }
   }, [code])
 
+  /**
+   * Everyone's photos, live: every few seconds the newest page is read
+   * and anything new goes on the front. Pages already loaded with "Show
+   * more" stay put, and a photo that has been removed drops out.
+   */
+  const refreshGallery = useCallback(async () => {
+    if (!code) return
+    try {
+      const res = await fetch(`${API_BASE}/api/public/event-media/links/${code}/media?${new URLSearchParams({ limit: String(GALLERY_PAGE) })}`)
+      if (!res.ok) return
+      const data = await res.json()
+      const fresh = (data.items ?? []) as GalleryItem[]
+      setItems((prev) => {
+        const freshIds = new Set(fresh.map((i) => i.id))
+        const oldest = fresh[fresh.length - 1]?.created_at
+        // Within the span the page covers, the page is the truth.
+        const older = prev.filter((i) => !freshIds.has(i.id) && oldest !== undefined && i.created_at < oldest)
+        const next = [...fresh, ...older]
+        const same = next.length === prev.length && next.every((i, k) => i.id === prev[k]?.id)
+        return same ? prev : next
+      })
+      setNextCursor((c) => c ?? data.next_cursor ?? null)
+    } catch {
+      // the next tick tries again
+    }
+  }, [code])
+
   useEffect(() => {
     if (!link?.settings.show_gallery) return
     loadGallery()
-    const interval = setInterval(() => loadGallery(), GALLERY_REFRESH_MS)
+    const interval = setInterval(() => void refreshGallery(), GALLERY_REFRESH_MS)
     return () => clearInterval(interval)
-  }, [link, loadGallery])
+  }, [link, loadGallery, refreshGallery])
+
 
   // ── "Yours": the guest's own uploads ──────────────────────────────
 
@@ -290,7 +449,8 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
       const res = await fetch(`${API_BASE}/api/public/event-media/links/${code}/mine`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ client_id: guest.client_id }),
+        // With a guest list, the guest's photos -- whichever phone sent them.
+        body: JSON.stringify({ client_id: guest.client_id, ...(guest.member_id ? { member_id: guest.member_id } : {}) }),
       })
       if (!res.ok) return
       const data = await res.json()
@@ -305,6 +465,28 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
   useEffect(() => {
     if (tab === 'mine') void loadMine()
   }, [tab, loadMine])
+
+  /**
+   * Remove one of this device's uploads from the event -- the big screen
+   * and the gallery included. The server only lets a device remove what
+   * it uploaded itself (same check as "Yours").
+   */
+  const removeUpload = useCallback(async (id: string): Promise<boolean> => {
+    if (!code || !guest) return false
+    try {
+      const res = await fetch(`${API_BASE}/api/public/event-media/links/${code}/mine/delete`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_id: guest.client_id, media_id: id }),
+      })
+      if (!res.ok) return false
+      setMine((prev) => prev.filter((i) => i.id !== id))
+      setItems((prev) => prev.filter((i) => i.id !== id))
+      return true
+    } catch {
+      return false
+    }
+  }, [code, guest])
 
   const deleteMine = useCallback(async (id: string) => {
     if (!code || !guest) return
@@ -329,6 +511,20 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
       setConfirmDelete(null)
     }
   }, [code, guest])
+
+  // The guest's own uploads, as soon as we know who they are.
+  useEffect(() => {
+    if (guest) void loadMine()
+  }, [guest, loadMine])
+
+  /** The server no longer accepts this name: ask again. */
+  const forgetGuest = useCallback(() => {
+    setGuest((g) => (g ? { ...g, member_id: null } : g))
+    try {
+      const raw = localStorage.getItem(guestKey)
+      if (raw) localStorage.setItem(guestKey, JSON.stringify({ ...JSON.parse(raw), member_id: null }))
+    } catch { /* ignore */ }
+  }, [guestKey])
 
   // ── Upload queue ──────────────────────────────────────────────────
 
@@ -374,7 +570,8 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
             }
           })
           loadGallery() // fresh uploads appear immediately
-          if (tabRef.current === 'mine') void loadMine()
+          // Always: "Your photos" is the main view of the upload screen.
+          void loadMine()
         } else {
           // put them back; the timer retries (complete is idempotent)
           pendingTicketsRef.current = [...batch, ...pendingTicketsRef.current]
@@ -399,10 +596,10 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
   // One mint call covers up to MINT_BATCH files (the per-client mint
   // rate limit is 20/min — minting per-file would lock a 100-photo
   // batch out). PUTs then run with bounded concurrency.
-  const putMinted = useCallback(async (item: QueueItem, minted: { upload_url: string; ticket: string }) => {
+  const putMinted = useCallback(async (item: QueueItem, minted: { upload_url: string; ticket: string; upload_headers?: Record<string, string> }) => {
     const mime = effectiveMime(item.file)
     try {
-      await putWithProgress(minted.upload_url, item.file, mime, (pct) => patchItem(item.key, { progress: pct }))
+      await putWithProgress(minted.upload_url, item.file, mime, (pct) => patchItem(item.key, { progress: pct }), minted.upload_headers)
       // "finishing…" until the complete call confirms the row exists —
       // flushCompletes flips it to done/failed per the server's answer.
       patchItem(item.key, { status: 'processing', progress: 100 })
@@ -418,7 +615,9 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
     pumpingRef.current = true
     try {
       for (;;) {
-        const batch = queueRef.current.filter((q) => q.status === 'waiting').slice(0, MINT_BATCH)
+        const batch = queueRef.current
+          .filter((q) => q.status === 'waiting' && !q.exifPending)
+          .slice(0, MINT_BATCH)
         if (batch.length === 0) break
         if (!code || !guest) break
 
@@ -430,12 +629,18 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
               guest_name: guest.name,
+              member_id: guest.member_id ?? null,
               client_id: guest.client_id,
               files: batch.map((q) => ({
                 filename: q.file.name || 'photo.jpg',
                 mime_type: effectiveMime(q.file),
                 bytes: q.file.size,
                 captured: q.key.startsWith('cam-'),
+                prompt: q.prompt ?? null,
+                // Decides the album: a photograph taken while getting
+                // ready belongs under Getting ready even if it is
+                // uploaded days later.
+                taken_at: q.takenAt ?? null,
               })),
             }),
           })
@@ -444,19 +649,30 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
           mintData = null
         }
         if (!mintData?.items) {
-          batch.forEach((q) => patchItem(q.key, { status: 'failed', error: 'could not start upload' }))
+          const why = (mintData as { error?: string; message?: string } | null)
+          // Not on the list (any more): back to "Who are you?".
+          if (why?.error === 'guest_required' || why?.error === 'name_taken') forgetGuest()
+          if (why?.error === 'guest_blocked') setUploadNotice('Uploads are paused for you — please speak to the hosts.')
+          batch.forEach((q) => patchItem(q.key, { status: 'failed', error: why?.message ?? 'could not start upload' }))
+          // Nothing else in the queue can succeed until that changes.
+          if (why?.error === 'guest_required' || why?.error === 'guest_blocked' || why?.error === 'name_taken') break
           continue
         }
 
         // Mint results come back in request order.
         const jobs: Array<() => Promise<void>> = []
         batch.forEach((q, i) => {
-          const minted = mintData!.items![i] as { status?: string; message?: string; upload_url?: string; ticket?: string } | undefined
+          const minted = mintData!.items![i] as { status?: string; message?: string; upload_url?: string; ticket?: string; upload_headers?: Record<string, string> } | undefined
           if (!minted || minted.status !== 'ready' || !minted.upload_url || !minted.ticket) {
             patchItem(q.key, { status: 'failed', error: minted?.message ?? 'could not start upload' })
             return
           }
-          jobs.push(() => putMinted(q, { upload_url: minted.upload_url!, ticket: minted.ticket! }))
+          const mediaId = (minted as { media_id?: unknown }).media_id
+          if (typeof mediaId === 'string') {
+            q.onMediaId?.(mediaId)
+            patchItem(q.key, { mediaId })
+          }
+          jobs.push(() => putMinted(q, { upload_url: minted.upload_url!, ticket: minted.ticket!, upload_headers: minted.upload_headers }))
         })
 
         // Bounded-concurrency pool over this batch's PUTs.
@@ -474,25 +690,91 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
     } finally {
       pumpingRef.current = false
     }
-  }, [code, guest, patchItem, putMinted, flushCompletes])
+  }, [code, guest, patchItem, putMinted, flushCompletes, forgetGuest])
 
-  const enqueueFiles = useCallback((files: FileList | null, camera: boolean) => {
+  const enqueueFiles = useCallback((
+    files: FileList | null,
+    camera: boolean,
+    onMediaId?: (mediaId: string) => void,
+    prompt?: string | null,
+  ) => {
     if (!files || files.length === 0) return
     const stamp = Date.now()
     const fresh: QueueItem[] = Array.from(files).map((file, i) => ({
       key: `${camera ? 'cam' : 'pick'}-${stamp}-${i}-${file.name}`,
       file,
+      prompt: prompt ?? null,
+      onMediaId,
+      preview: (() => { try { return URL.createObjectURL(file) } catch { return undefined } })(),
       status: 'waiting',
+      exifPending: true,
       progress: 0,
     }))
     setQueueSafe((prev) => [...prev, ...fresh])
+    // Each photograph waits for its own capture time and no longer: the
+    // read is a 128KB slice of the file, and a file that will not give
+    // one up goes anyway, filed by the clock as before.
+    for (const item of fresh) {
+      void (async () => {
+        const takenAt = await Promise.race([
+          takenAtOf(item.file).catch(() => null),
+          new Promise<null>((resolve) => { setTimeout(() => resolve(null), EXIF_WAIT_MS) }),
+        ])
+        setQueueSafe((prev) => prev.map((q) => (
+          q.key === item.key ? { ...q, takenAt, exifPending: false } : q
+        )))
+        void pumpQueue()
+      })()
+    }
+    // Anything already waiting can go now.
     void pumpQueue()
   }, [setQueueSafe, pumpQueue])
+
+  /** Remove a tile from "Your photos": cancel, or delete from the event. */
+  const removeTile = useCallback(async (t: UploadTile) => {
+    const q = queueRef.current.find((x) => x.key === t.key)
+    if (q) {
+      if (q.status === 'waiting' || q.status === 'failed') {
+        if (q.preview) URL.revokeObjectURL(q.preview)
+        setQueueSafe((prev) => prev.filter((x) => x.key !== q.key))
+        return
+      }
+      if (q.status !== 'done') {
+        // Mid-flight: hidden now, deleted the moment it lands.
+        setQueueSafe((prev) => prev.map((x) => (x.key === q.key ? { ...x, discard: true } : x)))
+        return
+      }
+    }
+    const id = t.mediaId
+    if (id && (await removeUpload(id))) {
+      setQueueSafe((prev) => prev.filter((x) => x.mediaId !== id))
+    }
+  }, [removeUpload, setQueueSafe])
+
+  // Removed mid-upload: once it has landed, take it straight back out.
+  useEffect(() => {
+    for (const q of queue) {
+      if (!q.discard) continue
+      if (q.status === 'failed') {
+        setQueueSafe((prev) => prev.filter((x) => x.key !== q.key))
+      } else if (q.status === 'done' && q.mediaId) {
+        const id = q.mediaId
+        setQueueSafe((prev) => prev.filter((x) => x.key !== q.key))
+        void removeUpload(id)
+      }
+    }
+  }, [queue, removeUpload, setQueueSafe])
 
   const retryItem = useCallback((key: string) => {
     patchItem(key, { status: 'waiting', progress: 0, error: undefined })
     void pumpQueue()
   }, [patchItem, pumpQueue])
+
+  // A photo from the camera uploads like any other.
+  const onCameraShot = useCallback(async (files: FileList | null) => {
+    if (!files?.[0]) return
+    enqueueFiles(files, true)
+  }, [enqueueFiles])
 
   // Safety net: retry stranded completion tickets (a failed flush keeps
   // them pending; complete is idempotent so re-sending is safe), and
@@ -523,21 +805,88 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
   const saveName = useCallback(() => {
     const name = nameInput.trim().slice(0, 80)
     if (!name) return
-    // The server requires a UUID client_id — keep the fallback (old
-    // WebViews without crypto.randomUUID) UUID-shaped.
-    const fallbackUuid = () =>
-      'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
-        const r = (Math.random() * 16) | 0
-        const v = c === 'x' ? r : (r & 0x3) | 0x8
-        return v.toString(16)
-      })
     const next = {
       name,
-      client_id: guest?.client_id ?? (typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : fallbackUuid()),
+      // This phone's own id, the same whatever name it gives.
+      client_id: deviceIdFor(eventIdentifier),
     }
     setGuest(next)
     try { localStorage.setItem(guestKey, JSON.stringify(next)) } catch { /* private mode */ }
-  }, [nameInput, guest, guestKey])
+  }, [nameInput, eventIdentifier, guestKey])
+
+  /** A name chosen from the invitation list. */
+  /**
+   * A name chosen from the invitation list -- claimed for this phone on
+   * the server, so nobody else can choose it. Resolves to an error message
+   * for the picker to show, or null once it is theirs.
+   */
+  const pickGuest = useCallback(async (g: { id: string; name: string }): Promise<string | null> => {
+    if (!code) return 'Something went wrong — try again.'
+    const clientId = deviceIdFor(eventIdentifier)
+    try {
+      const res = await fetch(`${API_BASE}/api/public/event-media/links/${code}/guests/claim`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_id: clientId, member_id: g.id }),
+      })
+      const body = await res.json().catch(() => null)
+      if (res.status === 409) return `${g.name} has already been chosen on another phone. If that's you, please ask the hosts.`
+      if (res.status === 403) return 'Uploads are paused for this guest — please speak to the hosts.'
+      if (!res.ok) return body?.message ?? 'Could not choose that name — try again.'
+    } catch {
+      return 'No connection — try again in a moment.'
+    }
+    const next = { name: g.name, member_id: g.id, client_id: clientId }
+    setGuest(next)
+    try { localStorage.setItem(guestKey, JSON.stringify(next)) } catch { /* private mode */ }
+    return null
+  }, [code, eventIdentifier, guestKey])
+
+  /** "Not you?": let the name go, so its real owner can choose it. */
+  const notMe = useCallback(() => {
+    const was = guest
+    if (code && was?.member_id) {
+      void fetch(`${API_BASE}/api/public/event-media/links/${code}/guests/release`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_id: was.client_id, member_id: was.member_id }),
+      }).catch(() => { /* the organiser can release it */ })
+    }
+    setGuest(null)
+    setMine([])
+    setNameInput('')
+    try { localStorage.removeItem(guestKey) } catch { /* ignore */ }
+  }, [code, guest, guestKey])
+
+  /**
+   * The morning before the event: a countdown and a handful of things to
+   * photograph. The asks answered on this phone are remembered so they
+   * can be ticked off (and so the list keeps moving through the day).
+   */
+  const readyPayload = link?.ready?.active ? link.ready : null
+  const [readyTick, setReadyTick] = useState(() => Date.now())
+  useEffect(() => {
+    if (!readyPayload) return
+    const t = setInterval(() => setReadyTick(Date.now()), 30_000)
+    return () => clearInterval(t)
+  }, [readyPayload])
+  const readyProps = (() => {
+    if (!readyPayload?.starts_at) return null
+    const left = Date.parse(readyPayload.starts_at) - readyTick
+    if (!Number.isFinite(left) || left <= 0) return null
+    const hours = Math.floor(left / 3_600_000)
+    const mins = Math.floor((left % 3_600_000) / 60_000)
+    const countdown = hours >= 1
+      ? `${hours} hour${hours === 1 ? '' : 's'} ${mins} min to go`
+      : `${mins} minute${mins === 1 ? '' : 's'} to go`
+    return { countdown }
+  })()
+
+  /** A selfie taken on the spot while getting ready. */
+  const onSelfie = useCallback((files: FileList) => {
+    setUploadNotice(null)
+    enqueueFiles(files, true)
+  }, [enqueueFiles])
 
   // ── Render ────────────────────────────────────────────────────────
 
@@ -545,23 +894,72 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
   const subText = darkMode ? 'text-gray-300' : 'text-gray-600'
   const cardBg = darkMode ? 'bg-white/10' : 'bg-white'
 
+  // Nobody scanned anything: the albums, and nothing asked of them.
+  //
+  // The upload app and the projector both belong to a visit
+  // that arrived with a code on the address (asked 2026-09-27). A code
+  // this phone stored on a previous visit is not enough -- it used to
+  // be, which is why opening /photos asked who you were and then showed
+  // an empty screen. First of the early returns, so nothing else on the
+  // page can let a visitor past it on a stored code.
+  if (!urlCode) {
+    return (
+      <AlbumGallery
+        eventIdentifier={eventIdentifier}
+        darkMode={darkMode}
+        primaryColor={primaryColor}
+        // The address first -- /photos/getting-ready -- then the query,
+        // which is what a link written before the paths existed carries.
+        initialAlbum={subPath?.[0] ?? searchParams.get('album')}
+        pathAlbum={subPath?.[0] ?? null}
+        initialPhoto={searchParams.get('photo')}
+      />
+    )
+  }
+
+  // A photographer's link opens a delivery, not a party: no gallery,
+  // nobody to be. Ahead of everything else a link can mean.
+  if (link?.settings?.role === 'photographer' && code) {
+    return (
+      <PhotographerUpload
+        code={code}
+        credit={link.settings.credit ?? null}
+        allowVideo={Boolean(link.settings.allow_video)}
+        eventName={link.event?.name ?? null}
+        darkMode={darkMode}
+      />
+    )
+  }
+
   // Projector mode: ?display=1 swaps the whole tab for the full-bleed
   // display view (renders position:fixed above the event chrome). This
   // is the reachable home for the projector — module portal pages are
-  // nav-visibility-gated and event-media has no nav entry.
+  // nav-visibility-gated and event-media has no nav entry. The address
+  // the organiser is given carries the code as well, so this is only
+  // reached from ?u=<code>&display=1.
   if (searchParams.get('display') === '1' && code) {
     return <DisplayView code={code} />
   }
 
   if (loading) {
-    return <div className={`p-8 text-center ${subText}`}>Loading…</div>
+    // There is a code on the address, so keep covering the event page
+    // until the screen is ready. The address, not the `code` state:
+    // state is only filled in after the first render, and the first
+    // render is the one the server sends -- it is the render that has
+    // to do the covering.
+    return <PhotosCover />
   }
 
   const canUpload = Boolean(code && link)
   canUploadRef.current = canUpload
-  const needsName = canUpload && link!.settings.require_name && !guest
+  // With an invitation list the name must come from it; a name typed on
+  // this device before the list existed does not count.
+  const needsName = canUpload && (link!.settings.guest_list
+    ? !guest?.member_id
+    : link!.settings.require_name && !guest)
   const activeCount = queue.filter((q) => q.status === 'waiting' || q.status === 'uploading' || q.status === 'processing').length
   const failedItems = queue.filter((q) => q.status === 'failed')
+
 
   // On phones, a guest with an upload code gets a full-viewport
   // takeover — the event hero eats half the screen otherwise and this
@@ -584,7 +982,13 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
         <div className={`${cardBg} rounded-2xl shadow p-5 mb-6`}>
           {needsName ? (
             <div>
-              <h2 className={`text-lg font-semibold mb-1 ${text}`}>Add your photos</h2>
+              <h2 className={`text-lg font-semibold mb-1 ${text}`}>
+                {link!.settings.guest_list ? 'Who are you?' : 'Add your photos'}
+              </h2>
+              {link!.settings.guest_list ? (
+                <GuestPicker code={code!} darkMode={darkMode} onPick={pickGuest} />
+              ) : (
+              <>
               <p className={`text-sm mb-3 ${subText}`}>Tell us your name once — it&apos;s remembered on this device.</p>
               <div className="flex gap-2">
                 <input
@@ -605,6 +1009,8 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
                   That&apos;s me
                 </button>
               </div>
+              </>
+              )}
             </div>
           ) : (
             <div>
@@ -627,6 +1033,9 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
                   <span className={`text-sm ${subText}`}>{activeCount} uploading…</span>
                 )}
               </div>
+              {uploadNotice && (
+                <p role="alert" className="mb-3 rounded-lg bg-amber-100 text-amber-900 text-sm px-3 py-2">{uploadNotice}</p>
+              )}
               <div className="flex flex-wrap gap-2">
                 <button
                   onClick={() => cameraInputRef.current?.click()}
@@ -653,7 +1062,7 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
                 accept="image/*"
                 capture="environment"
                 className="hidden"
-                onChange={(e) => { enqueueFiles(e.target.files, true); e.target.value = '' }}
+                onChange={(e) => { onCameraShot(e.target.files); e.target.value = '' }}
               />
               <input
                 ref={fileInputRef}
@@ -885,8 +1294,94 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
     </div>
   )
 
+  // ── The event-photos screen (UploadApp) ─────────────────────────
+  // "Your photos": what is uploading now, then what the server has.
+  const mineIds = new Set(mine.map((m) => m.id))
+  const uploadTiles: UploadTile[] = [
+    ...queue
+      .filter((q) => !q.discard && !(q.mediaId && mineIds.has(q.mediaId)))
+      .slice()
+      .reverse()
+      .map((q) => ({
+        key: q.key,
+        src: q.preview ?? '',
+        isVideo: effectiveMime(q.file).startsWith('video/'),
+        state: q.status,
+        progress: q.progress,
+        error: q.error,
+        mediaId: q.mediaId ?? null,
+      })),
+    ...mine
+      .map((m) => ({
+        key: m.id,
+        src: m.variants?.thumb || m.url,
+        full: m.variants?.medium || m.url,
+        isVideo: m.kind === 'video',
+        state: (m.pending ? 'pending' : 'done') as UploadTile['state'],
+        progress: 100,
+        mediaId: m.id,
+      })),
+  ]
+
+  const nameStep = needsName ? (
+    <div>
+      <p className="ua-h1" style={{ fontSize: 26 }}>{link!.settings.guest_list ? 'Who are you?' : 'Add your photos'}</p>
+      <p className="ua-sub" style={{ marginBottom: 12 }}>
+        {link!.settings.guest_list
+          ? 'Find your name so your photos are yours.'
+          : 'Tell us your name once — it’s remembered on this device.'}
+      </p>
+      {link!.settings.guest_list ? (
+        <GuestPicker code={code!} darkMode clientId={deviceIdFor(eventIdentifier)} onPick={pickGuest} />
+      ) : (
+        <div style={{ display: 'flex', gap: 8 }}>
+          <input
+            type="text"
+            value={nameInput}
+            onChange={(e) => setNameInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') saveName() }}
+            placeholder="Your name"
+            maxLength={80}
+            style={{ flex: 1, borderRadius: 10, border: '1px solid #ccc', padding: '10px 12px', color: '#111', fontSize: 16 }}
+          />
+          <button type="button" onClick={saveName} disabled={!nameInput.trim()}
+            style={{ borderRadius: 10, padding: '0 16px', color: '#fff', fontWeight: 700, backgroundColor: primaryColor, opacity: nameInput.trim() ? 1 : 0.5 }}>
+            That&apos;s me
+          </button>
+        </div>
+      )}
+    </div>
+  ) : null
+
+  const uploadApp = canUpload && mounted ? createPortal(
+    <UploadApp
+      eventName={link!.event.name ?? 'Event photos'}
+      ready={readyProps}
+      onSelfie={onSelfie}
+      primaryColor={primaryColor}
+      nameStep={nameStep}
+      guestName={guest?.name ?? null}
+      onNotMe={notMe}
+      allowVideo={link!.settings.allow_video}
+      tiles={uploadTiles}
+      onAdd={(files) => { setUploadNotice(null); enqueueFiles(files, false) }}
+      onDelete={(t) => void removeTile(t)}
+      onRetry={(t) => retryItem(t.key)}
+      notice={uploadNotice}
+      showGallery={Boolean(link!.settings.show_gallery)}
+      everyone={items}
+      hasMore={Boolean(nextCursor)}
+      loadingMore={galleryLoading}
+      onLoadMore={() => loadGallery(nextCursor)}
+    />,
+    document.body,
+  ) : null
+
+  // The upload screen is the whole page while it is up.
+  if (uploadApp) return uploadApp
+
   if (mobileTakeover) {
-    return createPortal(
+    return <>{createPortal(
       // No background of its own: the page content underneath is
       // hidden by the effect above, leaving only the brand's animated
       // gradient layer visible behind the upload UI. Painting a solid
@@ -897,7 +1392,7 @@ export default function GuestPhotosPage({ eventIdentifier, primaryColor, darkMod
         {pageContent}
       </div>,
       document.body,
-    )
+    )}</>
   }
 
   return pageContent

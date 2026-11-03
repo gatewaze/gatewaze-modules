@@ -6,6 +6,7 @@
  */
 
 import { randomUUID, getRandomValues } from 'node:crypto';
+import { readyPrompt } from './ready-prompts.js';
 
 // ── Mime allowlists ─────────────────────────────────────────────────
 
@@ -113,7 +114,16 @@ export function newMediaId(): string {
 export const GUEST_RATE_LIMITS = {
   resolvePerIp: { max: 120, windowMs: 60_000 },
   mediaListPerIp: { max: 300, windowMs: 60_000 },
+  // Name search runs as guests type, and a whole venue shares one IP.
+  guestSearchPerIp: { max: 600, windowMs: 60_000 },
   mintPerClient: { max: 20, windowMs: 60_000 },
+  /**
+   * A photographer's link, which is given to one professional delivering
+   * thousands of files in a sitting. Twenty files a call, so this is
+   * about 12,000 an hour -- enough to deliver an event in an evening
+   * without a guest's phone ever seeing this budget.
+   */
+  mintPerPhotographer: { max: 600, windowMs: 60_000 },
   mintPerIp: { max: 120, windowMs: 60_000 },
   completePerClient: { max: 20, windowMs: 60_000 },
   completePerIp: { max: 120, windowMs: 60_000 },
@@ -122,6 +132,8 @@ export const GUEST_RATE_LIMITS = {
   // NOTE this caps COMPLETE CALLS; each call carries ≤20 tickets, so the
   // true file ceiling is 20× this (240 calls/hr ≈ ≤4,800 files/hr).
   completePerLinkHourly: { max: 240, windowMs: 3_600_000 },
+  /** The same allowance, for a link given to one professional. */
+  completePerPhotographerHourly: { max: 1200, windowMs: 3_600_000 },
 } as const;
 
 export function guestRateKey(op: string, discriminator: string): string {
@@ -138,11 +150,42 @@ export interface MintFileInput {
   mime_type: string;
   bytes: number;
   captured: boolean;
+  /** Which of the morning's asks it answers, if any. */
+  prompt?: string | null;
+  /** When the photograph was taken, from its EXIF (local time). */
+  taken_at?: string | null;
 }
 
 export type MintFileValidation =
   | { ok: true; file: MintFileInput; kind: MediaKind }
   | { ok: false; filename: string; error: string; message: string };
+
+/**
+ * A capture time a device has told us about, or null.
+ *
+ * The phone reads it out of a photograph's own EXIF. It is a date from
+ * a device: anything unparseable, older than ten years or in
+ * the future is dropped rather than trusted.
+ *
+ * ONLY THE PART THAT WAS CHECKED IS KEPT. The pattern is anchored at the
+ * start and matches nineteen characters, so returning the whole slice
+ * stored up to thirteen unexamined ones alongside a date that passed --
+ * and `Date.parse` of a string with trailing junk is left to the engine
+ * to interpret, so the range check above it was not reading the same
+ * value anybody else would. The matched prefix is the only part this
+ * function has an opinion about, so it is the only part that is kept.
+ */
+export function cleanTakenAt(raw: unknown): string | null {
+  const text = typeof raw === 'string' ? raw.slice(0, 32) : '';
+  const m = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.exec(text);
+  if (!m) return null;
+  const stamp = m[0];
+  const t = Date.parse(stamp);
+  if (!Number.isFinite(t)) return null;
+  const now = Date.now();
+  if (t > now + 24 * 3600_000 || t < now - 10 * 365 * 24 * 3600_000) return null;
+  return stamp;
+}
 
 export function validateMintFile(
   raw: unknown,
@@ -171,5 +214,10 @@ export function validateMintFile(
     return { ok: false, filename, error: 'file_too_large', message: `file exceeds the ${kind} limit`, };
   }
   const captured = r['captured'] === true;
-  return { ok: true, file: { filename, mime_type: mimeType, bytes, captured }, kind };
+  // Which of the morning's asks this photo answers (lib/ready-prompts.ts).
+  // Checked against the list there, so nothing a guest types reaches the
+  // row; an unknown one is simply dropped.
+  const prompt = readyPrompt(r['prompt'])?.id ?? null;
+  const takenAt = cleanTakenAt(r['taken_at']);
+  return { ok: true, file: { filename, mime_type: mimeType, bytes, captured, prompt, taken_at: takenAt }, kind };
 }

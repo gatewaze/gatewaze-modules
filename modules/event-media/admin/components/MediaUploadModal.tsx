@@ -1,599 +1,467 @@
-import { useState, useRef } from 'react';
+/**
+ * Upload photos, videos or a ZIP into the event's media library.
+ *
+ * Files go to the host-media upload endpoint in small batches with real
+ * progress (XHR). ZIPs are unpacked in the browser: every image/video
+ * inside is uploaded, and each top-level folder becomes an album (an
+ * existing album with the same name is reused) — the legacy "folders
+ * become albums" behaviour, without the server-side unzip pipeline.
+ */
+
+import { useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import {
-  XMarkIcon,
-  PhotoIcon,
-  VideoCameraIcon,
-  ArrowUpTrayIcon,
-  DocumentIcon,
-  ArchiveBoxIcon,
-} from '@heroicons/react/24/outline';
-import { Button, Modal, Input } from '@/components/ui';
+import { ArrowUpTrayIcon, XMarkIcon, DocumentArrowUpIcon } from '@heroicons/react/24/outline';
+import { Button, Modal } from '@/components/ui';
 import { supabase } from '@/lib/supabase';
-import {
-  EventMediaAlbum,
-  uploadEventMedia,
-  uploadVideoToYouTubeAndCreateRecord,
-  validateMediaFile,
-  formatFileSize,
-} from '../utils/eventMediaService';
-import { isYouTubeConfigured } from '@/utils/youtubeService';
+import { addManyToAlbum, createAlbum, errorMessage } from '@gatewaze-modules/host-media/admin';
+import { HOST_KIND, formatFileSize, type HostMediaAlbum } from '../utils/mediaOrganizerService';
 
 interface MediaUploadModalProps {
   eventId: string;
-  albums: EventMediaAlbum[];
+  albums: HostMediaAlbum[];
+  /** Album preselected from the organizer's current album filter. */
+  defaultAlbumId: string | null;
   onClose: () => void;
-  onSuccess: () => void;
+  onDone: () => void;
 }
 
-interface FileWithPreview {
+type Mode = 'files' | 'zip';
+type ItemStatus = 'queued' | 'uploading' | 'done' | 'failed';
+
+interface QueueItem {
+  key: string;
   file: File;
-  preview: string;
-  type: 'photo' | 'video';
+  /** Album name taken from the ZIP folder, if any. */
+  folder: string | null;
+  status: ItemStatus;
+  progress: number;
+  error?: string;
+  mediaId?: string;
 }
 
-type UploadMode = 'files' | 'zip';
+// Server limits: multer caps each file at 50 MB; keep each request under
+// the 50 MB ingress body size most installs use.
+const MAX_FILE_BYTES = 50 * 1024 * 1024;
+const MAX_BATCH_BYTES = 40 * 1024 * 1024;
+const MAX_BATCH_FILES = 10;
+const MAX_ZIP_BYTES = 2 * 1024 * 1024 * 1024;
+const CONCURRENCY = 2;
 
-export function MediaUploadModal({ eventId, albums, onClose, onSuccess }: MediaUploadModalProps) {
-  const [uploadMode, setUploadMode] = useState<UploadMode>('files');
-  const [selectedFiles, setSelectedFiles] = useState<FileWithPreview[]>([]);
-  const [selectedZipFile, setSelectedZipFile] = useState<File | null>(null);
-  const [caption, setCaption] = useState('');
-  const [selectedAlbums, setSelectedAlbums] = useState<string[]>([]);
-  const [uploading, setUploading] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const zipInputRef = useRef<HTMLInputElement>(null);
+const EXT_MIME: Record<string, string> = {
+  jpg: 'image/jpeg', jpeg: 'image/jpeg', png: 'image/png', gif: 'image/gif', webp: 'image/webp',
+  heic: 'image/heic', heif: 'image/heif', avif: 'image/avif', svg: 'image/svg+xml',
+  mp4: 'video/mp4', mov: 'video/quicktime', m4v: 'video/x-m4v', webm: 'video/webm', avi: 'video/x-msvideo',
+  mp3: 'audio/mpeg', m4a: 'audio/mp4', wav: 'audio/wav',
+};
 
-  const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = Array.from(event.target.files || []);
-    processFiles(files);
-  };
+function mimeFor(name: string): string | null {
+  const ext = name.split('.').pop()?.toLowerCase() ?? '';
+  return EXT_MIME[ext] ?? null;
+}
 
-  const handleZipFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) {
-      if (!file.name.toLowerCase().endsWith('.zip')) {
-        toast.error('Please select a ZIP file');
-        return;
-      }
-      if (file.size > 5 * 1024 * 1024 * 1024) { // 5GB limit for zip files
-        toast.error('ZIP file must be less than 5GB');
-        return;
-      }
-      setSelectedZipFile(file);
-    }
-  };
+function isMedia(file: File): boolean {
+  return /^(image|video|audio)\//.test(file.type) || mimeFor(file.name) !== null;
+}
 
-  const handleDrop = (event: React.DragEvent) => {
-    event.preventDefault();
-    const files = Array.from(event.dataTransfer.files);
-    processFiles(files);
-  };
+const apiUrl = (import.meta as unknown as { env: Record<string, string | undefined> }).env.VITE_API_URL ?? '';
 
-  const handleDragOver = (event: React.DragEvent) => {
-    event.preventDefault();
-  };
+interface UploadResultItem { filename: string; status: 'created' | 'failed'; media_id?: string; message?: string }
 
-  const processFiles = (files: File[]) => {
-    const validFiles: FileWithPreview[] = [];
-
-    files.forEach(file => {
-      const validation = validateMediaFile(file);
-      if (!validation.valid) {
-        toast.error(`${file.name}: ${validation.error}`);
-        return;
-      }
-
-      const type = file.type.startsWith('image/') ? 'photo' : 'video';
-      const preview = URL.createObjectURL(file);
-
-      validFiles.push({ file, preview, type });
-    });
-
-    setSelectedFiles(prev => [...prev, ...validFiles]);
-  };
-
-  const removeFile = (index: number) => {
-    setSelectedFiles(prev => {
-      const newFiles = [...prev];
-      URL.revokeObjectURL(newFiles[index].preview);
-      newFiles.splice(index, 1);
-      return newFiles;
-    });
-  };
-
-  const toggleAlbum = (albumId: string) => {
-    setSelectedAlbums(prev =>
-      prev.includes(albumId)
-        ? prev.filter(id => id !== albumId)
-        : [...prev, albumId]
-    );
-  };
-
-  const handleUpload = async () => {
-    if (uploadMode === 'files') {
-      await handleFilesUpload();
-    } else {
-      await handleZipUpload();
-    }
-  };
-
-  const handleFilesUpload = async () => {
-    if (selectedFiles.length === 0) {
-      toast.error('Please select at least one file');
-      return;
-    }
-
-    setUploading(true);
-    setUploadProgress(0);
-
-    // Check YouTube configuration for videos
-    const hasVideos = selectedFiles.some(f => f.type === 'video');
-    const youtubeConfigured = isYouTubeConfigured();
-
-    if (hasVideos && !youtubeConfigured) {
-      toast.error('YouTube is not configured. Videos cannot be uploaded at this time.');
-      setUploading(false);
-      return;
-    }
-
-    try {
-      const total = selectedFiles.length;
-      let completed = 0;
-
-      for (let i = 0; i < selectedFiles.length; i++) {
-        const { file, type } = selectedFiles[i];
-        let result;
-
-        if (type === 'video') {
-          // Upload videos to YouTube with progress tracking
-          result = await uploadVideoToYouTubeAndCreateRecord(file, eventId, {
-            caption: caption || undefined,
-            albumIds: selectedAlbums.length > 0 ? selectedAlbums : undefined,
-            brandName: import.meta.env.VITE_BRAND_NAME || 'Event',
-            onProgress: (progress) => {
-              // Calculate overall progress including completed files and current file progress
-              const baseProgress = (completed / total) * 100;
-              const currentFileProgress = (progress / 100) * (1 / total) * 100;
-              setUploadProgress(Math.round(baseProgress + currentFileProgress));
-            },
-          });
-        } else {
-          // Upload photos to Supabase Storage
-          result = await uploadEventMedia(file, eventId, {
-            fileType: type,
-            caption: caption || undefined,
-            albumIds: selectedAlbums.length > 0 ? selectedAlbums : undefined,
-          });
-        }
-
-        if (!result.success) {
-          toast.error(`Failed to upload ${file.name}: ${result.error}`);
-        } else {
-          completed++;
-          // Show info message for pending YouTube uploads
-          if (result.isPending) {
-            toast.info(`${file.name} uploaded - YouTube processing will begin shortly`, {
-              duration: 5000,
-            });
-          }
-        }
-
-        // Update progress after each file completes
-        setUploadProgress(Math.round((completed / total) * 100));
-      }
-
-      if (completed === total) {
-        const hasPending = selectedFiles.some(
-          ({ file, type }) => type === 'video' && file.size / (1024 * 1024) >= 50
-        );
-        if (hasPending) {
-          toast.success(
-            `Successfully uploaded ${completed} file${completed > 1 ? 's' : ''}. Large videos will be processed in the background.`,
-            { duration: 6000 }
-          );
-        } else {
-          toast.success(`Successfully uploaded ${completed} file${completed > 1 ? 's' : ''}`);
-        }
-        onSuccess();
-      } else if (completed > 0) {
-        toast.warning(`Uploaded ${completed} of ${total} files`);
-        onSuccess();
-      } else {
-        toast.error('Failed to upload any files');
-      }
-    } catch (error) {
-      console.error('Upload error:', error);
-      toast.error('An error occurred during upload');
-    } finally {
-      setUploading(false);
-      setUploadProgress(0);
-    }
-  };
-
-  const handleZipUpload = async () => {
-    if (!selectedZipFile) {
-      toast.error('Please select a ZIP file');
-      return;
-    }
-
-    setUploading(true);
-    setUploadProgress(0);
-
-    try {
-      const timestamp = Date.now();
-      const storagePath = `events/${eventId}/zip-uploads/${timestamp}-${selectedZipFile.name}`;
-
-      // Upload with XHR for real progress tracking (supabase.storage.upload
-      // doesn't expose progress). Works for files up to the FILE_SIZE_LIMIT (5GB).
-      const { data: { session } } = await supabase.auth.getSession();
-      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-
-      await new Promise<void>((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.open('POST', `${supabaseUrl}/storage/v1/object/media/${storagePath}`);
-        xhr.setRequestHeader('Authorization', `Bearer ${session?.access_token}`);
-        xhr.setRequestHeader('apikey', import.meta.env.VITE_SUPABASE_ANON_KEY);
-        xhr.setRequestHeader('x-upsert', 'false');
-
-        xhr.upload.onprogress = (e) => {
-          if (e.lengthComputable) {
-            setUploadProgress(Math.round((e.loaded / e.total) * 90));
-          }
-        };
-        xhr.onload = () => {
-          if (xhr.status >= 200 && xhr.status < 300) resolve();
-          else reject(new Error(`Upload failed (${xhr.status}): ${xhr.responseText}`));
-        };
-        xhr.onerror = () => reject(new Error('Upload network error'));
-        xhr.send(selectedZipFile);
-      });
-
-      setUploadProgress(92);
-
-      // Create zip upload record in DB
-      const { data: zipUpload, error: dbError } = await supabase
-        .from('events_media_zip_uploads')
-        .insert({
-          event_id: eventId,
-          file_name: selectedZipFile.name,
-          storage_path: storagePath,
-          file_size: selectedZipFile.size,
-          status: 'pending',
-        })
-        .select()
-        .single();
-
-      if (dbError) {
-        await supabase.storage.from('media').remove([storagePath]);
-        throw new Error(`Failed to create upload record: ${dbError.message}`);
-      }
-
-      setUploadProgress(95);
-
-      // Trigger background processing via the API (which enqueues a BullMQ job)
-      // Falls back to edge function if the job queue isn't available
-      try {
-        const apiBase = import.meta.env.VITE_API_URL || '';
-        const response = await fetch(`${apiBase}/api/jobs`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Bearer ${session?.access_token}`,
-          },
-          body: JSON.stringify({
-            type: 'media:process-zip',
-            data: { zipUploadId: zipUpload.id },
-          }),
+/** POSTs one batch with progress. Resolves with the per-file results; throws on transport errors. */
+function postBatch(
+  eventId: string,
+  files: File[],
+  caption: string,
+  onProgress: (fraction: number) => void,
+): Promise<{ status: number; retryAfter: number; items: UploadResultItem[]; message?: string }> {
+  return new Promise((resolve, reject) => {
+    void supabase.auth.getSession().then(({ data }) => {
+      const fd = new FormData();
+      files.forEach((f) => fd.append('files', f, f.name));
+      if (caption) fd.append('caption', caption);
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `${apiUrl}/api/admin/${HOST_KIND}/${eventId}/media`);
+      const token = data.session?.access_token;
+      if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+      xhr.upload.onprogress = (e) => { if (e.lengthComputable) onProgress(e.loaded / e.total); };
+      xhr.onerror = () => reject(new Error('Network error during upload'));
+      xhr.onload = () => {
+        let body: { items?: UploadResultItem[]; message?: string } = {};
+        try { body = JSON.parse(xhr.responseText); } catch { /* non-JSON error page */ }
+        resolve({
+          status: xhr.status,
+          retryAfter: Number(xhr.getResponseHeader('Retry-After')) || 10,
+          items: body.items ?? [],
+          message: body.message,
         });
+      };
+      xhr.send(fd);
+    }, reject);
+  });
+}
 
-        if (!response.ok) {
-          // Fallback: trigger edge function directly
-          console.warn('Job queue unavailable, falling back to edge function');
-          supabase.functions.invoke('media-process-zip', {
-            body: { zipUploadId: zipUpload.id },
-          }).catch(err => console.error('Edge function fallback failed:', err));
-        }
-      } catch (triggerError) {
-        // Fallback: trigger edge function directly
-        console.warn('Job queue unavailable, falling back to edge function');
-        supabase.functions.invoke('media-process-zip', {
-          body: { zipUploadId: zipUpload.id },
-        }).catch(err => console.error('Edge function fallback failed:', err));
+function batchesOf(items: QueueItem[]): QueueItem[][] {
+  const out: QueueItem[][] = [];
+  let cur: QueueItem[] = [];
+  let bytes = 0;
+  for (const it of items) {
+    if (cur.length > 0 && (cur.length >= MAX_BATCH_FILES || bytes + it.file.size > MAX_BATCH_BYTES)) {
+      out.push(cur);
+      cur = [];
+      bytes = 0;
+    }
+    cur.push(it);
+    bytes += it.file.size;
+  }
+  if (cur.length) out.push(cur);
+  return out;
+}
+
+export function MediaUploadModal({ eventId, albums, defaultAlbumId, onClose, onDone }: MediaUploadModalProps) {
+  const [mode, setMode] = useState<Mode>('files');
+  const [queue, setQueue] = useState<QueueItem[]>([]);
+  const [caption, setCaption] = useState('');
+  const [albumIds, setAlbumIds] = useState<string[]>(defaultAlbumId ? [defaultAlbumId] : []);
+  const [foldersAsAlbums, setFoldersAsAlbums] = useState(true);
+  const [dragOver, setDragOver] = useState(false);
+  const [unzipping, setUnzipping] = useState(false);
+  const [running, setRunning] = useState(false);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const zipInput = useRef<HTMLInputElement>(null);
+
+  const totals = useMemo(() => {
+    const bytes = queue.reduce((s, q) => s + q.file.size, 0);
+    const sent = queue.reduce((s, q) => s + q.file.size * (q.status === 'done' ? 1 : q.progress), 0);
+    return {
+      bytes,
+      pct: bytes ? Math.round((sent / bytes) * 100) : 0,
+      done: queue.filter((q) => q.status === 'done').length,
+      failed: queue.filter((q) => q.status === 'failed').length,
+    };
+  }, [queue]);
+
+  const addFiles = (files: File[], folderOf?: (f: File) => string | null) => {
+    const accepted: QueueItem[] = [];
+    let rejected = 0;
+    for (const original of files) {
+      if (!isMedia(original)) { rejected++; continue; }
+      // Browsers leave type empty for some formats (HEIC on desktop);
+      // the server dispatches on the multipart content type, so set it.
+      const f = original.type
+        ? original
+        : new File([original], original.name, { type: mimeFor(original.name)!, lastModified: original.lastModified });
+      if (f.size > MAX_FILE_BYTES) {
+        toast.error(`${f.name} is larger than 50 MB and was skipped`);
+        continue;
       }
+      accepted.push({
+        key: `${f.name}-${f.size}-${f.lastModified}-${Math.random().toString(36).slice(2)}`,
+        file: f,
+        folder: folderOf ? folderOf(original) : null,
+        status: 'queued',
+        progress: 0,
+      });
+    }
+    if (rejected) toast.warning(`${rejected} file(s) skipped: not a photo, video or audio file`);
+    setQueue((q) => [...q, ...accepted]);
+  };
 
-      setUploadProgress(100);
-
-      toast.success(
-        'ZIP file uploaded successfully! Processing will continue in the background. You can close this dialog.',
-        { duration: 5000 }
-      );
-
-      setTimeout(() => {
-        onSuccess();
-      }, 2000);
-    } catch (error) {
-      console.error('ZIP upload error:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to upload ZIP file');
+  const unzip = async (zipFile: File) => {
+    if (zipFile.size > MAX_ZIP_BYTES) { toast.error('ZIP files must be under 2 GB'); return; }
+    setUnzipping(true);
+    try {
+      const { default: JSZip } = await import('jszip');
+      const zip = await JSZip.loadAsync(zipFile);
+      const files: File[] = [];
+      const folders = new Map<File, string | null>();
+      const entries = Object.values(zip.files).filter((e) => {
+        if (e.dir) return false;
+        const parts = e.name.split('/');
+        // Skip macOS resource forks and dotfiles.
+        return !parts.some((p) => p === '__MACOSX' || p.startsWith('.')) && mimeFor(e.name) !== null;
+      });
+      for (const entry of entries) {
+        const blob = await entry.async('blob');
+        const parts = entry.name.split('/');
+        const name = parts[parts.length - 1]!;
+        const file = new File([blob], name, { type: mimeFor(name)! });
+        files.push(file);
+        // Top-level folder name; a flat ZIP has none.
+        folders.set(file, parts.length > 1 ? parts[0]! : null);
+      }
+      if (files.length === 0) { toast.error('No photos or videos found in the ZIP'); return; }
+      addFiles(files, (f) => folders.get(f) ?? null);
+      toast.success(`Found ${files.length} file(s) in ${zipFile.name}`);
+    } catch (err) {
+      toast.error(err instanceof Error ? `Could not read ZIP: ${err.message}` : 'Could not read ZIP');
     } finally {
-      setUploading(false);
-      setUploadProgress(0);
+      setUnzipping(false);
     }
   };
 
-  const photoCount = selectedFiles.filter(f => f.type === 'photo').length;
-  const videoCount = selectedFiles.filter(f => f.type === 'video').length;
-  const totalSize = selectedFiles.reduce((acc, f) => acc + f.file.size, 0);
+  const onDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    const files = Array.from(e.dataTransfer.files);
+    const zips = files.filter((f) => /\.zip$/i.test(f.name));
+    zips.forEach((z) => void unzip(z));
+    addFiles(files.filter((f) => !/\.zip$/i.test(f.name)));
+  };
+
+  const patchItem = (key: string, patch: Partial<QueueItem>) =>
+    setQueue((q) => q.map((it) => (it.key === key ? { ...it, ...patch } : it)));
+
+  /** Resolves album ids for ZIP folders, creating missing albums. */
+  const folderAlbums = async (items: QueueItem[]): Promise<Map<string, string>> => {
+    const byName = new Map(albums.map((a) => [a.name.toLowerCase(), a.id]));
+    const out = new Map<string, string>();
+    const names = Array.from(new Set(items.map((i) => i.folder).filter((f): f is string => !!f)));
+    for (const name of names) {
+      const existing = byName.get(name.toLowerCase());
+      if (existing) { out.set(name, existing); continue; }
+      const resp = await createAlbum(HOST_KIND, eventId, { name: name.slice(0, 200) });
+      if (!resp.ok) { toast.error(`Could not create album "${name}": ${await errorMessage(resp, 'error')}`); continue; }
+      const album = (await resp.json()) as HostMediaAlbum;
+      out.set(name, album.id);
+    }
+    return out;
+  };
+
+  const start = async () => {
+    const pending = queue.filter((q) => q.status === 'queued' || q.status === 'failed');
+    if (pending.length === 0) return;
+    setRunning(true);
+    pending.forEach((p) => patchItem(p.key, { status: 'queued', progress: 0, error: undefined }));
+
+    const created = new Map<string, string>(); // queue key -> media id
+    const batches = batchesOf(pending);
+    let cursor = 0;
+
+    const runBatch = async (batch: QueueItem[]) => {
+      batch.forEach((b) => patchItem(b.key, { status: 'uploading' }));
+      for (let attempt = 0; attempt < 6; attempt++) {
+        try {
+          const res = await postBatch(eventId, batch.map((b) => b.file), caption.trim(), (fraction) =>
+            batch.forEach((b) => patchItem(b.key, { progress: fraction })),
+          );
+          if (res.status === 429) {
+            await new Promise((r) => setTimeout(r, res.retryAfter * 1000));
+            continue;
+          }
+          if (res.status !== 200 && res.status !== 207) {
+            batch.forEach((b) => patchItem(b.key, { status: 'failed', error: res.message ?? `HTTP ${res.status}` }));
+            return;
+          }
+          // Results come back in request order.
+          batch.forEach((b, i) => {
+            const r = res.items[i];
+            if (r?.status === 'created' && r.media_id) {
+              created.set(b.key, r.media_id);
+              patchItem(b.key, { status: 'done', progress: 1, mediaId: r.media_id });
+            } else {
+              patchItem(b.key, { status: 'failed', error: r?.message ?? 'Upload failed' });
+            }
+          });
+          return;
+        } catch (err) {
+          if (attempt === 5) {
+            batch.forEach((b) => patchItem(b.key, { status: 'failed', error: err instanceof Error ? err.message : 'Upload failed' }));
+            return;
+          }
+          await new Promise((r) => setTimeout(r, 2000 * (attempt + 1)));
+        }
+      }
+      batch.forEach((b) => patchItem(b.key, { status: 'failed', error: 'Rate limited; try again shortly' }));
+    };
+
+    const worker = async () => {
+      while (cursor < batches.length) {
+        const batch = batches[cursor++]!;
+        await runBatch(batch);
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(CONCURRENCY, batches.length) }, worker));
+
+    // Album membership: chosen albums get every upload; ZIP folders get their own files.
+    const createdIds = Array.from(created.values());
+    try {
+      for (const albumId of albumIds) {
+        if (createdIds.length) {
+          const resp = await addManyToAlbum(HOST_KIND, eventId, albumId, createdIds);
+          if (!resp.ok) toast.error(await errorMessage(resp, 'Could not add uploads to album'));
+        }
+      }
+      if (mode === 'zip' && foldersAsAlbums) {
+        const map = await folderAlbums(pending);
+        for (const [folder, albumId] of map) {
+          const ids = pending.filter((p) => p.folder === folder && created.has(p.key)).map((p) => created.get(p.key)!);
+          if (ids.length) {
+            const resp = await addManyToAlbum(HOST_KIND, eventId, albumId, ids);
+            if (!resp.ok) toast.error(await errorMessage(resp, `Could not fill album "${folder}"`));
+          }
+        }
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not update albums');
+    }
+
+    setRunning(false);
+    const failed = pending.length - created.size;
+    if (failed === 0) {
+      toast.success(`Uploaded ${created.size} file(s)`);
+      onDone();
+    } else {
+      toast.warning(`Uploaded ${created.size} file(s), ${failed} failed. Fix or remove them and try again.`);
+      if (created.size) onDone();
+    }
+  };
+
+  const busy = running || unzipping;
+  const hasFolders = queue.some((q) => q.folder);
 
   return (
-    <Modal isOpen={true} onClose={onClose} size="lg">
-      <div className="flex flex-col" style={{ height: '80vh', maxHeight: '800px' }}>
-        {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-700">
-          <h2 className="text-xl font-semibold text-gray-900 dark:text-white">
-            Upload Media
-          </h2>
-          <button
-            onClick={onClose}
-            className="text-gray-400 hover:text-gray-500 dark:hover:text-gray-300"
-          >
-            <XMarkIcon className="h-6 w-6" />
-          </button>
-        </div>
-
-        {/* Scrollable Content */}
-        <div className="flex-1 overflow-y-auto px-6 py-4 space-y-6">
-          {/* Upload Mode Selector */}
+    <Modal
+      isOpen
+      onClose={busy ? () => undefined : onClose}
+      title="Upload media"
+      size="lg"
+      footer={
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs text-[var(--gray-a10)]">
+            {queue.length > 0 && `${queue.length} file(s) · ${formatFileSize(totals.bytes)}`}
+            {running && ` · ${totals.pct}%`}
+            {totals.failed > 0 && !running && ` · ${totals.failed} failed`}
+          </span>
           <div className="flex gap-2">
-            <button
-              onClick={() => setUploadMode('files')}
-              disabled={uploading}
-              className={`flex-1 rounded-lg px-4 py-3 text-sm font-medium transition-colors ${
-              uploadMode === 'files'
-                ? 'bg-primary-600 text-white'
-                : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-surface-3 dark:text-gray-300 dark:hover:bg-surface-4'
-              }`}
-            >
-              <div className="flex items-center justify-center gap-2">
-                <PhotoIcon className="h-5 w-5" />
-                <span>Individual Files</span>
-              </div>
-            </button>
-            <button
-              onClick={() => setUploadMode('zip')}
-              disabled={uploading}
-              className={`flex-1 rounded-lg px-4 py-3 text-sm font-medium transition-colors ${
-                uploadMode === 'zip'
-                  ? 'bg-primary-600 text-white'
-                  : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-surface-3 dark:text-gray-300 dark:hover:bg-surface-4'
-              }`}
-            >
-              <div className="flex items-center justify-center gap-2">
-                <ArchiveBoxIcon className="h-5 w-5" />
-                <span>ZIP File</span>
-              </div>
-            </button>
+            <Button variant="outline" onClick={onClose} disabled={busy}>{totals.done > 0 ? 'Close' : 'Cancel'}</Button>
+            <Button onClick={start} disabled={busy || queue.every((q) => q.status === 'done')}>
+              <ArrowUpTrayIcon className="h-4 w-4" />
+              {running ? 'Uploading…' : totals.failed > 0 ? 'Retry failed' : 'Upload'}
+            </Button>
           </div>
-
-          {/* Upload Area - Individual Files */}
-          {uploadMode === 'files' && (
-            <div
-              onDrop={handleDrop}
-              onDragOver={handleDragOver}
-              onClick={() => fileInputRef.current?.click()}
-              className="cursor-pointer rounded-lg border-2 border-dashed border-gray-300 bg-gray-50 p-12 text-center hover:border-gray-400 dark:border-gray-600 dark:bg-surface-3 dark:hover:border-gray-500"
+        </div>
+      }
+    >
+      <div className="space-y-4">
+        <div className="inline-flex rounded-lg border border-[var(--gray-a6)] p-0.5">
+          {(['files', 'zip'] as const).map((m) => (
+            <button
+              key={m}
+              type="button"
+              disabled={busy}
+              onClick={() => setMode(m)}
+              className={`rounded-md px-3 py-1.5 text-sm font-medium ${mode === m ? 'bg-[var(--accent-9)] text-white' : 'text-[var(--gray-a11)]'}`}
             >
-              <ArrowUpTrayIcon className="mx-auto h-12 w-12 text-gray-400" />
-              <p className="mt-4 text-sm font-medium text-gray-900 dark:text-white">
-                Click to upload or drag and drop
-              </p>
-              <p className="mt-2 text-xs text-gray-600 dark:text-gray-400">
-                Photos up to 100MB • Videos up to 500MB
-              </p>
-              <p className="mt-1 text-xs text-yellow-600 dark:text-yellow-400">
-                ⚠️ Videos larger than 500MB may fail to upload due to platform limitations
-              </p>
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                accept="image/*,video/*"
-                onChange={handleFileSelect}
-                className="hidden"
-              />
-            </div>
-          )}
+              {m === 'files' ? 'Photos & videos' : 'ZIP archive'}
+            </button>
+          ))}
+        </div>
 
-          {/* Upload Area - ZIP File */}
-          {uploadMode === 'zip' && (
-            <div
-              onClick={() => zipInputRef.current?.click()}
-              className="cursor-pointer rounded-lg border-2 border-dashed border-gray-300 bg-gray-50 p-12 text-center hover:border-gray-400 dark:border-gray-600 dark:bg-surface-3 dark:hover:border-gray-500"
-            >
-              <ArchiveBoxIcon className="mx-auto h-12 w-12 text-gray-400" />
-              <p className="mt-4 text-sm font-medium text-gray-900 dark:text-white">
-                Click to select a ZIP file
-              </p>
-              <p className="mt-2 text-xs text-gray-600 dark:text-gray-400">
-                ZIP files up to 500MB • Folders will become albums
-              </p>
-              <input
-                ref={zipInputRef}
-                type="file"
-                accept=".zip,application/zip"
-                onChange={handleZipFileSelect}
-                className="hidden"
-              />
-            </div>
-          )}
+        <div
+          onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+          onDragLeave={() => setDragOver(false)}
+          onDrop={onDrop}
+          onClick={() => (mode === 'files' ? fileInput.current : zipInput.current)?.click()}
+          className={`cursor-pointer rounded-lg border-2 border-dashed p-8 text-center transition-colors ${dragOver ? 'border-[var(--accent-9)] bg-[var(--accent-a2)]' : 'border-[var(--gray-a6)] hover:border-[var(--gray-a8)]'}`}
+        >
+          <DocumentArrowUpIcon className="mx-auto h-10 w-10 text-[var(--gray-a8)]" />
+          <p className="mt-2 text-sm font-medium">
+            {unzipping ? 'Reading ZIP…' : mode === 'files' ? 'Drop photos and videos here, or click to choose' : 'Drop a ZIP here, or click to choose'}
+          </p>
+          <p className="mt-1 text-xs text-[var(--gray-a10)]">
+            {mode === 'files'
+              ? 'Up to 50 MB per file. Videos go to YouTube when it is configured.'
+              : 'ZIPs up to 2 GB are unpacked in your browser. Top-level folders can become albums.'}
+          </p>
+          <input
+            ref={fileInput}
+            type="file"
+            multiple
+            accept="image/*,video/*,audio/*"
+            className="hidden"
+            onChange={(e) => { addFiles(Array.from(e.target.files ?? [])); e.target.value = ''; }}
+          />
+          <input
+            ref={zipInput}
+            type="file"
+            accept=".zip,application/zip"
+            className="hidden"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) void unzip(f); e.target.value = ''; }}
+          />
+        </div>
 
-          {/* Selected ZIP File */}
-          {uploadMode === 'zip' && selectedZipFile && (
-            <div className="space-y-2">
-              <h3 className="text-sm font-medium text-gray-900 dark:text-white">
-                Selected ZIP File
-              </h3>
-              <div className="flex items-center gap-3 rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-surface-2">
-                <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded bg-gray-100 dark:bg-gray-800">
-                  <ArchiveBoxIcon className="h-6 w-6 text-gray-400" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-gray-900 dark:text-white">
-                    {selectedZipFile.name}
-                  </p>
-                  <p className="text-xs text-gray-600 dark:text-gray-400">
-                    {formatFileSize(selectedZipFile.size)}
-                  </p>
-                </div>
-                <button
-                  onClick={() => setSelectedZipFile(null)}
-                  className="flex-shrink-0 text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
-                >
-                  <XMarkIcon className="h-5 w-5" />
-                </button>
-              </div>
-              <p className="text-xs text-gray-600 dark:text-gray-400">
-                ℹ️ After upload, the ZIP file will be processed automatically. Folders inside the ZIP will become albums.
-              </p>
-            </div>
-          )}
-
-          {/* Selected Files */}
-          {uploadMode === 'files' && selectedFiles.length > 0 && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-medium text-gray-900 dark:text-white">
-                  Selected Files ({selectedFiles.length})
-                </h3>
-                <div className="text-xs text-gray-600 dark:text-gray-400">
-                  {photoCount > 0 && `${photoCount} photo${photoCount > 1 ? 's' : ''}`}
-                  {photoCount > 0 && videoCount > 0 && ', '}
-                  {videoCount > 0 && `${videoCount} video${videoCount > 1 ? 's' : ''}`}
-                  {' · '}
-                  {formatFileSize(totalSize)}
-                </div>
-              </div>
-
-              <div className="max-h-64 space-y-2 overflow-y-auto">
-                {selectedFiles.map((item, index) => (
-                  <div
-                    key={index}
-                    className="flex items-center gap-3 rounded-lg border border-gray-200 bg-white p-3 dark:border-gray-700 dark:bg-surface-2"
-                  >
-                    <div className="relative h-12 w-12 flex-shrink-0 overflow-hidden rounded">
-                      {item.type === 'photo' ? (
-                        <img
-                          src={item.preview}
-                          alt={item.file.name}
-                          className="h-full w-full object-cover"
-                        />
-                      ) : (
-                        <div className="flex h-full w-full items-center justify-center bg-gray-100 dark:bg-gray-800">
-                          <VideoCameraIcon className="h-6 w-6 text-gray-400" />
-                        </div>
-                      )}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium text-gray-900 dark:text-white">
-                        {item.file.name}
-                      </p>
-                      <p className="text-xs text-gray-600 dark:text-gray-400">
-                        {formatFileSize(item.file.size)}
-                      </p>
-                    </div>
-                    <button
-                      onClick={() => removeFile(index)}
-                      className="flex-shrink-0 text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300"
-                    >
-                      <XMarkIcon className="h-5 w-5" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Caption - Only for individual files */}
-          {uploadMode === 'files' && (
-            <div>
-              <label className="mb-2 block text-sm font-medium text-gray-900 dark:text-white">
-                Caption (optional)
-              </label>
-              <Input
-                value={caption}
-                onChange={e => setCaption(e.target.value)}
-                placeholder="Add a caption for these files..."
-                disabled={uploading}
-              />
-            </div>
-          )}
-
-          {/* Albums - Only for individual files */}
-          {uploadMode === 'files' && albums.length > 0 && (
-            <div>
-              <label className="mb-2 block text-sm font-medium text-gray-900 dark:text-white">
-                Add to Albums (optional)
-              </label>
-              <div className="flex flex-wrap gap-2">
-                {albums.map(album => (
-                  <button
-                    key={album.id}
-                    onClick={() => toggleAlbum(album.id)}
-                    disabled={uploading}
-                    className={`rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
-                      selectedAlbums.includes(album.id)
-                        ? 'bg-primary-600 text-white'
-                        : 'bg-gray-100 text-gray-700 hover:bg-gray-200 dark:bg-surface-3 dark:text-gray-300 dark:hover:bg-surface-4'
-                    }`}
-                  >
-                    {album.name}
+        {queue.length > 0 && (
+          <div className="max-h-60 space-y-1 overflow-y-auto rounded-lg border border-[var(--gray-a5)] p-2">
+            {queue.map((q) => (
+              <div key={q.key} className="flex items-center gap-2 text-xs">
+                <span className="min-w-0 flex-1 truncate" title={q.error ?? q.file.name}>
+                  {q.folder && <span className="text-[var(--gray-a9)]">{q.folder}/</span>}
+                  {q.file.name}
+                </span>
+                <span className="w-16 text-right text-[var(--gray-a9)]">{formatFileSize(q.file.size)}</span>
+                <span className="w-24">
+                  {q.status === 'uploading' ? (
+                    <span className="block h-1.5 overflow-hidden rounded bg-[var(--gray-a4)]">
+                      <span className="block h-full bg-[var(--accent-9)]" style={{ width: `${Math.round(q.progress * 100)}%` }} />
+                    </span>
+                  ) : q.status === 'done' ? (
+                    <span className="text-[var(--green-11)]">Uploaded</span>
+                  ) : q.status === 'failed' ? (
+                    <span className="text-[var(--red-11)]" title={q.error}>Failed</span>
+                  ) : (
+                    <span className="text-[var(--gray-a9)]">Queued</span>
+                  )}
+                </span>
+                {!running && q.status !== 'done' && (
+                  <button type="button" title="Remove" onClick={() => setQueue((all) => all.filter((x) => x.key !== q.key))}>
+                    <XMarkIcon className="h-3.5 w-3.5 text-[var(--gray-a9)]" />
                   </button>
-                ))}
+                )}
               </div>
-            </div>
-          )}
-        </div>
-
-        {/* Fixed Footer with Progress and Actions */}
-        <div className="border-t border-gray-200 bg-white px-6 py-4 dark:border-gray-700 dark:bg-surface-2">
-          {/* Upload Progress */}
-          {uploading && (
-            <div className="mb-4 space-y-2">
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-gray-600 dark:text-gray-400">Uploading...</span>
-                <span className="font-medium text-gray-900 dark:text-white">{uploadProgress}%</span>
-              </div>
-              <div className="h-2 overflow-hidden rounded-full bg-gray-200 dark:bg-gray-700">
-                <div
-                  className="h-full bg-primary-600 transition-all duration-300"
-                  style={{ width: `${uploadProgress}%` }}
-                />
-              </div>
-            </div>
-          )}
-
-          {/* Actions */}
-          <div className="flex justify-end gap-3">
-            <Button variant="secondary" onClick={onClose} disabled={uploading}>
-              Cancel
-            </Button>
-            <Button
-              onClick={handleUpload}
-              disabled={
-                (uploadMode === 'files' && selectedFiles.length === 0) ||
-                (uploadMode === 'zip' && !selectedZipFile) ||
-                uploading
-              }
-            >
-              {uploading
-                ? 'Uploading...'
-                : uploadMode === 'files'
-                ? `Upload ${selectedFiles.length} file${selectedFiles.length !== 1 ? 's' : ''}`
-                : 'Upload ZIP File'}
-            </Button>
+            ))}
           </div>
+        )}
+
+        <div>
+          <label className="mb-1 block text-sm font-medium">Caption (optional, applied to every file)</label>
+          <textarea
+            value={caption}
+            onChange={(e) => setCaption(e.target.value)}
+            rows={2}
+            maxLength={500}
+            disabled={busy}
+            className="w-full rounded-md border border-[var(--gray-a6)] bg-transparent px-3 py-2 text-sm"
+          />
         </div>
+
+        {albums.length > 0 && (
+          <div>
+            <label className="mb-1 block text-sm font-medium">Add to albums (optional)</label>
+            <div className="flex flex-wrap gap-2">
+              {albums.map((a) => {
+                const on = albumIds.includes(a.id);
+                return (
+                  <button
+                    key={a.id}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setAlbumIds((ids) => (on ? ids.filter((x) => x !== a.id) : [...ids, a.id]))}
+                    className={`rounded-full px-3 py-1 text-xs font-medium ${on ? 'bg-[var(--accent-9)] text-white' : 'bg-[var(--gray-a3)] text-[var(--gray-a11)]'}`}
+                  >
+                    {a.name}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {mode === 'zip' && hasFolders && (
+          <label className="flex items-center gap-2 text-sm">
+            <input type="checkbox" checked={foldersAsAlbums} onChange={(e) => setFoldersAsAlbums(e.target.checked)} disabled={busy} />
+            Turn ZIP folders into albums
+          </label>
+        )}
       </div>
     </Modal>
   );

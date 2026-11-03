@@ -1,0 +1,107 @@
+import { describe, it, expect } from 'vitest';
+import { faceOf, fullFaceOf, sized } from '../event-pages/_components/_lib/gallery-face';
+
+const plain = {
+  url: 'https://cdn/photo.jpg',
+  variants: { thumb: 'https://cdn/photo.jpg?width=350', medium: 'https://cdn/photo.jpg?width=800' },
+};
+const improved = {
+  url: 'https://cdn/enhanced.jpg',
+  variants: { thumb: 'https://cdn/enhanced.jpg?width=350', medium: 'https://cdn/enhanced.jpg?width=800' },
+  enhanced: true,
+  original: { url: 'https://cdn/photo.jpg', thumb: 'https://cdn/photo.jpg?width=350', medium: 'https://cdn/photo.jpg?width=800' },
+};
+const made = { ...improved, selfie: 'https://cdn/selfie.jpg' };
+const madeEnhanced = {
+  ...improved,
+  selfie: 'https://cdn/enhanced-selfie.jpg',
+  selfieOriginal: 'https://cdn/selfie.jpg',
+};
+
+describe('which picture a tile shows', () => {
+  it('shows the right size for the space it is in', () => {
+    expect(faceOf(plain, 350)).toContain('width=350');
+    expect(faceOf(plain, 1200)).toContain('width=800');
+  });
+
+  it('shows the enhanced copy where the album is showing them', () => {
+    expect(faceOf(improved, 1200)).toContain('enhanced.jpg');
+    expect(faceOf(improved, 350)).toContain('enhanced.jpg');
+  });
+
+  // The whole point of the switch: seeing what was done.
+  it('shows the photograph as it was taken when asked', () => {
+    expect(faceOf(improved, 1200, { enhanced: false })).toBe('https://cdn/photo.jpg?width=800');
+    expect(faceOf(improved, 350, { enhanced: false })).toBe('https://cdn/photo.jpg?width=350');
+  });
+
+  it('has nothing to switch to on a photograph that was never enhanced', () => {
+    expect(faceOf(plain, 1200, { enhanced: false })).toContain('photo.jpg');
+    expect(faceOf(plain, 1200, { enhanced: true })).toContain('photo.jpg');
+  });
+
+  it('shows the selfie under x-ray, whatever else is asked for', () => {
+    for (const choice of [{ xray: true }, { xray: true, enhanced: true }, { xray: true, enhanced: false }]) {
+      expect(faceOf(made, 1200, choice)).toContain('selfie.jpg');
+    }
+    // And nothing changes for a picture with no selfie kept.
+    expect(faceOf(improved, 1200, { xray: true })).toContain('enhanced.jpg');
+  });
+
+  // A selfie taken in a very dark room has an enhanced copy of its own,
+  // and the same switch applies to it.
+  it('switches the selfie between its two copies as well', () => {
+    expect(faceOf(madeEnhanced, 1200, { xray: true })).toContain('enhanced-selfie.jpg');
+    expect(faceOf(madeEnhanced, 1200, { xray: true, enhanced: false })).toContain('/selfie.jpg');
+    // A selfie with only one copy is that copy, whatever is asked.
+    expect(faceOf(made, 1200, { xray: true, enhanced: false })).toContain('/selfie.jpg');
+  });
+
+  it('asks the CDN for a size without doubling a query it already has', () => {
+    expect(sized('https://cdn/s.jpg', 350)).toBe('https://cdn/s.jpg?width=350&quality=80');
+    expect(sized('https://cdn/s.jpg?width=800', 350)).toBe('https://cdn/s.jpg?width=800');
+  });
+});
+
+describe('fullFaceOf', () => {
+  // Saving a photograph is not the same question as filling a tile: the
+  // guest wants the picture, not the 800px copy the page was showing.
+  it('gives the stored object, never a thumbnail or a resize', () => {
+    expect(fullFaceOf(plain)).toBe('https://cdn/photo.jpg');
+    expect(fullFaceOf(improved)).toBe('https://cdn/enhanced.jpg');
+    expect(fullFaceOf(plain)).not.toContain('width=');
+    expect(fullFaceOf(improved)).not.toContain('width=');
+  });
+
+  it('saves the face that is actually on screen', () => {
+    // As it was taken, where the viewer switched the improvement off.
+    expect(fullFaceOf(improved, { enhanced: false })).toBe('https://cdn/photo.jpg');
+    // The selfie behind a made picture, and its improved copy.
+    expect(fullFaceOf(made, { xray: true })).toBe('https://cdn/selfie.jpg');
+    expect(fullFaceOf(madeEnhanced, { xray: true })).toBe('https://cdn/enhanced-selfie.jpg');
+    expect(fullFaceOf(madeEnhanced, { xray: true, enhanced: false })).toBe('https://cdn/selfie.jpg');
+  });
+
+  // The two must choose alike, or a viewer saves a different photograph
+  // from the one they were looking at.
+  it('picks the same face as faceOf, switch for switch', () => {
+    const items = [plain, improved, made, madeEnhanced];
+    const choices = [
+      {}, { enhanced: false }, { enhanced: true },
+      { xray: true }, { xray: true, enhanced: false }, { xray: true, enhanced: true },
+    ];
+    for (const item of items) {
+      for (const choice of choices) {
+        const full = fullFaceOf(item, choice);
+        // The sized answer is the same object, give or take the sizing.
+        const shown = faceOf(item, 800, choice).split('?')[0];
+        expect(full.split('?')[0]).toBe(shown);
+      }
+    }
+  });
+
+  it('falls back to the url when there is no original to go back to', () => {
+    expect(fullFaceOf(plain, { enhanced: false })).toBe('https://cdn/photo.jpg');
+    expect(fullFaceOf({ url: 'https://cdn/only.jpg' }, { xray: true })).toBe('https://cdn/only.jpg');
+  });
+});

@@ -9,7 +9,10 @@ const sharedRoot = resolve(__dirname, '../../../gatewaze/packages/shared/src');
 
 export default defineConfig({
   test: {
-    include: ['{lib,api,admin,workers}/**/__tests__/**/*.test.ts'],
+    // `portal` is included so the syntax gate runs: portal .tsx files
+    // are outside tsconfig, so a syntax error there reaches production
+    // as a portal crash-loop rather than a failed build.
+    include: ['{lib,api,admin,workers,portal}/**/__tests__/**/*.test.ts'],
     environment: 'node',
     globals: false,
   },
