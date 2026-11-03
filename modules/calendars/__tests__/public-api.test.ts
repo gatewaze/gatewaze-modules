@@ -1,5 +1,7 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { registerPublicApi } from '../public-api';
+
+beforeAll(() => { process.env.SUPABASE_PUBLIC_URL = 'https://data.example.org'; });
 
 type Result = { data: unknown; error: unknown; count?: number };
 
@@ -45,6 +47,8 @@ const storedRow = {
   calendar_id: 'CAL-AAIFLONDON',
   name: 'AAIF London',
   slug: 'aaif-london',
+  image_url: null,
+  cover_image_url: 'calendars/CAL-AAIFLONDON-cover.png',
   location: { type: 'city', city: 'London', country_code: 'GB', source: 'luma', internal: 'x' },
 };
 
@@ -83,6 +87,16 @@ describe('GET /:id', () => {
       type: 'city', city: 'London', region: null, country: null, country_code: 'GB',
       continent: null, latitude: null, longitude: null, source: 'luma',
     });
+  });
+
+  it('serves the stored cover path as a full public URL', async () => {
+    const { routes, calls } = mount({ calendars: { data: storedRow, error: null } });
+    const res = fakeRes();
+    await routes.get('/:id')!({ params: { id: 'aaif-london' } }, res);
+    expect(String(calls.find((c) => c[0] === 'select')?.[1]).split(',')).toContain('cover_image_url');
+    expect(res.body.data.cover_image_url)
+      .toBe('https://data.example.org/storage/v1/object/public/media/calendars/CAL-AAIFLONDON-cover.png');
+    expect(res.body.data.image_url).toBeNull();
   });
 });
 
