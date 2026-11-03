@@ -7,7 +7,7 @@ const calendarsModule: GatewazeModule = {
   visibility: 'public',
   name: 'Calendars',
   description: 'Manage event calendars with discovery, CSV import, and scheduling APIs',
-  version: '1.2.4',
+  version: '1.2.5',
   features: [
     'calendars',
     'calendars.discover',
@@ -29,7 +29,7 @@ const calendarsModule: GatewazeModule = {
       '/': {
         get: {
           summary: 'List public calendars with event counts',
-          description: 'Each calendar carries `location` (city, region, country, country_code, latitude, longitude, source) or null. Locations come from the Luma calendar, else the city most of its events are in, unless an admin set one.',
+          description: 'Each calendar carries `location` (city, region, country, country_code, latitude, longitude, source) or null. Locations come from the Luma calendar, else the city most of its events are in, unless an admin set one. `cover_image_url` is the calendar banner (copied from Luma, or uploaded by an admin) as a full URL; `image_url` and `logo_url` are full URLs too. Each is null when unset.',
           operationId: 'listCalendars',
           parameters: [
             { name: 'q', in: 'query', schema: { type: 'string' }, description: 'Filter by name (partial match)' },

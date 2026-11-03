@@ -10,6 +10,7 @@
 // host-only types into the module build.
 
 import { toPublicCalendarLocation } from './lib/public-location';
+import { toPublicImageUrl } from './lib/public-images';
 
 const PUBLIC_CALENDAR_FIELDS = [
   'id',
@@ -19,6 +20,7 @@ const PUBLIC_CALENDAR_FIELDS = [
   'description',
   'image_url',
   'logo_url',
+  'cover_image_url',
   'color',
   'external_url',
   'created_at',
@@ -34,7 +36,15 @@ const PUBLIC_CALENDAR_FIELDS = [
 // PostgREST reads everything after `slug.eq.` as the value.
 const CALENDAR_KEY_RE = /^[A-Za-z0-9._-]{1,200}$/;
 
-const withLocation = (row: any) => ({ ...row, location: toPublicCalendarLocation(row.location) });
+// Stored image values can be bucket paths; callers get full URLs. The cover
+// is the banner the worker copies from the Luma calendar page.
+const withLocation = (row: any) => ({
+  ...row,
+  image_url: toPublicImageUrl(row.image_url),
+  logo_url: toPublicImageUrl(row.logo_url),
+  cover_image_url: toPublicImageUrl(row.cover_image_url),
+  location: toPublicCalendarLocation(row.location),
+});
 
 export function registerPublicApi(router: any, ctx: any): void {
   const supabase = ctx.supabase;
