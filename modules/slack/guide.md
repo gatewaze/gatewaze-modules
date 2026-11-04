@@ -87,7 +87,14 @@ How it works:
    workspace, so a redelivered event cannot send twice.
 2. A `slack:welcome-dm` job is queued on the platform worker with the
    configured delay. It claims the row atomically, then opens a DM and posts
-   the message with the sender's **user token**.
+   the message with the sender's **user token**. If the DM already has a
+   message in it, from either person, the welcome is skipped: the member was
+   welcomed before (by another tool, or by hand) or has already written to
+   the sender. A sender connected before `im:history` was added must
+   reconnect; until then welcomes wait, and **Retry waiting** sends them.
+   `im:history` lets the stored token read every DM the sender has, so the
+   worker asks for one message and uses only whether there is one; it never
+   stores or logs what the message says.
 3. Bots, deactivated accounts and the sender themselves are skipped. If the
    sender's token stops working, the connection is marked broken and the
    welcomes wait until someone reconnects and presses **Retry waiting**.
@@ -104,7 +111,7 @@ Slack app settings this needs:
 |---------|-------|
 | Event Subscriptions → Request URL | `<API_URL>/api/modules/slack/internal/events`, bot event `team_join` |
 | OAuth & Permissions → Redirect URL | `<API_URL>/api/modules/slack/internal/oauth/callback` |
-| User token scopes | `chat:write`, `im:write` |
+| User token scopes | `chat:write`, `im:write`, `im:history` |
 | Bot token scopes | `users:read`, `users:read.email` |
 
 Module config: `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET`, `SLACK_SIGNING_SECRET`

@@ -133,6 +133,23 @@ export async function linkMembers(sb, records, mode) {
   return data || [];
 }
 
+/**
+ * Whether the sender and this member already have messages in their DM, from
+ * either side. Someone welcomed before (by an earlier tool, or by hand) or who
+ * has written to the sender must not get a welcome as if they were new.
+ *
+ * @returns {{ok: true, found: boolean, channel: string} | {ok: false, error: string, stage: string}}
+ */
+export async function findPriorDirectMessage(token, slackUserId, fetchImpl = fetch) {
+  const open = await slackApi('conversations.open', token, { users: slackUserId }, fetchImpl);
+  if (!open.ok) return { ok: false, error: open.error || 'conversations_open_failed', stage: 'open' };
+  const channel = open.channel && open.channel.id;
+  if (!channel) return { ok: false, error: 'no_channel', stage: 'open' };
+  const history = await slackApi('conversations.history', token, { channel, limit: 1 }, fetchImpl);
+  if (!history.ok) return { ok: false, error: history.error || 'history_failed', stage: 'history' };
+  return { ok: true, found: Array.isArray(history.messages) && history.messages.length > 0, channel };
+}
+
 /** Send a DM from the sender's own account: open the IM, then post in it. */
 export async function sendDirectMessage(token, slackUserId, text, fetchImpl = fetch) {
   const open = await slackApi('conversations.open', token, { users: slackUserId }, fetchImpl);
