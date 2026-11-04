@@ -7,6 +7,7 @@ const state = vi.hoisted(() => ({
   sender: null as Record<string, unknown> | null,
   prior: { ok: true, found: false, channel: 'D1' } as Record<string, unknown>,
   sent: [] as string[],
+  sendResult: { ok: true, ts: '9.9' } as Record<string, unknown>,
 }));
 
 vi.mock('../lib/service-client.js', () => {
@@ -32,7 +33,7 @@ vi.mock('../lib/welcome-store.js', () => ({
   readSenderWithToken: async () => state.sender,
   markSenderBroken: async () => {},
   findPriorDirectMessage: async () => state.prior,
-  sendDirectMessage: async (_t: string, user: string) => { state.sent.push(user); return { ok: true, ts: '9.9' }; },
+  sendDirectMessage: async (_t: string, user: string) => { state.sent.push(user); return state.sendResult; },
 }));
 
 // @ts-expect-error — plain module, no declarations needed for the test
@@ -46,6 +47,8 @@ beforeEach(() => {
   state.sent = [];
   state.sender = { team_id: 'T1', slack_user_id: 'UDEM', token: 'xoxp', scopes: 'chat:write,im:write,im:history' };
   state.prior = { ok: true, found: false, channel: 'D1' };
+  state.sendResult = { ok: true, ts: '9.9' };
+  vi.restoreAllMocks();
 });
 
 describe('welcome-dm worker', () => {
@@ -62,9 +65,11 @@ describe('welcome-dm worker', () => {
   });
 
   it('holds the row, without sending or marking the sender broken, when im:history was never granted', async () => {
+    const broken = vi.spyOn(await import('../lib/welcome-store.js'), 'markSenderBroken');
     state.sender = { ...state.sender, scopes: 'chat:write,im:write' };
     expect(await welcomeDm(job)).toEqual({ held: 'missing scope' });
     expect(state.sent).toEqual([]);
+    expect(broken).not.toHaveBeenCalled();
     expect(state.updates.at(-1)).toMatchObject({ status: 'pending' });
   });
 
@@ -74,6 +79,14 @@ describe('welcome-dm worker', () => {
     expect(await welcomeDm(job)).toEqual({ held: 'missing scope' });
     expect(state.sent).toEqual([]);
     expect(broken).not.toHaveBeenCalled();
+    expect(state.updates.at(-1)).toMatchObject({ status: 'pending' });
+  });
+
+  it('still marks the sender broken when posting is refused for a missing scope', async () => {
+    const broken = vi.spyOn(await import('../lib/welcome-store.js'), 'markSenderBroken');
+    state.sendResult = { ok: false, error: 'missing_scope', stage: 'post' };
+    expect(await welcomeDm(job)).toEqual({ held: 'missing_scope' });
+    expect(broken).toHaveBeenCalled();
     expect(state.updates.at(-1)).toMatchObject({ status: 'pending' });
   });
 

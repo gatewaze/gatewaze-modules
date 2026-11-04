@@ -240,6 +240,18 @@ describe('slackApi / sendDirectMessage', () => {
     expect(await findPriorDirectMessage('t', 'U9', impl)).toEqual({ ok: true, found: false, channel: 'D42' });
   });
 
+  it('keeps the real error when the DM cannot be opened, and never reads history', async () => {
+    const { impl, calls } = fakeSlack({ 'conversations.open': { ok: false, error: 'user_not_found' } });
+    expect(await findPriorDirectMessage('t', 'U9', impl)).toEqual({ ok: false, error: 'user_not_found', stage: 'open' });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('reports an open without a channel id as no_channel', async () => {
+    const { impl, calls } = fakeSlack({ 'conversations.open': { ok: true, channel: {} } });
+    expect(await findPriorDirectMessage('t', 'U9', impl)).toEqual({ ok: false, error: 'no_channel', stage: 'open' });
+    expect(calls).toHaveLength(1);
+  });
+
   it('reports a history failure with its stage instead of saying the DM is empty', async () => {
     const { impl } = fakeSlack({
       'conversations.open': { ok: true, channel: { id: 'D42' } },

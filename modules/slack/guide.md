@@ -89,8 +89,9 @@ How it works:
    configured delay. It claims the row atomically, then opens a DM and posts
    the message with the sender's **user token**. If the DM already has a
    message in it, from either person, the welcome is skipped: the member was
-   welcomed before (by another tool, or by hand) or has already written to
-   the sender. A sender connected before `im:history` was added must
+   welcomed before (by another tool, or by hand), was already sent something
+   from the sender's account (a Slack broadcast sent as the welcome sender
+   counts), or has already written to the sender. A sender connected before `im:history` was added must
    reconnect; until then welcomes wait, and **Retry waiting** sends them.
    `im:history` lets the stored token read every DM the sender has, so the
    worker asks for one message and uses only whether there is one; it never

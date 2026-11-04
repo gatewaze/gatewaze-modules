@@ -353,7 +353,7 @@ export default function SlackWelcomePage() {
                 </div>
                 {missingScopes.length > 0 && (
                   <div className="text-sm text-[var(--red-11)]">
-                    This connection is missing {missingScopes.join(', ')}. Welcomes wait until {sender.slack_user_name || 'the sender'} reconnects with a new link.
+                    This connection is missing {missingScopes.join(', ')}. Welcomes wait until {sender.slack_user_name || 'the sender'} reconnects with a new link. Then press Retry waiting to send them.
                   </div>
                 )}
               </div>
