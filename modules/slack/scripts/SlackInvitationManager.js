@@ -329,93 +329,7 @@ export class SlackInvitationManager {
         : this.workspaceUrl;
       console.log(`📍 Navigating to Slack workspace: ${appUrl}`);
 
-      try {
-        await this.page.goto(appUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
-      } catch (navError) {
-        console.log(`⚠️  Navigation timeout/error, checking if page loaded anyway...`);
-        // Sometimes the page loads but doesn't finish all network requests
-      }
-
-      // Wait for Slack app to fully load - it's a heavy SPA
-      console.log(`⏳ Waiting for Slack app to fully load...`);
-      await this.wait(5000);
-
-      // Try to wait for a Slack-specific element to confirm the app is ready
-      try {
-        await this.page.waitForSelector('[data-qa="workspace_actions_button"], button.p-ia4_home_header_menu__button, [data-qa="channel_sidebar"]', {
-          timeout: 15000
-        });
-        console.log(`✅ Slack app loaded - found UI element`);
-      } catch (e) {
-        console.log(`⚠️  Could not find Slack UI element, continuing anyway...`);
-      }
-
-      // Additional wait for any animations/rendering
-      await this.wait(2000);
-
-      // Click on the workspace dropdown menu with retry logic
-      console.log(`🔍 Looking for workspace actions button...`);
-      const workspaceMenuSelectors = [
-        'button[data-qa="workspace_actions_button"]',
-        'button.p-ia4_home_header_menu__button',
-        'button[aria-label*="actions"]',
-        'button[aria-haspopup="menu"]'
-      ];
-
-      let menuOpened = false;
-      const maxRetries = 3;
-
-      for (let attempt = 1; attempt <= maxRetries && !menuOpened; attempt++) {
-        console.log(`🔄 Attempt ${attempt}/${maxRetries} to find workspace menu button...`);
-
-        for (const selector of workspaceMenuSelectors) {
-          try {
-            const button = await this.page.$(selector);
-            if (button) {
-              const isVisible = await button.evaluate(el => el.offsetParent !== null);
-              if (isVisible) {
-                console.log(`✅ Found workspace menu button: ${selector}`);
-                await button.click();
-                menuOpened = true;
-                await this.wait(1500); // Wait for menu animation
-                break;
-              }
-            }
-          } catch (e) {
-            // Try next selector
-          }
-        }
-
-        if (!menuOpened) {
-          // Try text-based search as fallback
-          console.log(`⚠️  Trying text-based button search...`);
-          const clicked = await this.page.evaluate(() => {
-            const buttons = Array.from(document.querySelectorAll('button'));
-            const menuButton = buttons.find(btn => {
-              const isVisible = btn.offsetParent !== null;
-              const hasMenuIndicator = btn.className.includes('workspace') ||
-                btn.className.includes('header_menu') ||
-                (btn.getAttribute('aria-label') || '').toLowerCase().includes('actions') ||
-                btn.getAttribute('aria-haspopup') === 'menu';
-              return isVisible && hasMenuIndicator;
-            });
-            if (menuButton) {
-              menuButton.click();
-              return true;
-            }
-            return false;
-          });
-
-          if (clicked) {
-            menuOpened = true;
-            await this.wait(1500);
-          } else if (attempt < maxRetries) {
-            console.log(`⏳ Waiting before retry...`);
-            await this.wait(3000);
-          }
-        }
-      }
-
+      const menuOpened = await this.openWorkspaceMenu(appUrl);
       if (!menuOpened) {
         await this.takeScreenshot(`no-workspace-menu-${email.replace(/[^a-z0-9]/gi, '-')}`);
         throw new Error('Could not find or click workspace menu button after multiple attempts');
@@ -1070,6 +984,128 @@ export class SlackInvitationManager {
       console.log(`⚠️  Could not read refusal reason: ${error.message}`);
       return null;
     }
+  }
+
+  /**
+   * Load the Slack client and open the workspace menu.
+   *
+   * Through the residential proxy the page arrives in 2-3 s, but the Slack app
+   * takes another 11-20 s to render its header (measured 4 Nov 2026), and a
+   * fixed 20 s wait failed invites whenever a load ran long. So wait for the
+   * workspace button itself, and if the menu still will not open, reload once
+   * and try again before giving up.
+   *
+   * @returns {Promise<boolean>} whether the menu opened.
+   */
+  async openWorkspaceMenu(appUrl, attempts = 2) {
+    for (let attempt = 1; attempt <= attempts; attempt++) {
+      try {
+        if (attempt === 1) {
+          await this.page.goto(appUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        } else {
+          await this.page.reload({ waitUntil: 'domcontentloaded', timeout: 60000 });
+        }
+      } catch (navError) {
+        // The SPA keeps requests open; the page is often usable anyway.
+        console.log(`⚠️  Navigation timeout/error, checking if page loaded anyway...`);
+      }
+
+      console.log(`⏳ Waiting for Slack app to fully load...`);
+      if (await this.waitForSlackUi()) {
+        console.log(`✅ Slack app loaded - found UI element`);
+      } else {
+        console.log(`⚠️  Could not find Slack UI element, continuing anyway...`);
+      }
+      // Additional wait for any animations/rendering
+      await this.wait(2000);
+
+      if (await this.clickWorkspaceMenu()) return true;
+
+      const where = await this.page.evaluate(() => ({ url: location.href.replace(/\?.*/, ''), title: document.title })).catch(() => null);
+      console.log(`⚠️  Workspace menu did not open (attempt ${attempt}/${attempts})${where ? ` at ${where.url} — "${where.title}"` : ''}`);
+    }
+    return false;
+  }
+
+  /** Wait for the Slack client's header to render. */
+  async waitForSlackUi(timeoutMs = Number(process.env.SLACK_UI_TIMEOUT_MS) || 60000) {
+    try {
+      await this.page.waitForSelector('[data-qa="workspace_actions_button"], button.p-ia4_home_header_menu__button', {
+        visible: true,
+        timeout: timeoutMs,
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Click the workspace dropdown. @returns {Promise<boolean>} */
+  async clickWorkspaceMenu() {
+    // Click on the workspace dropdown menu with retry logic
+    console.log(`🔍 Looking for workspace actions button...`);
+    const workspaceMenuSelectors = [
+      'button[data-qa="workspace_actions_button"]',
+      'button.p-ia4_home_header_menu__button',
+      'button[aria-label*="actions"]',
+      'button[aria-haspopup="menu"]'
+    ];
+
+    let menuOpened = false;
+    const maxRetries = 3;
+
+    for (let attempt = 1; attempt <= maxRetries && !menuOpened; attempt++) {
+      console.log(`🔄 Attempt ${attempt}/${maxRetries} to find workspace menu button...`);
+
+      for (const selector of workspaceMenuSelectors) {
+        try {
+          const button = await this.page.$(selector);
+          if (button) {
+            const isVisible = await button.evaluate(el => el.offsetParent !== null);
+            if (isVisible) {
+              console.log(`✅ Found workspace menu button: ${selector}`);
+              await button.click();
+              menuOpened = true;
+              await this.wait(1500); // Wait for menu animation
+              break;
+            }
+          }
+        } catch (e) {
+          // Try next selector
+        }
+      }
+
+      if (!menuOpened) {
+        // Try text-based search as fallback
+        console.log(`⚠️  Trying text-based button search...`);
+        const clicked = await this.page.evaluate(() => {
+          const buttons = Array.from(document.querySelectorAll('button'));
+          const menuButton = buttons.find(btn => {
+            const isVisible = btn.offsetParent !== null;
+            const hasMenuIndicator = btn.className.includes('workspace') ||
+              btn.className.includes('header_menu') ||
+              (btn.getAttribute('aria-label') || '').toLowerCase().includes('actions') ||
+              btn.getAttribute('aria-haspopup') === 'menu';
+            return isVisible && hasMenuIndicator;
+          });
+          if (menuButton) {
+            menuButton.click();
+            return true;
+          }
+          return false;
+        });
+
+        if (clicked) {
+          menuOpened = true;
+          await this.wait(1500);
+        } else if (attempt < maxRetries) {
+          console.log(`⏳ Waiting before retry...`);
+          await this.wait(3000);
+        }
+      }
+    }
+
+    return menuOpened;
   }
 
   /**
