@@ -1,11 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { createHmac, randomBytes } from 'node:crypto';
 // @ts-expect-error — plain ESM libs, no type declarations
-import { authorizeUrl, checkState, classifySlackError, requireSignedIn, slackErrorCode, delayMs, escapeSlackText, isWelcomable, renderWelcomeMessage, signState, verifySlackSignature, DEFAULT_MESSAGE, STATE_TTL_MS, USER_SCOPES } from '../lib/welcome.js';
+import { authorizeUrl, checkState, classifySlackError, requireSignedIn, slackErrorCode, delayMs, escapeSlackText, isWelcomable, renderWelcomeMessage, signState, verifySlackSignature, missingScopes, DEFAULT_MESSAGE, STATE_TTL_MS, USER_SCOPES } from '../lib/welcome.js';
 // @ts-expect-error — plain ESM lib
 import { isSealed, sealSecret, unsealSecret } from '../lib/secret-envelope.js';
 // @ts-expect-error — plain ESM lib
-import { sendDirectMessage, slackApi } from '../lib/welcome-store.js';
+import { findPriorDirectMessage, sendDirectMessage, slackApi } from '../lib/welcome-store.js';
 
 const SECRET = 'signing-secret-123';
 const NOW = Date.UTC(2026, 9, 13, 14, 0, 0);
@@ -220,6 +220,46 @@ describe('slackApi / sendDirectMessage', () => {
     expect(calls).toHaveLength(1);
   });
 
+  it('finds an earlier message in the DM, from either side', async () => {
+    const { impl, calls } = fakeSlack({
+      'conversations.open': { ok: true, channel: { id: 'D42' } },
+      'conversations.history': { ok: true, messages: [{ ts: '1.1', user: 'U9', text: 'thanks!' }] },
+    });
+    expect(await findPriorDirectMessage('xoxp-s', 'U9', impl)).toEqual({ ok: true, found: true, channel: 'D42' });
+    expect(calls.map((c) => c.url.split('/api/')[1])).toEqual(['conversations.open', 'conversations.history']);
+    expect(calls[1].body.get('channel')).toBe('D42');
+    expect(calls[1].body.get('limit')).toBe('1');
+    expect(calls.every((c) => c.auth === 'Bearer xoxp-s')).toBe(true);
+  });
+
+  it('reports an empty DM as no earlier message', async () => {
+    const { impl } = fakeSlack({
+      'conversations.open': { ok: true, channel: { id: 'D42' } },
+      'conversations.history': { ok: true, messages: [] },
+    });
+    expect(await findPriorDirectMessage('t', 'U9', impl)).toEqual({ ok: true, found: false, channel: 'D42' });
+  });
+
+  it('keeps the real error when the DM cannot be opened, and never reads history', async () => {
+    const { impl, calls } = fakeSlack({ 'conversations.open': { ok: false, error: 'user_not_found' } });
+    expect(await findPriorDirectMessage('t', 'U9', impl)).toEqual({ ok: false, error: 'user_not_found', stage: 'open' });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('reports an open without a channel id as no_channel', async () => {
+    const { impl, calls } = fakeSlack({ 'conversations.open': { ok: true, channel: {} } });
+    expect(await findPriorDirectMessage('t', 'U9', impl)).toEqual({ ok: false, error: 'no_channel', stage: 'open' });
+    expect(calls).toHaveLength(1);
+  });
+
+  it('reports a history failure with its stage instead of saying the DM is empty', async () => {
+    const { impl } = fakeSlack({
+      'conversations.open': { ok: true, channel: { id: 'D42' } },
+      'conversations.history': { ok: false, error: 'missing_scope' },
+    });
+    expect(await findPriorDirectMessage('t', 'U9', impl)).toEqual({ ok: false, error: 'missing_scope', stage: 'history' });
+  });
+
   it('turns HTTP 429 into a retryable ratelimited error', async () => {
     const { impl } = fakeSlack({ 'chat.postMessage': 429 });
     expect(await slackApi('chat.postMessage', 't', {}, impl)).toEqual({ ok: false, error: 'ratelimited', retryAfter: 30 });
@@ -265,4 +305,16 @@ describe('requireSignedIn', () => {
   it('lets a signed-in request through', () => expect(run({ userId: 'u-1' })).toEqual({ status: 0, nexted: true }));
   it.each([{}, { userId: '' }, { userId: 123 }])('refuses %j with 401', (req) =>
     expect(run(req)).toEqual({ status: 401, nexted: false }));
+});
+
+describe('missingScopes', () => {
+  it('asks for im:history so the worker can check for an earlier DM', () => expect(USER_SCOPES).toContain('im:history'));
+  it('names the scopes a connection made before im:history lacks', () =>
+    expect(missingScopes('chat:write,im:write')).toEqual(['im:history']));
+  it('is empty for a full grant, whatever the order or spacing', () =>
+    expect(missingScopes(' im:history, chat:write,im:write ')).toEqual([]));
+  it('treats no recorded scopes as none granted', () => {
+    expect(missingScopes(null)).toEqual(USER_SCOPES);
+    expect(missingScopes('')).toEqual(USER_SCOPES);
+  });
 });

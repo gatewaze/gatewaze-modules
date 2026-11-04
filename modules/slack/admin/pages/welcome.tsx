@@ -294,6 +294,8 @@ export default function SlackWelcomePage() {
   const setup = status?.setup;
   const setupComplete = !!setup && Object.values(setup).every(Boolean);
   const sender = status?.sender ?? null;
+  const grantedScopes = (sender?.scopes ?? '').split(',').map((s) => s.trim());
+  const missingScopes = sender ? (status?.user_scopes ?? []).filter((s) => !grantedScopes.includes(s)) : [];
   const counts = status?.last_30_days ?? {};
 
   return (
@@ -349,6 +351,11 @@ export default function SlackWelcomePage() {
                   Connected {fmt(sender.connected_at)}
                   {sender.status_detail ? ` · ${sender.status_detail}` : ''}
                 </div>
+                {missingScopes.length > 0 && (
+                  <div className="text-sm text-[var(--red-11)]">
+                    This connection is missing {missingScopes.join(', ')}. Welcomes wait until {sender.slack_user_name || 'the sender'} reconnects with a new link. Then press Retry waiting to send them.
+                  </div>
+                )}
               </div>
               <Button variant="outlined" color="error" onClick={disconnect} disabled={busy}>Disconnect</Button>
             </div>

@@ -7,6 +7,12 @@
  * claimed atomically (pending → sending) before anything is sent, so a
  * duplicate job, a redelivered event or a manual retry can never send twice.
  *
+ * Nobody is welcomed twice: before posting, the worker reads the DM between
+ * the sender and the member, and skips the welcome if either of them has
+ * written there already (an earlier welcome from another tool, a reply).
+ * A connection that was never granted im:history cannot make that check, so
+ * the row is held pending until the sender reconnects and Retry is pressed.
+ *
  * Failure handling, by Slack's error code (lib/welcome.js classifySlackError):
  *   auth       — the sender's token stopped working. The connection is marked
  *                broken, the row goes back to pending, and nothing is retried
@@ -17,8 +23,8 @@
  */
 
 import { serviceClient } from '../lib/service-client.js';
-import { classifySlackError, renderWelcomeMessage } from '../lib/welcome.js';
-import { LOG_TABLE, markSenderBroken, readSenderWithToken, readSlackConfig, sendDirectMessage } from '../lib/welcome-store.js';
+import { classifySlackError, missingScopes, renderWelcomeMessage } from '../lib/welcome.js';
+import { findPriorDirectMessage, LOG_TABLE, markSenderBroken, readSenderWithToken, readSlackConfig, sendDirectMessage } from '../lib/welcome-store.js';
 
 export default async function welcomeDm(job: { data?: { logId?: string }; attemptsMade?: number; opts?: { attempts?: number } }) {
   const logId = job?.data?.logId;
@@ -69,6 +75,15 @@ export default async function welcomeDm(job: { data?: { logId?: string }; attemp
       return { held: 'token unreadable' };
     }
 
+    // Held, not skipped or marked broken: a broken sender makes the events
+    // route skip later joins outright, and these people are still owed a
+    // welcome once the check can run.
+    const missing = missingScopes(sender.scopes);
+    if (missing.length) {
+      await settle({ status: 'pending', error: `sender connection lacks ${missing.join(', ')} — reconnect and retry` });
+      return { held: 'missing scope' };
+    }
+
     const text = renderWelcomeMessage(cfg.message, {
       id: row.slack_user_id,
       profile: { first_name: row.first_name || '', real_name: row.display_name || '' },
@@ -76,7 +91,12 @@ export default async function welcomeDm(job: { data?: { logId?: string }; attemp
 
     let result;
     try {
-      result = await sendDirectMessage(sender.token, row.slack_user_id, text);
+      const prior = await findPriorDirectMessage(sender.token, row.slack_user_id);
+      if (prior.ok && prior.found) {
+        await settle({ status: 'skipped', skip_reason: 'already has messages in a DM with the sender' });
+        return { skipped: 'prior conversation' };
+      }
+      result = prior.ok ? await sendDirectMessage(sender.token, row.slack_user_id, text) : prior;
     } catch (err) {
       result = { ok: false, error: 'network_error', detail: String(err) };
     }
@@ -85,6 +105,14 @@ export default async function welcomeDm(job: { data?: { logId?: string }; attemp
       delivered = { ts: result.ts, as: sender.slack_user_id };
       await settle({ status: 'sent', sent_at: new Date().toISOString(), sent_as: sender.slack_user_id, message_ts: result.ts, error: null });
       return { sent: true };
+    }
+
+    // Slack says the token cannot read the DM although the stored scopes say
+    // it can (the grant changed in Slack). Hold the row for the same reason
+    // as a missing scope above, instead of marking the sender broken.
+    if (result.stage === 'history' && result.error === 'missing_scope') {
+      await settle({ status: 'pending', error: 'sender connection cannot read DMs (im:history) — reconnect and retry' });
+      return { held: 'missing scope' };
     }
 
     const kind = classifySlackError(result.error);

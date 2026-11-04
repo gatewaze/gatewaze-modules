@@ -9,8 +9,22 @@
 
 import { createHmac, randomBytes, timingSafeEqual } from 'crypto';
 
-/** User-token scopes the sender authorises: open a DM, and post in it. */
-export const USER_SCOPES = ['chat:write', 'im:write'];
+/**
+ * User-token scopes the sender authorises: open a DM, read it (to check the
+ * two of them have not already talked), and post in it.
+ */
+export const USER_SCOPES = ['chat:write', 'im:write', 'im:history'];
+
+/**
+ * The USER_SCOPES a stored connection was not granted. A token connected
+ * before a scope was added lacks it until the sender reconnects.
+ *
+ * @param {string | null | undefined} granted — comma-separated, as stored.
+ */
+export function missingScopes(granted) {
+  const have = String(granted || '').split(',').map((s) => s.trim()).filter(Boolean);
+  return USER_SCOPES.filter((s) => !have.includes(s));
+}
 
 /** The purpose a stored user token is for. One connected account per purpose. */
 export const WELCOME_PURPOSE = 'welcome_dm';
