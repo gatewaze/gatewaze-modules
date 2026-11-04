@@ -11,7 +11,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('puppeteer-extra', () => ({ default: { use: () => {}, launch: async () => ({}) } }));
 vi.mock('puppeteer-extra-plugin-stealth', () => ({ default: () => ({}) }));
 
-const { SlackInvitationManager } = await import('../scripts/SlackInvitationManager.js');
+const { SlackInvitationManager, slackUiTimeoutMs } = await import('../scripts/SlackInvitationManager.js');
 
 function manager({ uiReady = [true], clicks = [true] } = {}) {
   const m = new SlackInvitationManager({ workspaceUrl: 'https://example.slack.com' });
@@ -69,10 +69,23 @@ describe('openWorkspaceMenu', () => {
     expect(await m.openWorkspaceMenu('https://example.slack.com')).toBe(true);
   });
 
+  it('still reloads when the page cannot be read for the log line', async () => {
+    const { m, page } = manager({ uiReady: [false, true], clicks: [false, true] });
+    page.evaluate.mockRejectedValueOnce(new Error('Execution context was destroyed'));
+    expect(await m.openWorkspaceMenu('https://example.slack.com')).toBe(true);
+    expect(page.reload).toHaveBeenCalledTimes(1);
+  });
+
   it('honours SLACK_UI_TIMEOUT_MS', async () => {
     process.env.SLACK_UI_TIMEOUT_MS = '90000';
     const { m, page } = manager();
     await m.openWorkspaceMenu('https://example.slack.com');
     expect(page.waitForSelector.mock.calls[0][1].timeout).toBe(90000);
   });
+});
+
+describe('slackUiTimeoutMs', () => {
+  it('defaults to 60 s', () => expect(slackUiTimeoutMs(undefined)).toBe(60000));
+  it.each(['', 'abc', '0', '-5', 'Infinity'])('falls back to 60 s for %j', (v) => expect(slackUiTimeoutMs(v)).toBe(60000));
+  it('caps a huge value at 5 minutes', () => expect(slackUiTimeoutMs('9999999')).toBe(300000));
 });

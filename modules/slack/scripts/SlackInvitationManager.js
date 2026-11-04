@@ -15,6 +15,12 @@ const __dirname = path.dirname(__filename);
  * SlackInvitationManager - Automates Slack workspace invitations
  * Reuses authenticated sessions to invite users without needing to re-login
  */
+/** SLACK_UI_TIMEOUT_MS, or 60 s; capped at 5 min so a bad value cannot hang the worker. */
+export function slackUiTimeoutMs(raw = process.env.SLACK_UI_TIMEOUT_MS) {
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? Math.min(n, 300000) : 60000;
+}
+
 export class SlackInvitationManager {
   constructor(config = {}) {
     this.workspaceUrl = config.workspaceUrl || process.env.SLACK_WORKSPACE_URL;
@@ -1021,14 +1027,14 @@ export class SlackInvitationManager {
 
       if (await this.clickWorkspaceMenu()) return true;
 
-      const where = await this.page.evaluate(() => ({ url: location.href.replace(/\?.*/, ''), title: document.title })).catch(() => null);
+      const where = await this.page.evaluate(() => ({ url: location.origin + location.pathname, title: document.title })).catch(() => null);
       console.log(`⚠️  Workspace menu did not open (attempt ${attempt}/${attempts})${where ? ` at ${where.url} — "${where.title}"` : ''}`);
     }
     return false;
   }
 
   /** Wait for the Slack client's header to render. */
-  async waitForSlackUi(timeoutMs = Number(process.env.SLACK_UI_TIMEOUT_MS) || 60000) {
+  async waitForSlackUi(timeoutMs = slackUiTimeoutMs()) {
     try {
       await this.page.waitForSelector('[data-qa="workspace_actions_button"], button.p-ia4_home_header_menu__button', {
         visible: true,
