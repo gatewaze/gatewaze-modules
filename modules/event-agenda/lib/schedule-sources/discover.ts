@@ -66,9 +66,10 @@ export interface DiscoveryFailure {
 export function decodeSchedConfig(html: string): { apiUrl: string | null; apiCode: string | null; publicSlug: string | null } | null {
   const m = /data-sched-config=(["'])([\s\S]*?)\1/i.exec(html);
   if (!m) return null;
-  const json = m[2]
-    .replace(/&quot;/g, '"').replace(/&#0?39;/g, "'").replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<').replace(/&gt;/g, '>');
+  // One pass over the five entities the attribute can carry, so a decoded
+  // `&amp;` can never be read again as the start of another entity.
+  const ENTITY: Record<string, string> = { quot: '"', '#39': "'", '#039': "'", amp: '&', lt: '<', gt: '>' };
+  const json = m[2].replace(/&(quot|#0?39|amp|lt|gt);/g, (_, name: string) => ENTITY[name] ?? `&${name};`);
   let cfg: Record<string, unknown>;
   try {
     cfg = JSON.parse(json) as Record<string, unknown>;
