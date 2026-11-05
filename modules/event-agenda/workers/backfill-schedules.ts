@@ -57,7 +57,7 @@ function chunks<T>(items: T[], size: number): T[][] {
 async function loadCandidates(supabase, run, now: Date): Promise<CandidateEvent[]> {
   let q = supabase
     .from('events')
-    .select('id, event_start, source_details')
+    .select('id, event_start, source_details, event_link')
     .eq('event_type', 'conference')
     .lt('event_start', now.toISOString())
     .order('event_start', { ascending: true })
@@ -71,6 +71,7 @@ async function loadCandidates(supabase, run, now: Date): Promise<CandidateEvent[
   return (res.data ?? []).map((r) => ({
     id: String(r.id),
     event_start: r.event_start ?? null,
+    eventLink: r.event_link ?? null,
     eventScheduleUrl: r.source_details?.action_links?.schedule
       ? String(r.source_details.action_links.schedule)
       : null,

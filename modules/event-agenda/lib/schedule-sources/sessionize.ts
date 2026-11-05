@@ -36,6 +36,7 @@ const MAX_JSON_BYTES = 8 * 1024 * 1024;
 interface SzSpeaker {
   id: string; firstName?: string; lastName?: string; fullName?: string; bio?: string | null; tagLine?: string | null;
   profilePicture?: string | null; questionAnswers?: Array<{ questionId: number; answerValue?: string | null }>;
+  links?: Array<{ title?: string | null; url?: string | null; linkType?: string | null }>;
 }
 interface SzSession {
   id: string | number; title: string; description?: string | null; startsAt?: string | null; endsAt?: string | null;
@@ -51,6 +52,33 @@ interface SzSchedule {
 function text(v: unknown, max = 4000): string | null {
   const s = String(v ?? '').replace(/\s+/g, ' ').trim();
   return s ? s.slice(0, max) : null;
+}
+
+/**
+ * The speaker's LinkedIn profile from their Sessionize links, or null.
+ *
+ * Accepts only https URLs on linkedin.com whose path is a personal profile
+ * (`/in/<slug>`), and returns the bare profile URL: Sessionize stores the
+ * link exactly as the speaker pasted it, tracking parameters included, and a
+ * `?utm_source=share` suffix has no business in a speaker profile.
+ */
+export function speakerLinkedIn(sp: SzSpeaker): string | null {
+  for (const l of sp.links ?? []) {
+    const raw = text(l?.url, 500);
+    if (!raw) continue;
+    const typed = /^linkedin$/i.test(String(l?.linkType ?? '')) || /^linkedin$/i.test(String(l?.title ?? ''));
+    let u: URL;
+    try { u = new URL(raw); } catch { continue; }
+    // Speakers paste http:// links too; the stored URL is rebuilt as https
+    // below and is never fetched, so the scheme of the input does not matter.
+    if (u.protocol !== 'https:' && u.protocol !== 'http:') continue;
+    if (!/(^|\.)linkedin\.com$/i.test(u.hostname)) continue;
+    const m = /^\/in\/([A-Za-z0-9][A-Za-z0-9._%-]{1,99})\/?$/.exec(u.pathname);
+    if (!m) continue;
+    if (!typed && !/linkedin/i.test(raw)) continue;
+    return `https://www.linkedin.com/in/${m[1]}`;
+  }
+  return null;
 }
 
 /** Role and company from the custom answers first, the tag line second. */
@@ -137,6 +165,7 @@ export function parseSessionize(schedule: SzSchedule, data: { timezone?: string 
       // A Sessionize speaker id is a GUID per speaker; prefixed so it can
       // never collide with sched's numeric account ids in the same column.
       sourceUserId: `sessionize:${id}`,
+      linkedinUrl: speakerLinkedIn(sp),
     });
   }
 
@@ -228,7 +257,11 @@ export const sessionizeSource: ScheduleSource = {
 
   parse(raw: RawSchedule): ParsedSchedule {
     const schedule = parseJson(raw.parts.schedule ?? '', 'schedule') as SzSchedule;
-    const data = raw.parts.data ? (parseJson(raw.parts.data, 'data') as { timezone?: string | null }) : null;
+    // The hosted site's /api/data carries the timezone; the API v2 feed does
+    // not, so the importer may hand the event's own IANA zone in `parts.zone`.
+    const data = raw.parts.data
+      ? (parseJson(raw.parts.data, 'data') as { timezone?: string | null })
+      : raw.parts.zone ? { timezone: raw.parts.zone } : null;
     const origin = /\/api\/v2\//.test(raw.resolvedUrl) ? null : raw.resolvedUrl;
     return parseSessionize(schedule, data, origin);
   },
