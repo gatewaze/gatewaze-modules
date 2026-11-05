@@ -5,6 +5,7 @@ import { createServerClient } from '@supabase/ssr'
 import { notFound } from 'next/navigation'
 import Link from 'next/link'
 import { SafeImg } from '../../components/SafeImg'
+import { countCategories } from '../../../lib/category-counts'
 
 interface Collection {
   id: string
@@ -244,19 +245,18 @@ export default async function CollectionDetailPage({ params, searchParams }: Pro
             <Link href={`/resources/${collection.slug}`} aria-current={!activeCategory ? 'page' : undefined} className="res-nav-link">
               All ({items.length})
             </Link>
-            {categories.map((cat) => {
-              const count = items.filter(i => i.category_id === cat.id).length
-              return (
-                <Link
-                  key={cat.id}
-                  href={`/resources/${collection.slug}?category=${cat.slug}`}
-                  aria-current={activeCategory === cat.slug ? 'page' : undefined}
-                  className="res-nav-link"
-                >
-                  {cat.name} ({count})
-                </Link>
-              )
-            })}
+            {/* Only categories with something to show: a category whose items are
+                all draft would otherwise sit in the list reading "(0)". */}
+            {countCategories(categories, items).map(({ category: cat, count }) => (
+              <Link
+                key={cat.id}
+                href={`/resources/${collection.slug}?category=${cat.slug}`}
+                aria-current={activeCategory === cat.slug ? 'page' : undefined}
+                className="res-nav-link"
+              >
+                {cat.name} ({count})
+              </Link>
+            ))}
           </nav>
         </aside>
 
