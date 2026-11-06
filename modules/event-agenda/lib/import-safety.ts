@@ -93,10 +93,10 @@ export class FetchRefused extends Error {
 export async function guardedFetch(
   rawUrl: string,
   allowlist: string[] = DEFAULT_HOST_ALLOWLIST,
-): Promise<{ ok: boolean; status: number; text: string }> {
+): Promise<{ ok: boolean; status: number; text: string; finalUrl: string }> {
   const r = await guardedFetchBytes(rawUrl, allowlist, MAX_BYTES);
-  if (!r.ok) return { ok: false, status: r.status, text: '' };
-  return { ok: true, status: r.status, text: new TextDecoder().decode(r.bytes) };
+  if (!r.ok) return { ok: false, status: r.status, text: '', finalUrl: r.finalUrl };
+  return { ok: true, status: r.status, text: new TextDecoder().decode(r.bytes), finalUrl: r.finalUrl };
 }
 
 /**
@@ -282,4 +282,14 @@ export function clean(value: unknown, max: number): string | null {
   s = s.replace(/\s+/g, ' ').trim();
   if (!s) return null;
   return s.length > max ? s.slice(0, max).trim() : s;
+}
+
+/** An event website link discovery can start from: https, on an allowlisted host. */
+export function websiteLinkIsCandidate(link: string | null | undefined, allowlist: string[] = DEFAULT_HOST_ALLOWLIST): boolean {
+  try {
+    const u = new URL(String(link ?? '').trim());
+    return u.protocol === 'https:' && hostAllowed(u.hostname, allowlist);
+  } catch {
+    return false;
+  }
 }

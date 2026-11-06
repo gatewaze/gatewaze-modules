@@ -7,6 +7,8 @@
  * for review, and how the cursor advances.
  */
 
+import { websiteLinkIsCandidate } from './import-safety.js';
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /** Terminal states, where the worker must not re-enqueue itself. */
@@ -32,6 +34,8 @@ export interface CandidateEvent {
   event_start: string | null;
   /** The event's own schedule link, from source_details.action_links.schedule. */
   eventScheduleUrl: string | null;
+  /** The event's website (events.event_link); discovery starts there when it is allowlisted. */
+  eventLink?: string | null;
 }
 
 /** The per-event import row, for the fields that decide eligibility. */
@@ -46,16 +50,19 @@ export interface ImportState {
  * Does this event have a schedule source at all?
  *
  * Mirrors resolveScheduleUrl in workers/import-schedule.ts: a manual URL on
- * the import row wins, otherwise the event's own action link. Anything else
- * has nothing to fetch, so running the importer on it would only write an
- * `unavailable` row we can predict without the round trip.
+ * the import row wins, otherwise the event's own action link, otherwise the
+ * event's website when it is on a host the importer may read (discovery
+ * finds the schedule page from there). Anything else has nothing to fetch,
+ * so running the importer on it would only write an `unavailable` row we can
+ * predict without the round trip.
  */
 export function hasScheduleSource(
   event: CandidateEvent,
   imp: ImportState | undefined,
 ): boolean {
   if (imp?.url_origin === 'manual' && imp.schedule_url) return true;
-  return !!event.eventScheduleUrl;
+  if (event.eventScheduleUrl) return true;
+  return websiteLinkIsCandidate(event.eventLink);
 }
 
 export interface ScopeOptions {

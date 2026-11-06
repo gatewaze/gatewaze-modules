@@ -30,6 +30,12 @@ export interface ParsedSpeaker {
    * across events and across name changes, so it is what dedupe matches on.
    */
   sourceUserId: string | null;
+  /**
+   * The speaker's own LinkedIn profile URL when the source publishes one
+   * (Sessionize speakers list it under `links`). Already validated: https,
+   * on linkedin.com, tracking parameters removed. Null for sched.
+   */
+  linkedinUrl: string | null;
 }
 
 export interface ParsedSession {
@@ -72,7 +78,7 @@ export interface RawSchedule {
 }
 
 /** Fetches a URL with the platform's SSRF + allowlist guarantees applied. */
-export type GuardedFetch = (url: string) => Promise<{ ok: boolean; status: number; text: string }>;
+export type GuardedFetch = (url: string) => Promise<{ ok: boolean; status: number; text: string; finalUrl?: string }>;
 
 export interface ScheduleSource {
   kind: string;

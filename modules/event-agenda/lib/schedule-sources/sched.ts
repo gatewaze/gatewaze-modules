@@ -180,7 +180,7 @@ export function parseDescriptionsHtml(html: string): HtmlSession[] {
         ? (avatarUrl.match(/avatars\.sched\.co\/[0-9a-z]+\/[0-9a-f]{2}\/(\d{3,})\//i)?.[1] ?? null)
         : null;
 
-      speakers.push({ ref, name, role, company, bio, avatarUrl, sourceUserId });
+      speakers.push({ ref, name, role, company, bio, avatarUrl, sourceUserId, linkedinUrl: null });
     });
 
     out.push({

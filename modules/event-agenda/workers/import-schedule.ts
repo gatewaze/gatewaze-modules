@@ -14,8 +14,8 @@
  */
 
 import { createHash } from 'node:crypto';
-import { detectSource } from '../lib/schedule-sources/index.js';
-import { guardedFetch, clean, safeAvatarUrl, LIMITS, FetchRefused, DEFAULT_HOST_ALLOWLIST } from '../lib/import-safety.js';
+import { discoverSchedule, isDiscoveryFailure } from '../lib/schedule-sources/discover.js';
+import { guardedFetch, websiteLinkIsCandidate, clean, safeAvatarUrl, LIMITS, FetchRefused, DEFAULT_HOST_ALLOWLIST } from '../lib/import-safety.js';
 import { listMirroredAvatars, mirrorAvatar } from '../lib/avatar-mirror.js';
 import { normalizeTitle } from '../lib/normalize-title.js';
 
@@ -51,9 +51,16 @@ export async function resolveScheduleUrl(
     return { url: imp.data.schedule_url, origin: 'manual' };
   }
 
-  const ev = await supabase.from('events').select('source_details').eq('id', eventUuid).maybeSingle();
+  const ev = await supabase.from('events').select('source_details, event_link').eq('id', eventUuid).maybeSingle();
   const fromEvent = ev?.data?.source_details?.action_links?.schedule;
   if (fromEvent) return { url: String(fromEvent), origin: 'event' };
+
+  // No scraped schedule link: start from the event's own website and let
+  // discovery read its schedule pages. Only an https link on an allowlisted
+  // host is a candidate; a Luma or Meetup link has no programme we can read,
+  // and returning it would turn every such event into a refused fetch.
+  const link = String(ev?.data?.event_link ?? '').trim();
+  if (websiteLinkIsCandidate(link)) return { url: link, origin: 'event' };
 
   return null;
 }
@@ -84,10 +91,13 @@ async function claim(supabase, eventUuid: string, force: boolean): Promise<boole
 }
 
 async function finish(supabase, eventUuid: string, patch: Record<string, unknown>): Promise<void> {
-  await supabase
+  const r = await supabase
     .from('events_schedule_imports')
     .update({ ...patch, updated_at: new Date().toISOString() })
     .eq('event_uuid', eventUuid);
+  // A rejected update would leave the row claimed as `importing` with the
+  // importer reporting success; that is worse than a loud failure.
+  if (r?.error) throw new Error(`import row update failed: ${r.error.message}`);
 }
 
 /** import_refs helpers — the idempotency spine. */
@@ -144,30 +154,23 @@ export async function importSchedule(
       return { status: 'unavailable', stats: {} };
     }
 
-    // Detect: a sched host is claimed directly; anything else is fetched once
-    // so the embed script can be read (§5.2). The host is never guessed.
-    let detected = detectSource(resolved.url);
-    if (!detected) {
-      const page = await guardedFetch(resolved.url, allowlist);
-      if (!page.ok) {
-        await finish(supabase, eventUuid, {
-          status: 'unavailable', schedule_url: resolved.url, url_origin: resolved.origin,
-          error: `schedule page returned ${page.status}`,
-        });
-        return { status: 'unavailable', stats: {} };
-      }
-      detected = detectSource(resolved.url, page.text);
-    }
-    if (!detected) {
+    // Discover: a feed URL is claimed directly; a page is read for a sched
+    // embed, a Sessionize embed or the inline Sessionize plugin's config, and
+    // an event home page is followed to its schedule pages (same site, same
+    // event, at most a handful of reads). The host is never guessed.
+    const found = await discoverSchedule(resolved.url, (u) => guardedFetch(u, allowlist), log);
+    if (isDiscoveryFailure(found)) {
+      const tried = found.pagesTried.length ? ` (read: ${found.pagesTried.join(', ')})` : '';
       await finish(supabase, eventUuid, {
         status: 'unavailable', schedule_url: resolved.url, url_origin: resolved.origin,
-        error: 'no schedule source found on that page yet',
+        error: `${found.reason}${tried}`.slice(0, 1000),
       });
-      log('page resolved but publishes no programme yet');
-      return { status: 'unavailable', stats: {} };
+      log(`no programme found: ${found.reason}${tried}`);
+      return { status: 'unavailable', stats: { pages_tried: found.pagesTried } };
     }
 
-    const { source, resolvedUrl } = detected;
+    const { source, resolvedUrl } = found;
+    if (found.pageUrl !== resolved.url) log(`programme found on ${found.pageUrl} → ${resolvedUrl}`);
     const raw = await source.fetch(resolvedUrl, (u) => guardedFetch(u, allowlist));
     const hash = sha256(Object.keys(raw.parts).sort().map((k) => raw.parts[k]).join(HASH_SEP));
 
@@ -175,7 +178,7 @@ export async function importSchedule(
       .from('events_schedule_imports').select('content_hash').eq('event_uuid', eventUuid).maybeSingle();
     if (prior?.data?.content_hash === hash && !opts.force) {
       await finish(supabase, eventUuid, {
-        status: 'complete', schedule_url: resolved.url, url_origin: resolved.origin,
+        status: 'complete', source_kind: source.kind, schedule_url: resolved.url, url_origin: resolved.origin,
         resolved_source_url: resolvedUrl, last_success_at: new Date().toISOString(),
         stats: { unchanged: true },
       });
@@ -183,6 +186,29 @@ export async function importSchedule(
       return { status: 'complete', stats: { unchanged: true } };
     }
 
+    // A Sessionize API v2 feed carries no timezone. The event's own zone is
+    // the best information we have, so hand it to the parser (after hashing,
+    // so the unchanged-skip still keys on the feed alone).
+    if (source.kind === 'sessionize' && !raw.parts.data) {
+      // First choice: the hosted site the inline config names, whose
+      // /api/data carries the organiser's timezone. Second: the event's own.
+      if (found.hostedOrigin) {
+        try {
+          const data = await guardedFetch(`${found.hostedOrigin}/api/data`, allowlist);
+          if (data.ok) {
+            const parsed = JSON.parse(data.text) as { timezone?: unknown };
+            if (parsed && typeof parsed.timezone === 'string' && parsed.timezone.trim()) raw.parts.data = data.text;
+          }
+        } catch (err) {
+          log(`timezone lookup on ${found.hostedOrigin} failed: ${String((err as Error)?.message ?? err).slice(0, 120)}`);
+        }
+      }
+      if (!raw.parts.data) {
+        const tz = await supabase.from('events').select('event_timezone').eq('id', eventUuid).maybeSingle();
+        const zone = String(tz?.data?.event_timezone ?? '').trim();
+        if (zone && zone !== 'UTC') raw.parts.zone = zone;
+      }
+    }
     const parsed = source.parse(raw);
     const refs = refsApi(supabase, eventUuid, source.kind);
     const seen = new Set<string>();
@@ -196,6 +222,8 @@ export async function importSchedule(
       // Returning speakers recognised by their sched account rather than their
       // name. A rising number here means fewer duplicate profiles created.
       speakers_matched_by_source_id: 0,
+      // Profiles that gained a LinkedIn URL from the programme (Sessionize only).
+      linkedin_filled: 0,
       skeleton_mismatch: parsed.diagnostics.skeletonMismatch, unchanged: false,
     };
 
@@ -260,6 +288,11 @@ export async function importSchedule(
       const role = clean(k.role, LIMITS.role);
       const company = clean(k.company, LIMITS.company);
       const bio = clean(k.bio, LIMITS.bio);
+      // Already validated by the source (https, linkedin.com/in/, no tracking
+      // query); re-checked here so no other source can ever hand us anything
+      // else. Fill-only below: a human's edit is never overwritten.
+      const linkedin = /^https:\/\/www\.linkedin\.com\/in\/[A-Za-z0-9][A-Za-z0-9._%-]{1,99}$/.test(String(k.linkedinUrl ?? ''))
+        ? String(k.linkedinUrl) : null;
 
       // Copy the avatar into our own bucket rather than hot-linking the
       // conference's CDN. This is the default, not an option: the old
@@ -288,10 +321,11 @@ export async function importSchedule(
         speakerIds.set(ref, existing.entity_id);
         // Fill only fields that are still empty; never overwrite a human's edit.
         const cur = await supabase.from('events_speaker_profiles')
-          .select('title, company, bio, avatar_url, sched_user_id, source_avatar_url')
+          .select('title, company, bio, avatar_url, sched_user_id, source_avatar_url, linkedin_url')
           .eq('id', existing.entity_id).maybeSingle();
         const patch: Record<string, unknown> = {};
         if (cur?.data) {
+          if (!cur.data.linkedin_url && linkedin) { patch.linkedin_url = linkedin; stats.linkedin_filled = ((stats.linkedin_filled as number) ?? 0) + 1; }
           if (!cur.data.title && role) patch.title = role;
           if (!cur.data.company && company) patch.company = company;
           if (!cur.data.bio && bio) patch.bio = bio;
@@ -340,12 +374,13 @@ export async function importSchedule(
         stats.speakers_adopted = (stats.speakers_adopted as number) + 1;
         // Backfill the identifiers onto an adopted profile that predates them,
         // so the next import matches on the id rather than the name.
-        if (sourceUserId || sourceAvatarUrl) {
+        if (sourceUserId || sourceAvatarUrl || linkedin) {
           const cur = await supabase.from('events_speaker_profiles')
-            .select('sched_user_id, source_avatar_url').eq('id', profileId).maybeSingle();
+            .select('sched_user_id, source_avatar_url, linkedin_url').eq('id', profileId).maybeSingle();
           const patch: Record<string, unknown> = {};
           if (cur?.data && !cur.data.sched_user_id && sourceUserId) patch.sched_user_id = sourceUserId;
           if (cur?.data && !cur.data.source_avatar_url && sourceAvatarUrl) patch.source_avatar_url = sourceAvatarUrl;
+          if (cur?.data && !cur.data.linkedin_url && linkedin) { patch.linkedin_url = linkedin; stats.linkedin_filled = ((stats.linkedin_filled as number) ?? 0) + 1; }
           if (Object.keys(patch).length > 0) {
             await supabase.from('events_speaker_profiles').update(patch).eq('id', profileId);
           }
@@ -358,6 +393,7 @@ export async function importSchedule(
             name, title: role, company, bio, avatar_url: avatar,
             sched_user_id: sourceUserId,
             source_avatar_url: sourceAvatarUrl,
+            linkedin_url: linkedin,
           })
           .select('id').single();
         if (ins.error) throw new Error(`speaker profile insert failed: ${ins.error.message}`);
@@ -477,6 +513,7 @@ export async function importSchedule(
 
     await finish(supabase, eventUuid, {
       status: 'complete',
+      source_kind: source.kind,
       schedule_url: resolved.url,
       url_origin: resolved.origin,
       resolved_source_url: resolvedUrl,

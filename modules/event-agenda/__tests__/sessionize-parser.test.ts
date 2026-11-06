@@ -138,3 +138,25 @@ describe('speakerRoleCompany', () => {
     expect(p.diagnostics.skeletonMismatch).toBe(63);
   });
 });
+
+describe('sessionize LinkedIn links', () => {
+  it('carries each speaker\'s LinkedIn profile from the feed (Toronto: 62 of 68)', () => {
+    const raw = JSON.parse(readFileSync(join(__dirname, '..', '__fixtures__', 'sessionize', 'toronto2026', 'schedule.json'), 'utf8'));
+    const p = parseSessionize(raw, null, null);
+    const speakers = new Map<string, string | null>();
+    for (const s of p.sessions) for (const k of s.speakers) speakers.set(k.ref, k.linkedinUrl);
+    const withLink = [...speakers.values()].filter(Boolean);
+    expect(speakers.size).toBe(68);
+    expect(withLink).toHaveLength(62);
+    for (const url of withLink) expect(url).toMatch(/^https:\/\/www\.linkedin\.com\/in\/[A-Za-z0-9][A-Za-z0-9._%-]+$/);
+  });
+
+  it('uses the importer\'s zone hint when the feed has no timezone', () => {
+    const raw = JSON.parse(readFileSync(join(__dirname, '..', '__fixtures__', 'sessionize', 'toronto2026', 'schedule.json'), 'utf8'));
+    const naive = parseSessionize(raw, null, null).sessions.find((s) => s.startsAt)!;
+    const zoned = parseSessionize(raw, { timezone: 'America/Toronto' }, null).sessions.find((s) => s.ref === naive.ref)!;
+    expect(zoned.startsAt).not.toBe(naive.startsAt);
+    expect(Date.parse(zoned.startsAt!) - Date.parse(naive.startsAt!)).toBe(4 * 3600 * 1000);
+  });
+});
+
