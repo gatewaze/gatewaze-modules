@@ -49,7 +49,17 @@ export async function postWebhook(url: string, alert: AlertLike, logger: Logger 
     });
     return res.ok;
   } catch (e) {
-    logger.warn?.(`[warehouse-sync] webhook post failed: ${(e as Error)?.message ?? e}`);
+    // Host only, never the message. A Slack or PagerDuty incoming webhook URL is
+    // a credential, and fetch's own TypeError for a malformed URL embeds the
+    // whole thing ("Failed to parse URL from ..."), so logging e.message here
+    // would write the webhook into the worker log.
+    let where = 'the configured webhook';
+    try {
+      where = new URL(url).host;
+    } catch {
+      where = 'an unparseable webhook URL';
+    }
+    logger.warn?.(`[warehouse-sync] webhook post to ${where} failed: ${(e as Error)?.name ?? 'Error'}`);
     return false;
   }
 }
