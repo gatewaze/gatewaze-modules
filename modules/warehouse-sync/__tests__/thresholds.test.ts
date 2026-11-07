@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   evaluateSlot,
   DEFAULT_THRESHOLDS,
+  thresholdsFromConfig,
   isBusinessHoursUtc,
   type SlotSample,
 } from '../lib/thresholds';
@@ -116,5 +117,45 @@ describe('isBusinessHoursUtc', () => {
     expect(isBusinessHoursUtc(6)).toBe(true);
     expect(isBusinessHoursUtc(21)).toBe(true);
     expect(isBusinessHoursUtc(22)).toBe(false);
+  });
+});
+
+/**
+ * Regression: the retained-WAL default must stay BELOW Supabase's
+ * max_slot_wal_keep_size (4096 MB), or it can never fire. It used to be 10 GB,
+ * 2.5x above a ceiling the slot cannot reach, so the only live signal was
+ * wal_status and that does not move until the cap is already passed.
+ */
+describe('retained-WAL default vs the Supabase WAL cap', () => {
+  const GB = 1024 * 1024 * 1024;
+  const CAP_BYTES = 4096 * 1024 * 1024; // max_slot_wal_keep_size, Supabase-managed
+
+  it('default threshold is below the cap, so it can actually fire', () => {
+    expect(DEFAULT_THRESHOLDS.retainedWalBytes).toBeLessThan(CAP_BYTES);
+  });
+
+  it('default leaves at least 2h of warning at the observed 870 MB/h', () => {
+    const headroomBytes = CAP_BYTES - DEFAULT_THRESHOLDS.retainedWalBytes;
+    const hours = headroomBytes / (870 * 1024 * 1024);
+    expect(hours).toBeGreaterThan(2);
+  });
+
+  it('config default also stays under the cap when unset', () => {
+    const t = thresholdsFromConfig({});
+    expect(t.retainedWalBytes).toBeLessThan(CAP_BYTES);
+  });
+
+  it('fires once retention passes the threshold but before the slot is lost', () => {
+    const sample = {
+      slot_name: 'snowflake_cdc',
+      active: false,
+      wal_status: 'reserved',
+      retained_bytes: 2 * GB, // past 1.5 GB, still under the 4 GB cap
+      flush_lag_bytes: 0,
+      inactive_seconds: 60,
+      lag_seconds: null,
+    };
+    const alerts = evaluateSlot(sample, DEFAULT_THRESHOLDS, true);
+    expect(alerts.map((a) => a.code)).toContain('retained_wal');
   });
 });

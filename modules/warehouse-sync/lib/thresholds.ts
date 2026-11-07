@@ -5,15 +5,33 @@
  */
 
 export interface SlotThresholds {
-  retainedWalBytes: number; // §10.4: > 10 GB default
+  retainedWalBytes: number; // default 1.5 GB — see DEFAULT_THRESHOLDS
   lagMinutes: number; // §10.4: > 30 min default
   inactiveMinutes: number; // §10.4: inactive > 15 min (business hours)
 }
 
 const GB = 1024 * 1024 * 1024;
 
+/**
+ * The retained-WAL default was 10 GB, which could never fire here (2026-11-06).
+ *
+ * Supabase caps this slot at max_slot_wal_keep_size = 4096 MB and we cannot
+ * raise it. Postgres invalidates the slot the moment retention passes that cap,
+ * and an invalidated slot has a NULL restart_lsn so retained_bytes then reads
+ * as 0. A 10 GB threshold therefore sat 2.5x above a ceiling the slot can never
+ * reach: it was unreachable on the way up and zeroed on the way down, so the
+ * only working signal was wal_status, which does not go 'unreserved' until the
+ * cap has already been passed.
+ *
+ * 1.5 GB is ~37% of the cap. Measured WAL generation on AAIF prod is 510 to
+ * 870 MB/h, so it gives roughly 3 to 5 hours of warning before invalidation,
+ * which is the window an on-call human can actually act in.
+ *
+ * If max_slot_wal_keep_size is ever raised, raise this with it — it is a
+ * fraction of the cap, not an absolute size.
+ */
 export const DEFAULT_THRESHOLDS: SlotThresholds = {
-  retainedWalBytes: 10 * GB,
+  retainedWalBytes: 1.5 * GB,
   lagMinutes: 30,
   inactiveMinutes: 15,
 };
@@ -24,7 +42,7 @@ export function thresholdsFromConfig(cfg: Record<string, unknown>): SlotThreshol
     return Number.isFinite(n) && n > 0 ? n : d;
   };
   return {
-    retainedWalBytes: num(cfg.retainedWalAlertGb, 10) * GB,
+    retainedWalBytes: num(cfg.retainedWalAlertGb, 1.5) * GB,
     lagMinutes: num(cfg.lagAlertMinutes, 30),
     inactiveMinutes: num(cfg.slotInactiveAlertMinutes, 15),
   };
