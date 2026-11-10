@@ -5,9 +5,12 @@ export const MODULE_ID = 'videos-publisher-youtube' as const;
 /**
  * The OAuth CLIENT, one per deployment.
  *
- * Rendered as a form by the admin Modules page and sealed into
- * installed_modules.config with the platform envelope, the same way
- * sites-publisher-netlify takes its API token.
+ * Entered on this module's own admin page (Videos → YouTube channels), which
+ * saves through PUT /api/modules/videos-publisher-youtube/settings and seals
+ * the secret into installed_modules.config with the platform envelope. The
+ * core Modules page renders no settings form for modules, so there is no other
+ * place to enter them. configSchema below declares the same two fields so the
+ * platform's own config route would also seal the secret.
  *
  * This is deliberately NOT where a channel's refresh token goes. AAIF
  * publishes to two YouTube channels, so the per-account credential is
@@ -48,7 +51,7 @@ const youtubePublisherModule: GatewazeModule = {
   name: 'Videos Publisher: YouTube',
   description:
     'Connects one or more YouTube channels, publishes videos to them on a schedule, and collects their statistics back. Publishing and collection share one adapter so a de-authorised channel is learned once.',
-  version: '0.1.0',
+  version: '0.2.0',
   // Must be namespaced on the MODULE ID, not on the host module's. The
   // platform rejects 'videos.publishing.youtube' outright:
   // MODULE_FEATURE_NAMESPACE_VIOLATION. sites-publisher-netlify predates
@@ -58,7 +61,50 @@ const youtubePublisherModule: GatewazeModule = {
   // The schema lives in the videos module: connections and metrics are
   // shared across every platform adapter, not owned by this one.
   migrations: [],
-  configSchema: {},
+  configSchema: {
+    clientId: {
+      key: 'clientId',
+      type: 'string',
+      label: 'OAuth client ID',
+      required: true,
+      description: 'Google Cloud OAuth 2.0 client of type "Web application".',
+      validationRegex: '^[0-9]+-[a-z0-9]+\\.apps\\.googleusercontent\\.com$',
+    },
+    clientSecret: {
+      key: 'clientSecret',
+      type: 'secret',
+      encrypted: true,
+      label: 'OAuth client secret',
+      required: true,
+      description: 'The secret for that client. Sealed at rest and never returned.',
+    },
+  },
+
+  adminRoutes: [
+    {
+      // Top level (guard 'none') so it sits beside the videos module's own
+      // /videos pages. Gated by this module's feature; the API behind it is
+      // super_admin only.
+      path: 'videos/youtube',
+      component: () => import('./admin/components/YouTubeChannels'),
+      requiredFeature: 'videos-publisher-youtube',
+      guard: 'none',
+    },
+  ],
+
+  adminNavItems: [
+    {
+      path: '/videos/youtube',
+      label: 'YouTube channels',
+      // PlayCircleIcon.
+      icon: 'PlayCircle',
+      requiredFeature: 'videos-publisher-youtube',
+      defaultSection: 'Content',
+      defaultLocation: 'sidebar',
+      // The videos module's own items are 65 to 68.
+      order: 69,
+    },
+  ],
 
   apiRoutes: async (app: unknown, ctx?: unknown) => {
     const { registerRoutes } = await import('./api/register-routes.js');
