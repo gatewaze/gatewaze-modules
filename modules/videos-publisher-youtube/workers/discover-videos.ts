@@ -33,6 +33,7 @@ import { fetchVideoDetails, listChannelVideos } from '../lib/adapter.js';
 
 import { serviceClient } from '../lib/service-client.js';
 import { unsealSecret } from '../lib/secret-envelope.js';
+import { loadClientCredentials } from '../lib/client-credentials.js';
 
 /**
  * The adapter speaks the ASSET vocabulary, where a full recording is a
@@ -57,15 +58,10 @@ export interface DiscoverResult {
   errors: string[];
 }
 
-async function clientCredentials(supabase): Promise<{ clientId: string; clientSecret: string } | null> {
-  const { data } = await supabase
-    .from('installed_modules').select('config').eq('id', 'videos-publisher-youtube').maybeSingle();
-  const cfg = (data?.config ?? {}) as Record<string, unknown>;
-  const clientId = String(cfg.clientId ?? '');
-  const raw = String(cfg.clientSecret ?? '');
-  if (!clientId || !raw) return null;
-  return { clientId, clientSecret: unsealSecret(raw) ?? raw };
-}
+// One reading of the OAuth client for routes and workers alike: see
+// lib/client-credentials.ts. A sealed secret that cannot be unsealed is null,
+// never the ciphertext.
+const clientCredentials = loadClientCredentials;
 
 export async function discoverAll(
   supabase,

@@ -1,34 +1,65 @@
 // @ts-nocheck — supabase-js + express are resolved at module-host install time.
 
 /**
- * The connect flow: start, and Google's callback.
+ * The OAuth client settings and the connect flow.
  *
- * Mounted under /api/modules/videos-publisher-youtube, which the platform
- * gates to super_admin for everything except /internal/*. That gate is wanted
- * here — this route hands out a URL that grants upload rights to a channel.
+ * Settings, start and the connections list are mounted under
+ * /api/modules/videos-publisher-youtube, which the platform gates to
+ * super_admin for everything except /internal/*. That gate is wanted here:
+ * these routes store the OAuth client and hand out a URL that grants upload
+ * rights to a channel.
  *
- * The callback is the one exception that cannot be behind a bearer token,
- * because Google redirects a BROWSER to it. It is protected by the `state`
- * nonce instead: the start endpoint mints one, stores it, and the callback
- * refuses anything it did not issue. Without that, anyone who guessed the URL
- * could attach their own channel to this install.
+ * The begin and callback steps cannot be behind a bearer token, because they
+ * are browser navigations (to us, and back from Google), so they are mounted
+ * outside /api/modules under CALLBACK_PATH's prefix. (The callback used to
+ * sit under /api/modules, where the platform gate answered Google's redirect
+ * with a 401 and no channel could ever connect.) They are protected by
+ * single-use secrets instead: /oauth/start (super_admin) mints a ticket,
+ * /oauth/begin spends it and mints the state plus a browser-binding cookie,
+ * and the callback needs both. See the comment on TICKETS and PENDING below.
  */
 
 import { Router, type Express, type Request, type Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import { randomBytes, timingSafeEqual } from 'crypto';
 
-import { authorizeUrl, exchangeCode, fetchChannel, SCOPES } from '../lib/oauth.js';
+import { authorizeUrl, CALLBACK_PATH, exchangeCode, fetchChannel, redirectUri, SCOPES } from '../lib/oauth.js';
+import { parseSettingsPatch, readClientSecret } from '../lib/settings.js';
+import { loadClientCredentials, readModuleConfig } from '../lib/client-credentials.js';
 import { serviceClient } from '../lib/service-client.js';
-import { sealSecret, unsealSecret } from '../lib/secret-envelope.js';
+import { sealSecret } from '../lib/secret-envelope.js';
 
-/** State nonces, in memory. Short-lived by design. */
-const PENDING = new Map<string, { createdAt: number; actor: string | null }>();
+/**
+ * The connect flow has two single-use secrets, both in memory and short-lived.
+ *
+ *   ticket   minted by /oauth/start (super_admin). The admin's own tab opens
+ *            /oauth/begin?ticket=…, which spends it.
+ *   state    minted by /oauth/begin together with a browser binding, which is
+ *            set as an HttpOnly cookie on that tab before it is sent to Google.
+ *
+ * The callback needs the state AND the matching cookie. So a Google consent
+ * URL that leaks (pasted into chat, say) cannot be finished in someone else's
+ * browser to attach their channel: they would not have the cookie. And the
+ * ticket is spent the moment the admin's tab uses it.
+ */
+const TICKETS = new Map<string, { createdAt: number }>();
+const PENDING = new Map<string, { createdAt: number; binding: string }>();
 const STATE_TTL_MS = 10 * 60 * 1000;
+const BIND_COOKIE = 'gw_yt_oauth_bind';
 
 function sweepPending(): void {
   const cutoff = Date.now() - STATE_TTL_MS;
   for (const [k, v] of PENDING) if (v.createdAt < cutoff) PENDING.delete(k);
+  for (const [k, v] of TICKETS) if (v.createdAt < cutoff) TICKETS.delete(k);
+}
+
+/** One cookie's value from a Cookie header, or ''. */
+function cookieValue(header: string | undefined, name: string): string {
+  for (const part of String(header ?? '').split(';')) {
+    const i = part.indexOf('=');
+    if (i > 0 && part.slice(0, i).trim() === name) return part.slice(i + 1).trim();
+  }
+  return '';
 }
 
 /** Constant-time compare so a nonce cannot be guessed a character at a time. */
@@ -74,44 +105,112 @@ export function registerRoutes(app: Express, ctx?: Record<string, unknown>): voi
    * The OAuth client, read from this module's own sealed config.
    *
    * Sealed with the platform envelope, so this is decrypted here and never
-   * leaves the server. Returns null when unconfigured, which every caller
-   * turns into a clear "set the credentials first" rather than a 500.
+   * leaves the server. Null means unconfigured, which callers turn into "set
+   * the credentials first". A failed read is NOT unconfigured: it throws, and
+   * callers answer it as the read failure it is (lib/client-credentials.ts).
    */
-  async function clientCredentials(): Promise<{ clientId: string; clientSecret: string } | null> {
-    const { data } = await supabase
-      .from('installed_modules')
-      .select('config')
-      .eq('id', 'videos-publisher-youtube')
-      .maybeSingle();
-    const cfg = (data?.config ?? {}) as Record<string, unknown>;
-    const clientId = String(cfg.clientId ?? '');
-    const rawSecret = String(cfg.clientSecret ?? '');
-    if (!clientId || !rawSecret) return null;
-    const clientSecret = unsealSecret(rawSecret) ?? rawSecret;
-    return { clientId, clientSecret };
-  }
+  const moduleConfig = () => readModuleConfig(supabase);
+  const clientCredentials = () => loadClientCredentials(supabase);
 
   const router = Router();
+  const callbackRouter = Router();
 
-  // Limiter first, before any handler. /oauth/start performs an authorization
-  // check and mints a nonce, and /oauth/callback is reachable by anyone who
-  // has the URL, so both need a ceiling that does not depend on the caller
+  // Limiter first, before any handler, on both routers. /oauth/start mints a
+  // ticket, and /oauth/begin and /oauth/callback are reachable by anyone who
+  // has the URL, so all need a ceiling that does not depend on the caller
   // being who they say they are. A real operator connects a channel perhaps
   // twice in a session.
-  router.use(rateLimit({
+  const limiter = () => rateLimit({
     windowMs: 60_000,
     limit: 60,
     standardHeaders: true,
     legacyHeaders: false,
     message: { error: 'rate_limited', message: 'too many requests' },
-  }));
+  });
+  router.use(limiter());
+  callbackRouter.use(limiter());
+
+  /**
+   * The OAuth client as the settings page shows it. The secret is never
+   * returned, sealed or not: only whether one is stored and usable.
+   */
+  router.get('/settings', async (_req: Request, res: Response) => {
+    let cfg: Record<string, unknown>;
+    try {
+      cfg = await moduleConfig();
+    } catch (err) {
+      log('could not read settings', { error: (err as Error).message });
+      return res.status(500).json({ error: 'The settings could not be read.' });
+    }
+    const stored = typeof cfg.clientSecret === 'string' && cfg.clientSecret !== '';
+    res.json({
+      clientId: typeof cfg.clientId === 'string' ? cfg.clientId : '',
+      clientSecretSet: stored,
+      // Stored but unreadable: the secrets key changed since it was saved.
+      clientSecretReadable: stored ? readClientSecret(cfg.clientSecret) !== null : false,
+      redirectUri: apiBase ? redirectUri(apiBase) : null,
+      scopes: SCOPES,
+    });
+  });
+
+  /**
+   * Save the OAuth client. Only clientId and clientSecret are accepted, and
+   * the secret is sealed before it is written. If it cannot be sealed, nothing
+   * is written: a secret is never stored in the clear.
+   */
+  router.put('/settings', async (req: Request, res: Response) => {
+    const parsed = parseSettingsPatch(req.body);
+    if ('error' in parsed) return res.status(400).json({ error: parsed.error });
+
+    const update: Record<string, unknown> = {};
+    if (parsed.patch.clientId) update.clientId = parsed.patch.clientId;
+    if (parsed.patch.clientSecret) {
+      const sealed = sealSecret(parsed.patch.clientSecret);
+      if (!sealed) {
+        log('GATEWAZE_SECRETS_KEY is unavailable — refusing to store the client secret');
+        return res.status(503).json({ error: 'The server cannot seal credentials at the moment, so nothing was saved.' });
+      }
+      update.clientSecret = sealed;
+    }
+
+    const { data: row, error: readErr } = await supabase
+      .from('installed_modules')
+      .select('config')
+      .eq('id', 'videos-publisher-youtube')
+      .maybeSingle();
+    if (readErr) return res.status(500).json({ error: 'The module settings could not be read.' });
+    if (!row) return res.status(404).json({ error: 'The module is not installed.' });
+    const current = (row.config ?? {}) as Record<string, unknown>;
+    // A secret belongs to one client. Changing the client without its secret
+    // would leave a pair Google rejects at the first connect.
+    if (update.clientId && update.clientId !== current.clientId && !update.clientSecret) {
+      return res.status(400).json({ error: 'A new client ID needs its client secret too.' });
+    }
+
+    const { error } = await supabase
+      .from('installed_modules')
+      .update({ config: { ...current, ...update } })
+      .eq('id', 'videos-publisher-youtube');
+    if (error) {
+      log('could not save the OAuth client', { error: error.message });
+      return res.status(500).json({ error: 'The settings could not be saved.' });
+    }
+    log('OAuth client saved', { clientId: update.clientId ?? '(unchanged)', secretChanged: Boolean(update.clientSecret) });
+    res.json({ ok: true });
+  });
 
   /** Where to send the operator's browser to authorise a channel. */
   router.get('/oauth/start', async (_req: Request, res: Response) => {
-    const client = await clientCredentials();
+    let client;
+    try {
+      client = await clientCredentials();
+    } catch (err) {
+      log('could not read settings', { error: (err as Error).message });
+      return res.status(500).json({ error: 'The settings could not be read. Try again in a moment.' });
+    }
     if (!client) {
       return res.status(503).json({
-        error: 'The YouTube OAuth client is not configured. Add the client ID and secret on the module’s settings first.',
+        error: 'The YouTube OAuth client is not configured. Add the client ID and secret under Videos → YouTube channels first.',
       });
     }
     if (!apiBase) {
@@ -119,27 +218,68 @@ export function registerRoutes(app: Express, ctx?: Record<string, unknown>): voi
     }
 
     sweepPending();
-    const state = randomBytes(32).toString('base64url');
-    PENDING.set(state, { createdAt: Date.now(), actor: null });
+    const ticket = randomBytes(32).toString('base64url');
+    TICKETS.set(ticket, { createdAt: Date.now() });
 
     res.json({
-      authorize_url: authorizeUrl(client, apiBase, state),
+      // Not Google's URL yet: /oauth/begin binds the admin's browser first.
+      authorize_url: `${apiBase}${CALLBACK_PATH.replace(/\/oauth\/callback$/, '')}/oauth/begin?ticket=${ticket}`,
       // So the operator can check it against the console before clicking.
-      redirect_uri: `${apiBase}/api/modules/videos-publisher-youtube/oauth/callback`,
+      redirect_uri: redirectUri(apiBase),
       scopes: SCOPES,
       expires_in_seconds: STATE_TTL_MS / 1000,
     });
   });
 
   /**
-   * Google's redirect lands here, in a browser, with no bearer token.
-   *
-   * The `state` nonce is the whole authorisation: it was minted by a
-   * super_admin-gated endpoint moments ago and is single-use.
+   * Opened by the admin's own tab with a ticket from /oauth/start. Spends the
+   * ticket, binds this browser with a cookie, and sends it on to Google.
    */
-  router.get('/oauth/callback', async (req: Request, res: Response) => {
+  callbackRouter.get('/oauth/begin', async (req: Request, res: Response) => {
     const send = (code: number, title: string, ...paragraphs: string[]) =>
       res.status(code).type('html').send(page(title, paragraphs));
+    const ticket = typeof req.query.ticket === 'string' ? req.query.ticket : '';
+    sweepPending();
+    const known = ticket ? [...TICKETS.keys()].find((k) => nonceMatches(ticket, k)) : undefined;
+    if (!known) {
+      return send(403, 'Not connected', 'That link has expired or was already used. Start again from Gatewaze.');
+    }
+    TICKETS.delete(known);
+
+    let client;
+    try {
+      client = await clientCredentials();
+    } catch (err) {
+      log('could not read settings', { error: (err as Error).message });
+      return send(500, 'Not connected', 'The settings could not be read. Start again from Gatewaze in a moment.');
+    }
+    if (!client || !apiBase) return send(503, 'Not connected', 'The OAuth client is not configured.');
+
+    const state = randomBytes(32).toString('base64url');
+    const binding = randomBytes(32).toString('base64url');
+    PENDING.set(state, { createdAt: Date.now(), binding });
+    // SameSite=Lax still travels on Google's top-level redirect back to the
+    // callback. Path-scoped to this flow; HttpOnly so no script can read it.
+    res.cookie(BIND_COOKIE, binding, {
+      httpOnly: true,
+      secure: apiBase.startsWith('https://'),
+      sameSite: 'lax',
+      path: CALLBACK_PATH.replace(/\/oauth\/callback$/, ''),
+      maxAge: STATE_TTL_MS,
+    });
+    res.redirect(302, authorizeUrl(client, apiBase, state));
+  });
+
+  /**
+   * Google's redirect lands here, in a browser, with no bearer token.
+   *
+   * Authorised by the single-use `state` nonce together with the binding
+   * cookie /oauth/begin set on the same browser.
+   */
+  callbackRouter.get('/oauth/callback', async (req: Request, res: Response) => {
+    const send = (code: number, title: string, ...paragraphs: string[]) =>
+      res.status(code).type('html').send(page(title, paragraphs));
+    res.clearCookie(BIND_COOKIE, { path: CALLBACK_PATH.replace(/\/oauth\/callback$/, '') });
 
     const googleError = typeof req.query.error === 'string' ? req.query.error : null;
     if (googleError) {
@@ -156,9 +296,20 @@ export function registerRoutes(app: Express, ctx?: Record<string, unknown>): voi
       return send(403, 'Not connected', 'That authorisation link has expired or was not issued by this server. Start again from Gatewaze.');
     }
     // Single use, whatever happens next.
+    const pending = PENDING.get(known);
     PENDING.delete(known);
+    const cookie = cookieValue(req.headers.cookie, BIND_COOKIE);
+    if (!pending || !cookie || !nonceMatches(cookie, pending.binding)) {
+      return send(403, 'Not connected', 'This sign-in was started in a different browser. Start again from Gatewaze, in this browser.');
+    }
 
-    const client = await clientCredentials();
+    let client;
+    try {
+      client = await clientCredentials();
+    } catch (err) {
+      log('could not read settings', { error: (err as Error).message });
+      return send(500, 'Not connected', 'The settings could not be read. Start again from Gatewaze in a moment.');
+    }
     if (!client) return send(503, 'Not connected', 'The OAuth client is no longer configured.');
 
     let tokens;
@@ -230,10 +381,15 @@ export function registerRoutes(app: Express, ctx?: Record<string, unknown>): voi
       .select('id, platform, external_account_id, label, state, state_detail, scopes, collection_enabled, last_collected_at, last_collect_status, last_collect_detail, created_at')
       .eq('platform', 'youtube')
       .order('created_at');
-    if (error) return res.status(500).json({ error: error.message });
+    if (error) {
+      log('could not list connections', { error: error.message });
+      return res.status(500).json({ error: 'The connections could not be read.' });
+    }
     res.json({ connections: data ?? [] });
   });
 
   app.use('/api/modules/videos-publisher-youtube', router);
+  // Outside /api/modules on purpose: see the comment at the top of this file.
+  app.use(CALLBACK_PATH.replace(/\/oauth\/callback$/, ''), callbackRouter);
   console.log('[videos-publisher-youtube] OAuth routes registered');
 }

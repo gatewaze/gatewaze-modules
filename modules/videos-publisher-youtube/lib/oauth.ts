@@ -47,6 +47,15 @@ export interface TokenSet {
 }
 
 /**
+ * The callback's path. NOT under /api/modules: the platform puts a JWT and
+ * super_admin gate in front of everything there, and Google redirects a
+ * browser with no bearer token, so a callback under /api/modules answers 401
+ * and no channel can ever connect. The single-use state, together with the
+ * browser-binding cookie set by /oauth/begin, protects it instead.
+ */
+export const CALLBACK_PATH = '/api/videos-publisher-youtube/oauth/callback';
+
+/**
  * Where Google sends the browser back.
  *
  * Must match a redirect URI registered on the OAuth client EXACTLY, including
@@ -54,7 +63,7 @@ export interface TokenSet {
  * deployment cannot accidentally register localhost.
  */
 export function redirectUri(apiBaseUrl: string): string {
-  return `${String(apiBaseUrl).replace(/\/+$/, '')}/api/modules/videos-publisher-youtube/oauth/callback`;
+  return `${String(apiBaseUrl).replace(/\/+$/, '')}${CALLBACK_PATH}`;
 }
 
 /**

@@ -154,7 +154,7 @@ describe('oauth', () => {
 
   it('builds a redirect URI off the public API base', () => {
     expect(redirectUri('https://api.aaif.live/')).toBe(
-      'https://api.aaif.live/api/modules/videos-publisher-youtube/oauth/callback',
+      'https://api.aaif.live/api/videos-publisher-youtube/oauth/callback',
     );
   });
 
