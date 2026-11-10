@@ -9,13 +9,14 @@
  * these routes store the OAuth client and hand out a URL that grants upload
  * rights to a channel.
  *
- * The callback cannot be behind a bearer token, because Google redirects a
- * BROWSER to it, so it is mounted outside /api/modules at CALLBACK_PATH. (It
- * used to sit under /api/modules, where the platform gate answered Google's
- * redirect with a 401 and no channel could ever connect.) It is protected by
- * the `state` nonce instead: the start endpoint mints one, stores it, and the
- * callback refuses anything it did not issue. Without that, anyone who
- * guessed the URL could attach their own channel to this install.
+ * The begin and callback steps cannot be behind a bearer token, because they
+ * are browser navigations (to us, and back from Google), so they are mounted
+ * outside /api/modules under CALLBACK_PATH's prefix. (The callback used to
+ * sit under /api/modules, where the platform gate answered Google's redirect
+ * with a 401 and no channel could ever connect.) They are protected by
+ * single-use secrets instead: /oauth/start (super_admin) mints a ticket,
+ * /oauth/begin spends it and mints the state plus a browser-binding cookie,
+ * and the callback needs both. See the comment on TICKETS and PENDING below.
  */
 
 import { Router, type Express, type Request, type Response } from 'express';
@@ -23,7 +24,8 @@ import { rateLimit } from 'express-rate-limit';
 import { randomBytes, timingSafeEqual } from 'crypto';
 
 import { authorizeUrl, CALLBACK_PATH, exchangeCode, fetchChannel, redirectUri, SCOPES } from '../lib/oauth.js';
-import { CLIENT_ID_RE, parseSettingsPatch, readClientSecret } from '../lib/settings.js';
+import { parseSettingsPatch, readClientSecret } from '../lib/settings.js';
+import { loadClientCredentials, readModuleConfig } from '../lib/client-credentials.js';
 import { serviceClient } from '../lib/service-client.js';
 import { sealSecret } from '../lib/secret-envelope.js';
 
@@ -103,33 +105,19 @@ export function registerRoutes(app: Express, ctx?: Record<string, unknown>): voi
    * The OAuth client, read from this module's own sealed config.
    *
    * Sealed with the platform envelope, so this is decrypted here and never
-   * leaves the server. Returns null when unconfigured, which every caller
-   * turns into a clear "set the credentials first" rather than a 500.
+   * leaves the server. Null means unconfigured, which callers turn into "set
+   * the credentials first". A failed read is NOT unconfigured: it throws, and
+   * callers answer it as the read failure it is (lib/client-credentials.ts).
    */
-  async function moduleConfig(): Promise<Record<string, unknown>> {
-    const { data } = await supabase
-      .from('installed_modules')
-      .select('config')
-      .eq('id', 'videos-publisher-youtube')
-      .maybeSingle();
-    return (data?.config ?? {}) as Record<string, unknown>;
-  }
-
-  async function clientCredentials(): Promise<{ clientId: string; clientSecret: string } | null> {
-    const cfg = await moduleConfig();
-    const clientId = String(cfg.clientId ?? '');
-    // Null when sealed and unreadable: the ciphertext is never used as the secret.
-    const clientSecret = readClientSecret(cfg.clientSecret);
-    if (!CLIENT_ID_RE.test(clientId) || !clientSecret) return null;
-    return { clientId, clientSecret };
-  }
+  const moduleConfig = () => readModuleConfig(supabase);
+  const clientCredentials = () => loadClientCredentials(supabase);
 
   const router = Router();
   const callbackRouter = Router();
 
-  // Limiter first, before any handler. /oauth/start performs an authorization
-  // check and mints a nonce, and /oauth/callback is reachable by anyone who
-  // has the URL, so both need a ceiling that does not depend on the caller
+  // Limiter first, before any handler, on both routers. /oauth/start mints a
+  // ticket, and /oauth/begin and /oauth/callback are reachable by anyone who
+  // has the URL, so all need a ceiling that does not depend on the caller
   // being who they say they are. A real operator connects a channel perhaps
   // twice in a session.
   const limiter = () => rateLimit({
@@ -147,7 +135,13 @@ export function registerRoutes(app: Express, ctx?: Record<string, unknown>): voi
    * returned, sealed or not: only whether one is stored and usable.
    */
   router.get('/settings', async (_req: Request, res: Response) => {
-    const cfg = await moduleConfig();
+    let cfg: Record<string, unknown>;
+    try {
+      cfg = await moduleConfig();
+    } catch (err) {
+      log('could not read settings', { error: (err as Error).message });
+      return res.status(500).json({ error: 'The settings could not be read.' });
+    }
     const stored = typeof cfg.clientSecret === 'string' && cfg.clientSecret !== '';
     res.json({
       clientId: typeof cfg.clientId === 'string' ? cfg.clientId : '',
@@ -207,7 +201,13 @@ export function registerRoutes(app: Express, ctx?: Record<string, unknown>): voi
 
   /** Where to send the operator's browser to authorise a channel. */
   router.get('/oauth/start', async (_req: Request, res: Response) => {
-    const client = await clientCredentials();
+    let client;
+    try {
+      client = await clientCredentials();
+    } catch (err) {
+      log('could not read settings', { error: (err as Error).message });
+      return res.status(500).json({ error: 'The settings could not be read. Try again in a moment.' });
+    }
     if (!client) {
       return res.status(503).json({
         error: 'The YouTube OAuth client is not configured. Add the client ID and secret under Videos → YouTube channels first.',
@@ -246,7 +246,13 @@ export function registerRoutes(app: Express, ctx?: Record<string, unknown>): voi
     }
     TICKETS.delete(known);
 
-    const client = await clientCredentials();
+    let client;
+    try {
+      client = await clientCredentials();
+    } catch (err) {
+      log('could not read settings', { error: (err as Error).message });
+      return send(500, 'Not connected', 'The settings could not be read. Start again from Gatewaze in a moment.');
+    }
     if (!client || !apiBase) return send(503, 'Not connected', 'The OAuth client is not configured.');
 
     const state = randomBytes(32).toString('base64url');
@@ -297,7 +303,13 @@ export function registerRoutes(app: Express, ctx?: Record<string, unknown>): voi
       return send(403, 'Not connected', 'This sign-in was started in a different browser. Start again from Gatewaze, in this browser.');
     }
 
-    const client = await clientCredentials();
+    let client;
+    try {
+      client = await clientCredentials();
+    } catch (err) {
+      log('could not read settings', { error: (err as Error).message });
+      return send(500, 'Not connected', 'The settings could not be read. Start again from Gatewaze in a moment.');
+    }
     if (!client) return send(503, 'Not connected', 'The OAuth client is no longer configured.');
 
     let tokens;

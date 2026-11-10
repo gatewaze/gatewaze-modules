@@ -37,19 +37,37 @@ export default function YouTubeChannels() {
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
   const [busy, setBusy] = useState<'load' | 'save' | 'connect' | null>('load');
+  // Loaded separately, so one failing call does not blank the other card, and
+  // so "loading" and "failed" are never shown as "not configured" or "none".
+  const [settingsState, setSettingsState] = useState<'loading' | 'error' | 'ready'>('loading');
+  const [connectionsState, setConnectionsState] = useState<'loading' | 'error' | 'ready'>('loading');
 
   const load = useCallback(async () => {
     setBusy('load');
-    try {
-      const [s, c] = await Promise.all([getYouTubeSettings(), listYouTubeConnections()]);
-      setSettings(s);
-      setClientId(s.clientId);
-      setConnections(c);
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not load the YouTube settings');
-    } finally {
-      setBusy(null);
-    }
+    setSettingsState('loading');
+    setConnectionsState('loading');
+    await Promise.all([
+      getYouTubeSettings()
+        .then((s) => {
+          setSettings(s);
+          setClientId(s.clientId);
+          setSettingsState('ready');
+        })
+        .catch((err) => {
+          setSettingsState('error');
+          toast.error(err instanceof Error ? err.message : 'Could not load the YouTube settings');
+        }),
+      listYouTubeConnections()
+        .then((c) => {
+          setConnections(c);
+          setConnectionsState('ready');
+        })
+        .catch((err) => {
+          setConnectionsState('error');
+          toast.error(err instanceof Error ? err.message : 'Could not load the connected channels');
+        }),
+    ]);
+    setBusy(null);
   }, []);
 
   useEffect(() => {
@@ -114,7 +132,11 @@ export default function YouTubeChannels() {
               enabled, and this redirect URI registered on the client:
             </p>
             <code className="mt-2 block break-all rounded bg-muted px-2 py-1 text-xs">
-              {settings?.redirectUri ?? 'API_URL is not set on the API, so the redirect URI cannot be built'}
+              {settingsState === 'loading'
+                ? 'Loading…'
+                : settingsState === 'error'
+                  ? 'Could not load the settings. Refresh to try again.'
+                  : settings?.redirectUri ?? 'API_URL is not set on the API, so the redirect URI cannot be built'}
             </code>
           </div>
           <label className="block text-sm">
@@ -142,7 +164,7 @@ export default function YouTubeChannels() {
               The stored secret can no longer be decrypted (the server&apos;s secrets key has changed). Paste it again.
             </p>
           )}
-          <Button onClick={save} disabled={busy !== null}>
+          <Button onClick={save} disabled={busy !== null || settingsState !== 'ready'}>
             {busy === 'save' ? 'Saving…' : 'Save'}
           </Button>
         </Card>
@@ -161,7 +183,11 @@ export default function YouTubeChannels() {
             </Button>
           </div>
 
-          {connections.length === 0 ? (
+          {connectionsState === 'loading' ? (
+            <p className="text-sm text-muted-foreground">Loading…</p>
+          ) : connectionsState === 'error' ? (
+            <p className="text-sm text-red-600">Could not load the connected channels. Refresh to try again.</p>
+          ) : connections.length === 0 ? (
             <p className="text-sm text-muted-foreground">No channels connected yet.</p>
           ) : (
             <ul className="divide-y">
@@ -182,7 +208,7 @@ export default function YouTubeChannels() {
             <PlusIcon className="h-4 w-4 mr-2" />
             {busy === 'connect' ? 'Opening Google…' : 'Connect a channel'}
           </Button>
-          {!configured && (
+          {settingsState === 'ready' && !configured && (
             <p className="text-xs text-muted-foreground">Save the OAuth client first.</p>
           )}
         </Card>
