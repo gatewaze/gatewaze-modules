@@ -13,6 +13,9 @@ import { ArrowPathIcon, PlusIcon } from '@heroicons/react/24/outline';
 import { Badge, Button, Card, Input, WorkspaceLayout } from '@/components/ui';
 
 import {
+  disconnectYouTubeChannel,
+  setYouTubeAutoPublish,
+  syncYouTubeChannel,
   getYouTubeSettings,
   listYouTubeConnections,
   saveYouTubeSettings,
@@ -36,7 +39,7 @@ export default function YouTubeChannels() {
   const [connections, setConnections] = useState<YouTubeConnection[]>([]);
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
-  const [busy, setBusy] = useState<'load' | 'save' | 'connect' | null>('load');
+  const [busy, setBusy] = useState<'load' | 'save' | 'connect' | 'disconnect' | 'sync' | 'settings' | null>('load');
   // Loaded separately, so one failing call does not blank the other card, and
   // so "loading" and "failed" are never shown as "not configured" or "none".
   const [settingsState, setSettingsState] = useState<'loading' | 'error' | 'ready'>('loading');
@@ -113,6 +116,55 @@ export default function YouTubeChannels() {
     }
   };
 
+  const disconnect = async (c: YouTubeConnection) => {
+    const name = c.label ?? c.external_account_id;
+    if (!window.confirm(`Disconnect ${name}? Gatewaze stops reading its uploads and statistics, and its access is revoked at Google. Videos already discovered and their history are kept. You can connect it again at any time.`)) return;
+    setBusy('disconnect');
+    try {
+      const r = await disconnectYouTubeChannel(c.id);
+      toast.success(r.revoked === false
+        ? `${name} disconnected, but Google did not confirm the revoke. It stays listed below until you remove the app from the channel account's third-party access.`
+        : `${name} disconnected`);
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not disconnect');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const toggleAutoPublish = async (c: YouTubeConnection, on: boolean) => {
+    setBusy('settings');
+    try {
+      await setYouTubeAutoPublish(c.id, on);
+      setConnections((all) => all.map((x) => (x.id === c.id ? { ...x, auto_publish: on } : x)));
+      toast.success(on
+        ? `Public uploads from ${c.label ?? 'this channel'} will be published as they are synced.`
+        : `New uploads from ${c.label ?? 'this channel'} will arrive as drafts.`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not save the setting');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const sync = async (c: YouTubeConnection) => {
+    setBusy('sync');
+    try {
+      await syncYouTubeChannel(c.id);
+      toast.success(`Sync of ${c.label ?? c.external_account_id} queued. Its uploads appear under Unassigned videos over the next few minutes.`);
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not queue the sync');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // Disconnected rows are kept for their history but not shown as channels,
+  // except one whose revoke Google never confirmed: its grant may still be
+  // live, so it stays visible with what to do about it.
+  const shown = connections.filter((c) => c.state !== 'disconnected' || c.needs_manual_revoke);
   const configured = Boolean(settings?.clientId && settings.clientSecretSet && settings.clientSecretReadable);
 
   return (
@@ -145,6 +197,12 @@ export default function YouTubeChannels() {
               value={clientId}
               onChange={(e) => setClientId(e.target.value)}
               placeholder="123456789-abc.apps.googleusercontent.com"
+              // Not a login: keep browser and password-manager autofill out.
+              name="gw-youtube-oauth-client-id"
+              autoComplete="off"
+              data-1p-ignore=""
+              data-lpignore="true"
+              data-bwignore=""
               className="mt-1 font-mono"
             />
           </label>
@@ -152,7 +210,13 @@ export default function YouTubeChannels() {
             <span className="font-medium">Client secret</span>
             <Input
               type="password"
-              autoComplete="off"
+              // "new-password" is the value browsers honour for "do not fill
+              // a saved login here"; "off" alone is ignored on password fields.
+              name="gw-youtube-oauth-client-secret"
+              autoComplete="new-password"
+              data-1p-ignore=""
+              data-lpignore="true"
+              data-bwignore=""
               value={clientSecret}
               onChange={(e) => setClientSecret(e.target.value)}
               placeholder={settings?.clientSecretSet ? 'Stored. Leave blank to keep it.' : 'Paste the client secret'}
@@ -187,18 +251,51 @@ export default function YouTubeChannels() {
             <p className="text-sm text-muted-foreground">Loading…</p>
           ) : connectionsState === 'error' ? (
             <p className="text-sm text-red-600">Could not load the connected channels. Refresh to try again.</p>
-          ) : connections.length === 0 ? (
+          ) : shown.length === 0 ? (
             <p className="text-sm text-muted-foreground">No channels connected yet.</p>
           ) : (
             <ul className="divide-y">
-              {connections.map((c) => (
+              {shown.map((c) => (
                 <li key={c.id} className="py-2 flex items-center justify-between gap-2">
                   <div className="min-w-0">
                     <div className="font-medium truncate">{c.label ?? c.external_account_id}</div>
                     <div className="text-xs text-muted-foreground font-mono">{c.external_account_id}</div>
                     {c.state_detail && <div className="text-xs text-muted-foreground">{c.state_detail}</div>}
+                    {c.state === 'connected' && (
+                      <div className="text-xs text-muted-foreground">
+                        {c.discovery_started_at
+                          && (!c.discovery_finished_at || c.discovery_finished_at < c.discovery_started_at)
+                          ? `Syncing since ${new Date(c.discovery_started_at).toLocaleString()}…`
+                          : c.discovery_finished_at
+                            ? `Last synced ${new Date(c.discovery_finished_at).toLocaleString()}. ${c.discovery_detail ?? ''}`
+                            : 'Not synced yet. Uploads are read nightly at 03:40 UTC, or now with Sync now.'}
+                      </div>
+                    )}
+                    {c.state === 'connected' && (
+                      <label className="mt-1 flex items-center gap-2 text-xs">
+                        <input
+                          type="checkbox"
+                          checked={c.auto_publish === true}
+                          onChange={(e) => void toggleAutoPublish(c, e.target.checked)}
+                          disabled={busy !== null}
+                        />
+                        Auto-publish public uploads (private and unlisted ones are never published)
+                      </label>
+                    )}
                   </div>
-                  <Badge color={stateColor(c.state)} variant="soft">{c.state}</Badge>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Badge color={stateColor(c.state)} variant="soft">{c.state}</Badge>
+                    {c.state === 'connected' && (
+                      <Button variant="ghost" size="sm" onClick={() => void sync(c)} disabled={busy !== null}>
+                        Sync now
+                      </Button>
+                    )}
+                    {c.state !== 'disconnected' && (
+                      <Button variant="ghost" size="sm" color="red" onClick={() => void disconnect(c)} disabled={busy !== null}>
+                        Disconnect
+                      </Button>
+                    )}
+                  </div>
                 </li>
               ))}
             </ul>

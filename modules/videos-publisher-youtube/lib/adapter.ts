@@ -16,6 +16,10 @@ const UPLOAD_ENDPOINT = 'https://www.googleapis.com/upload/youtube/v3/videos';
 const DATA_ENDPOINT = 'https://www.googleapis.com/youtube/v3/videos';
 const TIMEOUT_MS = 60_000;
 
+/** The most uploads one discovery run reads (Sync now), and the nightly run's share. */
+export const MAX_DISCOVERY_CAP = 5000;
+export const NIGHTLY_CAP = 1000;
+
 /** YouTube's own vocabulary. video_publications.requested_visibility mirrors it. */
 export type Visibility = 'public' | 'unlisted' | 'private';
 
@@ -261,7 +265,18 @@ export interface DiscoveredVideo {
   durationSeconds: number | null;
   /** 'short' when YouTube classifies it as a Short, else 'master'. */
   kind: 'master' | 'short';
+  /**
+   * YouTube's privacy status. Discovery runs as the channel owner, so it sees
+   * private and unlisted uploads too; anything not 'public' must never reach
+   * a public surface. Null when YouTube did not say.
+   */
+  privacy: Visibility | null;
   raw: Record<string, unknown>;
+}
+
+/** Gatewaze's two-value visibility for a YouTube privacy status. Unknown is private. */
+export function visibilityFor(privacy: Visibility | null | undefined): 'public' | 'private' {
+  return privacy === 'public' ? 'public' : 'private';
 }
 
 /**
@@ -276,14 +291,17 @@ export interface DiscoveredVideo {
  * 100 quota units per call against playlistItems' 1.
  *
  * `cap` exists because a first connection on a large channel would otherwise
- * run until the daily quota is gone. The caller resumes on the next run.
+ * run until the daily quota is gone. Every run starts from the newest upload
+ * and there is no resume, so a channel with more uploads than the cap (Shorts,
+ * private and unlisted uploads all count) never has its oldest ones read; the
+ * result says `truncated`, and the worker records that on the connection.
  */
 export async function listChannelVideos(
   client: ClientCredentials,
   refreshToken: string,
   opts: { cap?: number; since?: string | null } = {},
 ): Promise<{ videos: DiscoveredVideo[]; truncated: boolean; error?: string }> {
-  const cap = Math.max(1, Math.min(5000, opts.cap ?? 1000));
+  const cap = Math.max(1, Math.min(MAX_DISCOVERY_CAP, opts.cap ?? NIGHTLY_CAP));
   const out: DiscoveredVideo[] = [];
 
   try {
@@ -308,7 +326,8 @@ export async function listChannelVideos(
       let truncated = false;
       for (;;) {
         const params = new URLSearchParams({
-          part: 'snippet,contentDetails',
+          // 'status' carries privacyStatus at no extra quota cost.
+          part: 'snippet,contentDetails,status',
           playlistId: uploads,
           maxResults: '50',
           ...(pageToken ? { pageToken } : {}),
@@ -327,6 +346,7 @@ export async function listChannelVideos(
           items?: Array<{
             snippet?: { title?: string; description?: string; publishedAt?: string; thumbnails?: Record<string, { url?: string }> };
             contentDetails?: { videoId?: string; videoPublishedAt?: string };
+            status?: { privacyStatus?: string };
           }>;
         };
 
@@ -343,7 +363,8 @@ export async function listChannelVideos(
             // playlistItems does not carry duration; the metrics pass fills it.
             durationSeconds: null,
             kind: 'master',
-            raw: { snippet: item.snippet ?? {}, contentDetails: item.contentDetails ?? {} },
+            privacy: (['public', 'unlisted', 'private'] as const).find((p) => p === item.status?.privacyStatus) ?? null,
+            raw: { snippet: item.snippet ?? {}, contentDetails: item.contentDetails ?? {}, status: item.status ?? {} },
           });
           if (out.length >= cap) { truncated = true; break; }
         }
@@ -384,7 +405,10 @@ export async function fetchVideoDetails(
         const res = await fetch(`${DATA_ENDPOINT}?${params}`, {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
-        if (!res.ok) return;
+        // One failed batch loses only its own 50 videos' details, not every
+        // batch after it: a Short in a later batch would otherwise be stored
+        // as a full talk for good.
+        if (!res.ok) continue;
         const json = (await res.json()) as {
           items?: Array<{ id?: string; contentDetails?: { duration?: string } }>;
         };

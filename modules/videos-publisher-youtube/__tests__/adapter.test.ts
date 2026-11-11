@@ -195,3 +195,71 @@ describe('parseIsoDuration — how a Short is told from a talk', () => {
     expect(parseIsoDuration('PT3M1S')).toBe(181);
   });
 });
+
+describe('revokeToken', () => {
+  it('treats 200 and an already-invalid token as revoked, anything else as not', async () => {
+    const { revokeToken } = await import('../lib/oauth.js');
+    const real = globalThis.fetch;
+    try {
+      const calls: Array<{ url: string; init: RequestInit }> = [];
+      globalThis.fetch = (async (url: string, init: RequestInit) => {
+        calls.push({ url, init });
+        return new Response('{}', { status: 200 });
+      }) as typeof fetch;
+      expect(await revokeToken('t0k')).toBe(true);
+      expect(calls[0].url).toBe('https://oauth2.googleapis.com/revoke');
+      expect(calls[0].init.method).toBe('POST');
+      expect(String(calls[0].init.body)).toBe('token=t0k');
+      expect(calls[0].init.redirect).toBe('error');
+      calls.length = 0;
+      expect(await revokeToken('')).toBe(false);
+      expect(calls).toHaveLength(0);
+      globalThis.fetch = (async () => new Response('{"error":"invalid_request"}', { status: 400 })) as typeof fetch;
+      expect(await revokeToken('t')).toBe(false);
+      globalThis.fetch = (async () => new Response('{"error":"invalid_token"}', { status: 400 })) as typeof fetch;
+      expect(await revokeToken('t')).toBe(true);
+      globalThis.fetch = (async () => new Response('{"error":"server"}', { status: 503 })) as typeof fetch;
+      expect(await revokeToken('t')).toBe(false);
+      globalThis.fetch = (async () => { throw new Error('offline'); }) as typeof fetch;
+      expect(await revokeToken('t')).toBe(false);
+      expect(await revokeToken('')).toBe(false);
+    } finally {
+      globalThis.fetch = real;
+    }
+  });
+});
+
+describe('YouTube privacy on discovery', () => {
+  it('maps only public to public; unlisted, private and unknown are private', async () => {
+    const { visibilityFor } = await import('../lib/adapter.js');
+    expect(visibilityFor('public')).toBe('public');
+    expect(visibilityFor('unlisted')).toBe('private');
+    expect(visibilityFor('private')).toBe('private');
+    expect(visibilityFor(null)).toBe('private');
+    expect(visibilityFor(undefined)).toBe('private');
+  });
+
+  it('asks playlistItems for status and reads privacyStatus per upload', async () => {
+    const { listChannelVideos } = await import('../lib/adapter.js');
+    const real = globalThis.fetch;
+    const urls: string[] = [];
+    globalThis.fetch = (async (url: string) => {
+      urls.push(url);
+      if (url.includes('oauth2.googleapis.com/token')) return new Response(JSON.stringify({ access_token: 'a', expires_in: 3600 }), { status: 200 });
+      if (url.includes('/channels?')) return new Response(JSON.stringify({ items: [{ contentDetails: { relatedPlaylists: { uploads: 'UUx' } } }] }), { status: 200 });
+      return new Response(JSON.stringify({ items: [
+        { snippet: { title: 'Public talk' }, contentDetails: { videoId: 'AAAAAAAAAAA' }, status: { privacyStatus: 'public' } },
+        { snippet: { title: 'Unlisted cut' }, contentDetails: { videoId: 'BBBBBBBBBBB' }, status: { privacyStatus: 'unlisted' } },
+        { snippet: { title: 'No status' }, contentDetails: { videoId: 'CCCCCCCCCCC' } },
+      ] }), { status: 200 });
+    }) as typeof fetch;
+    try {
+      const r = await listChannelVideos({ clientId: 'c', clientSecret: 's' }, 'refresh');
+      expect(r.videos.map((v) => v.privacy)).toEqual(['public', 'unlisted', null]);
+      const listUrl = urls.find((u) => u.includes('/playlistItems?'))!;
+      expect(new URL(listUrl).searchParams.get('part')).toBe('snippet,contentDetails,status');
+    } finally {
+      globalThis.fetch = real;
+    }
+  });
+});

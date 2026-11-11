@@ -23,11 +23,20 @@ import { Router, type Express, type Request, type Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import { randomBytes, timingSafeEqual } from 'crypto';
 
-import { authorizeUrl, CALLBACK_PATH, exchangeCode, fetchChannel, redirectUri, SCOPES } from '../lib/oauth.js';
+import { authorizeUrl, CALLBACK_PATH, exchangeCode, fetchChannel, redirectUri, revokeToken, SCOPES } from '../lib/oauth.js';
+import { MAX_DISCOVERY_CAP } from '../lib/adapter.js';
 import { parseSettingsPatch, readClientSecret } from '../lib/settings.js';
 import { loadClientCredentials, readModuleConfig } from '../lib/client-credentials.js';
 import { serviceClient } from '../lib/service-client.js';
-import { sealSecret } from '../lib/secret-envelope.js';
+import { sealSecret, unsealSecret } from '../lib/secret-envelope.js';
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** What a disconnect records, and how the list tells the two apart. */
+export const DETAIL_REVOKED = 'Disconnected by an admin; access revoked at Google.';
+export const DETAIL_REVOKE_UNCONFIRMED =
+  'Disconnected by an admin, but Google did not confirm the access was revoked. '
+  + 'Remove this app under the channel account\'s third-party access (myaccount.google.com/permissions).';
 
 /**
  * The connect flow has two single-use secrets, both in memory and short-lived.
@@ -92,7 +101,23 @@ function page(title: string, paragraphs: string[]): string {
     `<body><h1>${esc(title)}</h1>${body}<p>You can close this tab and return to Gatewaze.</p></body></html>`;
 }
 
+/**
+ * Sync now reads up to the adapter's ceiling. One sync per channel per hour:
+ * a full run costs a couple of hundred quota units from the shared daily
+ * 10,000, and a second run within the hour would mostly re-read the first.
+ */
+export const SYNC_CAP = MAX_DISCOVERY_CAP;
+export const SYNC_COOLDOWN_MS = 60 * 60 * 1000;
+
+type EnqueueJob = (
+  queue: string,
+  name: string,
+  data: Record<string, unknown>,
+  opts?: Record<string, unknown>,
+) => Promise<{ id: string | undefined }>;
+
 export function registerRoutes(app: Express, ctx?: Record<string, unknown>): void {
+  const enqueueJob = ctx?.enqueueJob as EnqueueJob | undefined;
   const supabase = serviceClient();
 
   const log = (m: string, meta?: Record<string, unknown>) =>
@@ -378,14 +403,183 @@ export function registerRoutes(app: Express, ctx?: Record<string, unknown>): voi
   router.get('/connections', async (_req: Request, res: Response) => {
     const { data, error } = await supabase
       .from('video_platform_connections')
-      .select('id, platform, external_account_id, label, state, state_detail, scopes, collection_enabled, last_collected_at, last_collect_status, last_collect_detail, created_at')
+      .select('id, platform, external_account_id, label, state, state_detail, scopes, collection_enabled, last_collected_at, last_collect_status, last_collect_detail, created_at, config, discovery_started_at, discovery_finished_at, discovery_detail')
       .eq('platform', 'youtube')
       .order('created_at');
     if (error) {
       log('could not list connections', { error: error.message });
       return res.status(500).json({ error: 'The connections could not be read.' });
     }
-    res.json({ connections: data ?? [] });
+    // A disconnected row is history, except when Google never confirmed the
+    // revoke: then the grant may still be live, and the operator must see it.
+    res.json({
+      connections: (data ?? []).map(({ config, ...c }: Record<string, unknown>) => ({
+        ...c,
+        // Only the one setting this page manages leaves the server; the rest
+        // of config is other modules' business.
+        auto_publish: ((config ?? {}) as Record<string, unknown>).auto_publish === true,
+        needs_manual_revoke: c.state === 'disconnected' && c.state_detail === DETAIL_REVOKE_UNCONFIRMED,
+      })),
+    });
+  });
+
+  /**
+   * Disconnect a channel. The row is kept, not deleted: metrics history
+   * cascades from it, and publications and discovered videos point at it.
+   * Disconnecting revokes the grant at Google (best effort), drops the sealed
+   * refresh token, stops collection, and marks the row 'disconnected', which
+   * both workers already skip. Connecting the same channel again goes through
+   * the normal flow and upserts this same row back to 'connected'.
+   */
+  router.post('/connections/:id/disconnect', async (req: Request, res: Response) => {
+    const id = String(req.params.id ?? '');
+    if (!UUID_RE.test(id)) return res.status(404).json({ error: 'No such connection.' });
+
+    const { data: conn, error: readErr } = await supabase
+      .from('video_platform_connections')
+      .select('id, label, external_account_id, encrypted_credentials, state, updated_at')
+      .eq('id', id)
+      .eq('platform', 'youtube')
+      .maybeSingle();
+    if (readErr) {
+      log('could not read connection', { error: readErr.message });
+      return res.status(500).json({ error: 'The connection could not be read.' });
+    }
+    if (!conn) return res.status(404).json({ error: 'No such connection.' });
+    // Already disconnected and holding nothing: done. Repeating it would
+    // overwrite the record of whether the revoke succeeded.
+    if (conn.state === 'disconnected' && !conn.encrypted_credentials) return res.json({ ok: true, revoked: null });
+
+    // Revoke before clearing, while we still hold the token. A sealed value
+    // that will not unseal cannot be revoked; it is dropped all the same.
+    const refreshToken = conn.encrypted_credentials ? unsealSecret(conn.encrypted_credentials) : null;
+    const revoked = refreshToken ? await revokeToken(refreshToken) : false;
+
+    let q = supabase
+      .from('video_platform_connections')
+      .update({
+        state: 'disconnected',
+        state_detail: revoked ? DETAIL_REVOKED : DETAIL_REVOKE_UNCONFIRMED,
+        encrypted_credentials: null,
+        collection_enabled: false,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', id)
+      .eq('platform', 'youtube');
+    // Only the row as we read it: a reconnect that landed in between bumped
+    // updated_at with a new credential, and that connection stands. Compared
+    // on updated_at rather than the sealed credential, so the ciphertext never
+    // travels in a request URL (and so never in an access log).
+    q = conn.updated_at ? q.eq('updated_at', conn.updated_at) : q.is('updated_at', null);
+    const { data: changed, error } = await q.select('id');
+    if (error) {
+      log('could not disconnect', { error: error.message });
+      return res.status(500).json({ error: 'The channel could not be disconnected.' });
+    }
+    if (!changed?.length) {
+      return res.status(409).json({ error: 'The channel was reconnected while disconnecting. Refresh and try again.' });
+    }
+    log('channel disconnected', { channel: conn.external_account_id, revoked });
+    res.json({ ok: true, revoked });
+  });
+
+  /**
+   * Sync a channel now: queue the discovery job for this one connection with
+   * the largest cap the adapter allows (5,000), instead of the nightly run's
+   * newest 1,000. Uploads already held are adopted, not duplicated. One sync
+   * per channel per hour, counted from the last run's start whichever kind it
+   * was, and the job id is bucketed by the same hour so repeated clicks
+   * before the run starts queue one job.
+   */
+  router.post('/connections/:id/sync', async (req: Request, res: Response) => {
+    const id = String(req.params.id ?? '');
+    if (!UUID_RE.test(id)) return res.status(404).json({ error: 'No such connection.' });
+    if (typeof enqueueJob !== 'function') {
+      return res.status(503).json({ error: 'The job queue is not available on this server.' });
+    }
+
+    const { data: conn, error: readErr } = await supabase
+      .from('video_platform_connections')
+      .select('id, state, discovery_started_at')
+      .eq('id', id)
+      .eq('platform', 'youtube')
+      .maybeSingle();
+    if (readErr) {
+      log('could not read connection', { error: readErr.message });
+      return res.status(500).json({ error: 'The connection could not be read.' });
+    }
+    if (!conn) return res.status(404).json({ error: 'No such connection.' });
+    if (conn.state !== 'connected') {
+      return res.status(409).json({ error: 'Only a connected channel can be synced. Connect it again first.' });
+    }
+    // The last run's start, whether it was a Sync now or the nightly run.
+    const lastStart = conn.discovery_started_at ? Date.parse(String(conn.discovery_started_at)) : NaN;
+    if (Number.isFinite(lastStart) && Date.now() - lastStart < SYNC_COOLDOWN_MS) {
+      const next = new Date(lastStart + SYNC_COOLDOWN_MS);
+      return res.status(429).json({
+        error: `This channel was synced less than an hour ago. Try again after ${next.toISOString().slice(11, 16)} UTC.`,
+        retry_after: next.toISOString(),
+      });
+    }
+
+    try {
+      const job = await enqueueJob(
+        'jobs',
+        'videos-publisher-youtube:discover-videos',
+        { kind: 'videos-publisher-youtube:discover-videos', connection_id: id, cap: SYNC_CAP },
+        // Bucketed by the cooldown, so two clicks before the run has started
+        // (and so before discovery_started_at is set) still queue one job.
+        { jobId: `videos-publisher-youtube-sync-${id}-${Math.floor(Date.now() / SYNC_COOLDOWN_MS)}` },
+      );
+      if (!job?.id) return res.status(503).json({ error: 'The sync could not be queued.' });
+      log('sync queued', { connection: id, job: job.id });
+      res.json({ queued: true, job_id: job.id });
+    } catch (err) {
+      log('could not queue sync', { error: (err as Error).message });
+      res.status(503).json({ error: 'The sync could not be queued.' });
+    }
+  });
+
+  /**
+   * Per-channel settings this page manages. Only auto_publish today: when on,
+   * public uploads are published as discovery finds them. Written into the
+   * connection's config, merged, so other keys are kept.
+   */
+  router.patch('/connections/:id/settings', async (req: Request, res: Response) => {
+    const id = String(req.params.id ?? '');
+    if (!UUID_RE.test(id)) return res.status(404).json({ error: 'No such connection.' });
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    if (typeof body.auto_publish !== 'boolean' || Object.keys(body).some((k) => k !== 'auto_publish')) {
+      return res.status(400).json({ error: 'Send { "auto_publish": true | false } and nothing else.' });
+    }
+
+    const { data: conn, error: readErr } = await supabase
+      .from('video_platform_connections')
+      .select('id, config, updated_at')
+      .eq('id', id)
+      .eq('platform', 'youtube')
+      .maybeSingle();
+    if (readErr) {
+      log('could not read connection', { error: readErr.message });
+      return res.status(500).json({ error: 'The connection could not be read.' });
+    }
+    if (!conn) return res.status(404).json({ error: 'No such connection.' });
+
+    const config = { ...((conn.config ?? {}) as Record<string, unknown>), auto_publish: body.auto_publish };
+    let q = supabase
+      .from('video_platform_connections')
+      .update({ config, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .eq('platform', 'youtube');
+    q = conn.updated_at ? q.eq('updated_at', conn.updated_at) : q.is('updated_at', null);
+    const { data: changed, error } = await q.select('id');
+    if (error) {
+      log('could not save channel settings', { error: error.message });
+      return res.status(500).json({ error: 'The setting could not be saved.' });
+    }
+    if (!changed?.length) return res.status(409).json({ error: 'The channel changed while saving. Refresh and try again.' });
+    log('channel settings saved', { connection: id, auto_publish: body.auto_publish });
+    res.json({ ok: true, auto_publish: body.auto_publish });
   });
 
   app.use('/api/modules/videos-publisher-youtube', router);

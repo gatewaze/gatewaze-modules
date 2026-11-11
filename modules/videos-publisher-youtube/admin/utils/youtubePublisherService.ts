@@ -54,6 +54,14 @@ export interface YouTubeConnection {
   last_collected_at: string | null;
   last_collect_status: string | null;
   created_at: string;
+  /** Disconnected, but Google never confirmed the access was revoked. */
+  needs_manual_revoke?: boolean;
+  /** Public uploads are published as discovery finds them. */
+  auto_publish?: boolean;
+  discovery_started_at?: string | null;
+  discovery_finished_at?: string | null;
+  /** What the last discovery run did, in a sentence. */
+  discovery_detail?: string | null;
 }
 
 export function getYouTubeSettings(): Promise<YouTubeClientSettings> {
@@ -67,6 +75,24 @@ export function saveYouTubeSettings(patch: { clientId?: string; clientSecret?: s
 export async function listYouTubeConnections(): Promise<YouTubeConnection[]> {
   const r = await authedJson<{ connections: YouTubeConnection[] }>(`${BASE}/connections`);
   return r.connections ?? [];
+}
+
+/** Revoke and forget a channel's access. Its history is kept. */
+export function disconnectYouTubeChannel(id: string): Promise<{ ok: true; revoked: boolean | null }> {
+  return authedJson(`${BASE}/connections/${encodeURIComponent(id)}/disconnect`, { method: 'POST' });
+}
+
+/** Turn auto-publish on or off for one channel. */
+export function setYouTubeAutoPublish(id: string, autoPublish: boolean): Promise<{ ok: true; auto_publish: boolean }> {
+  return authedJson(`${BASE}/connections/${encodeURIComponent(id)}/settings`, {
+    method: 'PATCH',
+    body: JSON.stringify({ auto_publish: autoPublish }),
+  });
+}
+
+/** Queue a full back-catalogue sync of one channel. */
+export function syncYouTubeChannel(id: string): Promise<{ queued: true; job_id: string }> {
+  return authedJson(`${BASE}/connections/${encodeURIComponent(id)}/sync`, { method: 'POST' });
 }
 
 /** A one-time Google consent URL, valid for ten minutes. */

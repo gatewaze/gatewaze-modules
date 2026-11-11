@@ -14,24 +14,39 @@ const OTHER_KEY = Buffer.alloc(32, 8).toString('base64');
 process.env.GATEWAZE_SECRETS_KEY = KEY;
 process.env.API_URL = 'https://api.example.test';
 
+let revokeResult = true;
+const enqueued: Array<{ queue: string; name: string; data: Record<string, unknown>; opts?: Record<string, unknown> }> = [];
+let enqueueMode: 'ok' | 'noid' | 'throw' = 'ok';
+const fakeEnqueue = async (queue: string, name: string, data: Record<string, unknown>, opts?: Record<string, unknown>) => {
+  if (enqueueMode === 'throw') throw new Error('redis down');
+  enqueued.push({ queue, name, data, opts });
+  return { id: enqueueMode === 'noid' ? undefined : `job-${enqueued.length}` };
+};
 const db = {
   config: {} as Record<string, unknown>,
   upserts: [] as unknown[],
   /** Force the next installed_modules read or the connections read to fail. */
   failRead: false,
   failConnections: false,
+  /** The connection row the disconnect route reads, and what it last wrote. */
+  connection: null as Record<string, unknown> | null,
+  connectionUpdate: null as Record<string, unknown> | null,
+  connectionReads: 0,
+  failConnRead: false,
+  failConnUpdate: false,
 };
 
 vi.mock('../lib/service-client.js', () => {
   function chain(table: string) {
-    const st: { op: string; payload?: unknown } = { op: 'select' };
+    const st: { op: string; payload?: unknown; single?: boolean; eqs: Record<string, unknown>; isNull: string[] } = { op: 'select', eqs: {}, isNull: [] };
     const b: any = {
       select: () => b,
-      eq: () => b,
+      eq: (col: string, val: unknown) => { st.eqs[col] = val; return b; },
+      is: (col: string, val: unknown) => { if (val === null) st.isNull.push(col); return b; },
       order: () => b,
       update: (p: unknown) => { st.op = 'update'; st.payload = p; return b; },
       upsert: (p: unknown) => { db.upserts.push(p); st.op = 'upsert'; return b; },
-      maybeSingle: () => b,
+      maybeSingle: () => { st.single = true; return b; },
       then: (resolve: (v: unknown) => void) => {
         if (table === 'installed_modules' && st.op === 'update') {
           db.config = (st.payload as { config: Record<string, unknown> }).config;
@@ -40,6 +55,25 @@ vi.mock('../lib/service-client.js', () => {
         if (table === 'installed_modules') {
           if (db.failRead) return resolve({ data: null, error: { message: 'boom' } });
           return resolve({ data: { config: db.config }, error: null });
+        }
+        // The connection row honours the filters it is given, like Postgres.
+        const conn = db.connection;
+        const matches = (c: Record<string, unknown> | null) => !!c
+          && Object.entries(st.eqs).every(([k, v]) => c[k] === v)
+          && st.isNull.every((k) => c[k] == null);
+        if (table === 'video_platform_connections' && st.op === 'update') {
+          if (db.failConnUpdate) return resolve({ data: null, error: { message: 'boom' } });
+          if (!matches(conn)) return resolve({ data: [], error: null });
+          db.connectionUpdate = st.payload as Record<string, unknown>;
+          return resolve({ data: [{ id: conn!.id }], error: null });
+        }
+        if (table === 'video_platform_connections' && st.op === 'select' && st.single) {
+          db.connectionReads += 1;
+          if (db.failConnRead) return resolve({ data: null, error: { message: 'boom' } });
+          return resolve({ data: matches(conn) ? conn : null, error: null });
+        }
+        if (table === 'video_platform_connections' && st.op === 'select' && !db.failConnections && conn) {
+          return resolve({ data: [conn], error: null });
         }
         if (table === 'video_platform_connections' && st.op === 'select' && db.failConnections) {
           return resolve({ data: null, error: { message: 'relation "secret_internal_table" does not exist' } });
@@ -59,6 +93,7 @@ vi.mock('../lib/oauth.js', async (orig) => {
     ...real,
     exchangeCode: vi.fn(async () => ({ accessToken: 'at', refreshToken: 'rt', expiresAt: 0, scopes: ['s'] })),
     fetchChannel: vi.fn(async () => ({ id: 'UCG6qpjVnBTTT8wLGBygANOQ', title: 'AAIF Live' })),
+    revokeToken: vi.fn(async () => revokeResult),
   };
 });
 
@@ -66,6 +101,7 @@ const { registerRoutes } = await import('../api/register-routes.js');
 const { sealSecret } = await import('../lib/secret-envelope.js');
 const { CLIENT_ID_RE } = await import('../lib/settings.js');
 const manifest = (await import('../index.js')).default;
+const oauthMod = await import('../lib/oauth.js');
 
 let base = '';
 let server: ReturnType<express.Express['listen']>;
@@ -76,7 +112,7 @@ const PUB = '/api/videos-publisher-youtube';
 beforeAll(async () => {
   const app = express();
   app.use(express.json());
-  registerRoutes(app as any);
+  registerRoutes(app as any, { enqueueJob: fakeEnqueue });
   server = app.listen(0);
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
@@ -88,6 +124,15 @@ beforeEach(() => {
   db.upserts = [];
   db.failRead = false;
   db.failConnections = false;
+  db.connection = null;
+  db.connectionUpdate = null;
+  db.connectionReads = 0;
+  db.failConnRead = false;
+  db.failConnUpdate = false;
+  enqueued.length = 0;
+  enqueueMode = 'ok';
+  revokeResult = true;
+  vi.mocked(oauthMod.revokeToken).mockClear();
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -238,6 +283,8 @@ describe('connect flow', () => {
     expect(await ok.text()).toContain('AAIF Live is connected.');
     expect(db.upserts).toHaveLength(1);
     expect(JSON.stringify(db.upserts[0])).not.toContain('"rt"');
+    // Reconnecting a disconnected channel restores it on the same row.
+    expect(db.upserts[0]).toMatchObject({ platform: 'youtube', state: 'connected', state_detail: null, collection_enabled: true });
     expect(ok.headers.get('set-cookie')).toMatch(/gw_yt_oauth_bind=;/);
   });
 
@@ -308,3 +355,241 @@ describe('connect flow', () => {
     expect(text).toContain('&lt;script&gt;');
   });
 });
+
+describe('disconnect', () => {
+  const CONN = 'c0000000-0000-0000-0000-000000000001';
+  const disconnect = (id: string) => fetch(`${base}${MOD}/connections/${id}/disconnect`, { method: 'POST' });
+  const row = (extra: Record<string, unknown> = {}) => ({
+    id: CONN, platform: 'youtube', label: 'Dan Baker', external_account_id: 'UCxxxxxxxxxxxxxxxxxxxxxx',
+    state: 'connected', encrypted_credentials: sealSecret('refresh-token-value'), updated_at: '2026-11-11T09:00:00.000Z', ...extra,
+  });
+
+  it('revokes at Google, drops the token, stops collection, and keeps the row', async () => {
+    db.connection = row();
+    const r = await disconnect(CONN);
+    expect(r.status).toBe(200);
+    expect(await r.json()).toEqual({ ok: true, revoked: true });
+    expect(oauthMod.revokeToken).toHaveBeenCalledWith('refresh-token-value');
+    expect(db.connectionUpdate).toMatchObject({
+      state: 'disconnected', encrypted_credentials: null, collection_enabled: false,
+      state_detail: 'Disconnected by an admin; access revoked at Google.',
+    });
+    db.connection = { ...db.connection, ...db.connectionUpdate };
+    const list = await (await fetch(`${base}${MOD}/connections`)).json();
+    expect(list.connections[0]).toMatchObject({ state: 'disconnected', needs_manual_revoke: false });
+  });
+
+  it('still disconnects when Google does not confirm, and keeps it listed for a manual revoke', async () => {
+    revokeResult = false;
+    db.connection = row();
+    expect(await (await disconnect(CONN)).json()).toEqual({ ok: true, revoked: false });
+    expect(db.connectionUpdate).toMatchObject({ state: 'disconnected', encrypted_credentials: null });
+    db.connection = { ...db.connection, ...db.connectionUpdate };
+    const list = await (await fetch(`${base}${MOD}/connections`)).json();
+    expect(list.connections[0]).toMatchObject({ state: 'disconnected', needs_manual_revoke: true });
+    expect(JSON.stringify(list)).not.toContain('v1:');
+  });
+
+  it('does not call Google for a credential it cannot unseal, and still disconnects', async () => {
+    process.env.GATEWAZE_SECRETS_KEY = OTHER_KEY;
+    db.connection = row({ encrypted_credentials: sealSecret('t') });
+    process.env.GATEWAZE_SECRETS_KEY = KEY;
+    expect(await (await disconnect(CONN)).json()).toEqual({ ok: true, revoked: false });
+    expect(oauthMod.revokeToken).not.toHaveBeenCalled();
+    expect(db.connectionUpdate).toMatchObject({ state: 'disconnected' });
+  });
+
+  it('leaves an already-disconnected row as it is', async () => {
+    db.connection = row({ state: 'disconnected', encrypted_credentials: null, state_detail: 'Disconnected by an admin; access revoked at Google.' });
+    expect(await (await disconnect(CONN)).json()).toEqual({ ok: true, revoked: null });
+    expect(db.connectionUpdate).toBeNull();
+    expect(oauthMod.revokeToken).not.toHaveBeenCalled();
+  });
+
+  it('never touches a connection of another platform', async () => {
+    db.connection = row({ platform: 'spotify' });
+    expect((await disconnect(CONN)).status).toBe(404);
+    expect(db.connectionUpdate).toBeNull();
+  });
+
+  it('refuses a malformed id before reading anything, and 404s an unknown one', async () => {
+    expect((await disconnect('not-a-uuid')).status).toBe(404);
+    expect(db.connectionReads).toBe(0);
+    expect((await disconnect(CONN)).status).toBe(404);
+    expect(db.connectionUpdate).toBeNull();
+  });
+
+  it('does not undo a reconnect that landed in between', async () => {
+    db.connection = row();
+    // Simulate the callback storing a new credential after the read.
+    vi.mocked(oauthMod.revokeToken).mockImplementationOnce(async () => {
+      db.connection = { ...db.connection!, encrypted_credentials: sealSecret('new-token'), updated_at: '2026-11-11T09:00:05.000Z' };
+      return true;
+    });
+    expect((await disconnect(CONN)).status).toBe(409);
+    expect(db.connectionUpdate).toBeNull();
+  });
+
+  it('answers database failures with a 500', async () => {
+    db.connection = row();
+    db.failConnRead = true;
+    expect((await disconnect(CONN)).status).toBe(500);
+    db.failConnRead = false;
+    db.failConnUpdate = true;
+    const r = await disconnect(CONN);
+    expect(r.status).toBe(500);
+    expect(await r.text()).not.toContain('boom');
+  });
+
+  it('is not served on the public prefix', async () => {
+    expect((await fetch(`${base}${PUB}/connections/${CONN}/disconnect`, { method: 'POST' })).status).toBe(404);
+  });
+});
+
+describe('sync now', () => {
+  const CONN = 'c0000000-0000-0000-0000-000000000002';
+  const sync = (id: string) => fetch(`${base}${MOD}/connections/${id}/sync`, { method: 'POST' });
+
+  it('queues a full discovery run for that one channel, de-duplicated by a time bucket', async () => {
+    db.connection = { id: CONN, platform: 'youtube', state: 'connected' };
+    const r = await sync(CONN);
+    expect(r.status).toBe(200);
+    expect(await r.json()).toEqual({ queued: true, job_id: 'job-1' });
+    expect(enqueued[0]).toMatchObject({
+      queue: 'jobs',
+      name: 'videos-publisher-youtube:discover-videos',
+      data: { connection_id: CONN, cap: 5000 },
+    });
+    expect(String(enqueued[0].opts?.jobId)).toMatch(new RegExp(`^videos-publisher-youtube-sync-${CONN}-\\d+$`));
+  });
+
+  it('refuses a channel that is not connected', async () => {
+    db.connection = { id: CONN, platform: 'youtube', state: 'disconnected' };
+    expect((await sync(CONN)).status).toBe(409);
+    expect(enqueued).toHaveLength(0);
+  });
+
+  it('refuses another platform, a malformed id, and an unknown id', async () => {
+    db.connection = { id: CONN, platform: 'spotify', state: 'connected' };
+    expect((await sync(CONN)).status).toBe(404);
+    expect((await sync('nope')).status).toBe(404);
+    db.connection = null;
+    expect((await sync(CONN)).status).toBe(404);
+    expect(enqueued).toHaveLength(0);
+  });
+
+  it('is not served on the public prefix', async () => {
+    expect((await fetch(`${base}${PUB}/connections/${CONN}/sync`, { method: 'POST' })).status).toBe(404);
+  });
+
+  it('answers 503 when the server has no job queue', async () => {
+    const bare = express();
+    bare.use(express.json());
+    registerRoutes(bare as any);
+    const srv = bare.listen(0);
+    try {
+      db.connection = { id: CONN, platform: 'youtube', state: 'connected' };
+      const port = (srv.address() as AddressInfo).port;
+      expect((await fetch(`http://127.0.0.1:${port}${MOD}/connections/${CONN}/sync`, { method: 'POST' })).status).toBe(503);
+    } finally {
+      srv.close();
+    }
+  });
+});
+
+describe('sync now: cooldown and failures', () => {
+  const CONN = 'c0000000-0000-0000-0000-000000000003';
+  const sync = () => fetch(`${base}${MOD}/connections/${CONN}/sync`, { method: 'POST' });
+
+  it('refuses within an hour of the last run, whichever started it', async () => {
+    db.connection = { id: CONN, platform: 'youtube', state: 'connected', discovery_started_at: new Date(Date.now() - 20 * 60_000).toISOString() };
+    const r = await sync();
+    expect(r.status).toBe(429);
+    expect((await r.json()).retry_after).toBeTruthy();
+    expect(enqueued).toHaveLength(0);
+  });
+
+  it('allows a sync once the hour has passed', async () => {
+    db.connection = { id: CONN, platform: 'youtube', state: 'connected', discovery_started_at: new Date(Date.now() - 61 * 60_000).toISOString() };
+    expect((await sync()).status).toBe(200);
+    expect(enqueued).toHaveLength(1);
+  });
+
+  it('gives two clicks inside one hour the same job id, and the next hour a new one', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-11T10:05:00Z'));
+    db.connection = { id: CONN, platform: 'youtube', state: 'connected', discovery_started_at: null };
+    await sync();
+    vi.setSystemTime(new Date('2026-11-11T10:40:00Z'));
+    await sync();
+    vi.setSystemTime(new Date('2026-11-11T11:10:00Z'));
+    await sync();
+    const ids = enqueued.map((e) => e.opts?.jobId);
+    expect(ids[0]).toBe(ids[1]);
+    expect(ids[2]).not.toBe(ids[1]);
+  });
+
+  it('answers 500 on a failed read, 503 when the queue fails or gives no job', async () => {
+    db.connection = { id: CONN, platform: 'youtube', state: 'connected' };
+    db.failConnRead = true;
+    expect((await sync()).status).toBe(500);
+    db.failConnRead = false;
+    enqueueMode = 'throw';
+    expect((await sync()).status).toBe(503);
+    enqueueMode = 'noid';
+    expect((await sync()).status).toBe(503);
+  });
+});
+
+describe('channel settings: auto-publish', () => {
+  const CONN = 'c0000000-0000-0000-0000-000000000004';
+  const patch = (body: unknown, id = CONN) =>
+    fetch(`${base}${MOD}/connections/${id}/settings`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+
+  it('turns auto-publish on, keeping the rest of config', async () => {
+    db.connection = { id: CONN, platform: 'youtube', state: 'connected', config: { other: 'kept' }, updated_at: '2026-11-11T09:00:00.000Z' };
+    const r = await patch({ auto_publish: true });
+    expect(r.status).toBe(200);
+    expect(db.connectionUpdate?.config).toEqual({ other: 'kept', auto_publish: true });
+  });
+
+  it('saves only against the row as read (409 when it changed), and answers a failed read with 500', async () => {
+    db.connection = { id: CONN, platform: 'youtube', state: 'connected', config: {}, updated_at: '2026-11-11T09:00:00.000Z' };
+    vi.mocked(oauthMod.revokeToken); // keep the import used
+    const real = db.connection;
+    // The row changes between the read and the write.
+    const orig = (db as any).connection;
+    let reads = 0;
+    Object.defineProperty(db, 'connection', {
+      configurable: true,
+      get() { reads += 1; return reads > 1 ? { ...orig, updated_at: '2026-11-11T09:00:09.000Z' } : orig; },
+      set(v) { Object.defineProperty(db, 'connection', { value: v, writable: true, configurable: true }); },
+    });
+    expect((await patch({ auto_publish: true })).status).toBe(409);
+    db.connection = real;
+    db.failConnRead = true;
+    expect((await patch({ auto_publish: true })).status).toBe(500);
+  });
+
+  it.each([[{}], [{ auto_publish: 'yes' }], [{ auto_publish: true, refresh_token: 'x' }], [null]])('rejects %j', async (body) => {
+    db.connection = { id: CONN, platform: 'youtube', state: 'connected', config: {} };
+    expect((await patch(body)).status).toBe(400);
+    expect(db.connectionUpdate).toBeNull();
+  });
+
+  it('refuses another platform and a malformed id', async () => {
+    db.connection = { id: CONN, platform: 'spotify', state: 'connected', config: {} };
+    expect((await patch({ auto_publish: true })).status).toBe(404);
+    expect((await patch({ auto_publish: true }, 'nope')).status).toBe(404);
+    expect(db.connectionUpdate).toBeNull();
+  });
+
+  it('lists auto_publish and the last run, but not the rest of config', async () => {
+    db.connection = { id: CONN, platform: 'youtube', state: 'connected', config: { auto_publish: true, other: 'secret-ish' },
+      discovery_finished_at: '2026-11-11T10:00:00Z', discovery_detail: 'Read 10 upload(s).' };
+    const list = await (await fetch(`${base}${MOD}/connections`)).json();
+    expect(list.connections[0]).toMatchObject({ auto_publish: true, discovery_detail: 'Read 10 upload(s).' });
+    expect(list.connections[0]).not.toHaveProperty('config');
+  });
+});
+
