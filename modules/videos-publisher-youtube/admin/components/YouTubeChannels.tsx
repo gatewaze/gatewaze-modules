@@ -14,6 +14,7 @@ import { Badge, Button, Card, Input, WorkspaceLayout } from '@/components/ui';
 
 import {
   disconnectYouTubeChannel,
+  syncYouTubeChannel,
   getYouTubeSettings,
   listYouTubeConnections,
   saveYouTubeSettings,
@@ -37,7 +38,7 @@ export default function YouTubeChannels() {
   const [connections, setConnections] = useState<YouTubeConnection[]>([]);
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
-  const [busy, setBusy] = useState<'load' | 'save' | 'connect' | 'disconnect' | null>('load');
+  const [busy, setBusy] = useState<'load' | 'save' | 'connect' | 'disconnect' | 'sync' | null>('load');
   // Loaded separately, so one failing call does not blank the other card, and
   // so "loading" and "failed" are never shown as "not configured" or "none".
   const [settingsState, setSettingsState] = useState<'loading' | 'error' | 'ready'>('loading');
@@ -126,6 +127,18 @@ export default function YouTubeChannels() {
       await load();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not disconnect');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const sync = async (c: YouTubeConnection) => {
+    setBusy('sync');
+    try {
+      await syncYouTubeChannel(c.id);
+      toast.success(`Sync of ${c.label ?? c.external_account_id} queued. Its uploads appear under Unassigned videos over the next few minutes.`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not queue the sync');
     } finally {
       setBusy(null);
     }
@@ -234,6 +247,11 @@ export default function YouTubeChannels() {
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <Badge color={stateColor(c.state)} variant="soft">{c.state}</Badge>
+                    {c.state === 'connected' && (
+                      <Button variant="ghost" size="sm" onClick={() => void sync(c)} disabled={busy !== null}>
+                        Sync now
+                      </Button>
+                    )}
                     {c.state !== 'disconnected' && (
                       <Button variant="ghost" size="sm" color="red" onClick={() => void disconnect(c)} disabled={busy !== null}>
                         Disconnect

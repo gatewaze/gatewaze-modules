@@ -228,3 +228,38 @@ describe('revokeToken', () => {
     }
   });
 });
+
+describe('YouTube privacy on discovery', () => {
+  it('maps only public to public; unlisted, private and unknown are private', async () => {
+    const { visibilityFor } = await import('../lib/adapter.js');
+    expect(visibilityFor('public')).toBe('public');
+    expect(visibilityFor('unlisted')).toBe('private');
+    expect(visibilityFor('private')).toBe('private');
+    expect(visibilityFor(null)).toBe('private');
+    expect(visibilityFor(undefined)).toBe('private');
+  });
+
+  it('asks playlistItems for status and reads privacyStatus per upload', async () => {
+    const { listChannelVideos } = await import('../lib/adapter.js');
+    const real = globalThis.fetch;
+    const urls: string[] = [];
+    globalThis.fetch = (async (url: string) => {
+      urls.push(url);
+      if (url.includes('oauth2.googleapis.com/token')) return new Response(JSON.stringify({ access_token: 'a', expires_in: 3600 }), { status: 200 });
+      if (url.includes('/channels?')) return new Response(JSON.stringify({ items: [{ contentDetails: { relatedPlaylists: { uploads: 'UUx' } } }] }), { status: 200 });
+      return new Response(JSON.stringify({ items: [
+        { snippet: { title: 'Public talk' }, contentDetails: { videoId: 'AAAAAAAAAAA' }, status: { privacyStatus: 'public' } },
+        { snippet: { title: 'Unlisted cut' }, contentDetails: { videoId: 'BBBBBBBBBBB' }, status: { privacyStatus: 'unlisted' } },
+        { snippet: { title: 'No status' }, contentDetails: { videoId: 'CCCCCCCCCCC' } },
+      ] }), { status: 200 });
+    }) as typeof fetch;
+    try {
+      const r = await listChannelVideos({ clientId: 'c', clientSecret: 's' }, 'refresh');
+      expect(r.videos.map((v) => v.privacy)).toEqual(['public', 'unlisted', null]);
+      const listUrl = urls.find((u) => u.includes('/playlistItems?'))!;
+      expect(new URL(listUrl).searchParams.get('part')).toBe('snippet,contentDetails,status');
+    } finally {
+      globalThis.fetch = real;
+    }
+  });
+});

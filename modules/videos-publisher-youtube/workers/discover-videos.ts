@@ -29,7 +29,7 @@
  * specific.
  */
 
-import { fetchVideoDetails, listChannelVideos } from '../lib/adapter.js';
+import { fetchVideoDetails, listChannelVideos, visibilityFor } from '../lib/adapter.js';
 
 import { serviceClient } from '../lib/service-client.js';
 import { unsealSecret } from '../lib/secret-envelope.js';
@@ -137,6 +137,9 @@ export async function discoverAll(
         const patch: Record<string, unknown> = {};
         if (!already.title && v.title) patch.title = v.title;
         if (detail?.durationSeconds) patch.duration_seconds = detail.durationSeconds;
+        // Privacy is the platform's fact, not an editorial one, and it changes
+        // (a premiere goes public, a talk is pulled), so it is refreshed every run.
+        if (v.privacy) patch.visibility = visibilityFor(v.privacy);
         patch.discovered_via_connection_id = conn.id;
         await supabase.from('videos').update(patch).eq('id', videoId);
       } else {
@@ -154,6 +157,8 @@ export async function discoverAll(
             channel_id: conn.external_account_id,
             channel_title: conn.label,
             kind: videoKind(detail?.kind),
+            // Private or unlisted on YouTube, or unknown, is private here.
+            visibility: visibilityFor(v.privacy),
             source: 'platform_discovery',
             is_external: true,
             discovered_via_connection_id: conn.id,

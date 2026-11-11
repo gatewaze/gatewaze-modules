@@ -100,7 +100,19 @@ function page(title: string, paragraphs: string[]): string {
     `<body><h1>${esc(title)}</h1>${body}<p>You can close this tab and return to Gatewaze.</p></body></html>`;
 }
 
+/** The adapter's ceiling for one discovery run, and the de-duplication window for Sync now. */
+export const SYNC_CAP = 5000;
+const SYNC_WINDOW_MS = 10 * 60 * 1000;
+
+type EnqueueJob = (
+  queue: string,
+  name: string,
+  data: Record<string, unknown>,
+  opts?: Record<string, unknown>,
+) => Promise<{ id: string | undefined }>;
+
 export function registerRoutes(app: Express, ctx?: Record<string, unknown>): void {
+  const enqueueJob = ctx?.enqueueJob as EnqueueJob | undefined;
   const supabase = serviceClient();
 
   const log = (m: string, meta?: Record<string, unknown>) =>
@@ -461,6 +473,51 @@ export function registerRoutes(app: Express, ctx?: Record<string, unknown>): voi
     }
     log('channel disconnected', { channel: conn.external_account_id, revoked });
     res.json({ ok: true, revoked });
+  });
+
+  /**
+   * Sync a channel now: queue the discovery job for this one connection with
+   * the largest cap the adapter allows, so the whole back catalogue arrives
+   * in one run instead of the nightly run's newest 1,000. Uploads already
+   * held are adopted, not duplicated, so a repeat is harmless; the job id is
+   * bucketed by ten minutes so repeated clicks queue one run, not many.
+   */
+  router.post('/connections/:id/sync', async (req: Request, res: Response) => {
+    const id = String(req.params.id ?? '');
+    if (!UUID_RE.test(id)) return res.status(404).json({ error: 'No such connection.' });
+    if (typeof enqueueJob !== 'function') {
+      return res.status(503).json({ error: 'The job queue is not available on this server.' });
+    }
+
+    const { data: conn, error: readErr } = await supabase
+      .from('video_platform_connections')
+      .select('id, state')
+      .eq('id', id)
+      .eq('platform', 'youtube')
+      .maybeSingle();
+    if (readErr) {
+      log('could not read connection', { error: readErr.message });
+      return res.status(500).json({ error: 'The connection could not be read.' });
+    }
+    if (!conn) return res.status(404).json({ error: 'No such connection.' });
+    if (conn.state !== 'connected') {
+      return res.status(409).json({ error: 'Only a connected channel can be synced. Connect it again first.' });
+    }
+
+    try {
+      const job = await enqueueJob(
+        'jobs',
+        'videos-publisher-youtube:discover-videos',
+        { kind: 'videos-publisher-youtube:discover-videos', connection_id: id, cap: SYNC_CAP },
+        { jobId: `videos-publisher-youtube-sync-${id}-${Math.floor(Date.now() / SYNC_WINDOW_MS)}` },
+      );
+      if (!job?.id) return res.status(503).json({ error: 'The sync could not be queued.' });
+      log('sync queued', { connection: id, job: job.id });
+      res.json({ queued: true, job_id: job.id });
+    } catch (err) {
+      log('could not queue sync', { error: (err as Error).message });
+      res.status(503).json({ error: 'The sync could not be queued.' });
+    }
   });
 
   app.use('/api/modules/videos-publisher-youtube', router);

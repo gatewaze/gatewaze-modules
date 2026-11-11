@@ -15,6 +15,11 @@ process.env.GATEWAZE_SECRETS_KEY = KEY;
 process.env.API_URL = 'https://api.example.test';
 
 let revokeResult = true;
+const enqueued: Array<{ queue: string; name: string; data: Record<string, unknown>; opts?: Record<string, unknown> }> = [];
+const fakeEnqueue = async (queue: string, name: string, data: Record<string, unknown>, opts?: Record<string, unknown>) => {
+  enqueued.push({ queue, name, data, opts });
+  return { id: `job-${enqueued.length}` };
+};
 const db = {
   config: {} as Record<string, unknown>,
   upserts: [] as unknown[],
@@ -105,7 +110,7 @@ const PUB = '/api/videos-publisher-youtube';
 beforeAll(async () => {
   const app = express();
   app.use(express.json());
-  registerRoutes(app as any);
+  registerRoutes(app as any, { enqueueJob: fakeEnqueue });
   server = app.listen(0);
   base = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
 });
@@ -122,6 +127,7 @@ beforeEach(() => {
   db.connectionReads = 0;
   db.failConnRead = false;
   db.failConnUpdate = false;
+  enqueued.length = 0;
   revokeResult = true;
   vi.mocked(oauthMod.revokeToken).mockClear();
 });
@@ -436,3 +442,55 @@ describe('disconnect', () => {
     expect((await fetch(`${base}${PUB}/connections/${CONN}/disconnect`, { method: 'POST' })).status).toBe(404);
   });
 });
+
+describe('sync now', () => {
+  const CONN = 'c0000000-0000-0000-0000-000000000002';
+  const sync = (id: string) => fetch(`${base}${MOD}/connections/${id}/sync`, { method: 'POST' });
+
+  it('queues a full discovery run for that one channel, de-duplicated by a time bucket', async () => {
+    db.connection = { id: CONN, platform: 'youtube', state: 'connected' };
+    const r = await sync(CONN);
+    expect(r.status).toBe(200);
+    expect(await r.json()).toEqual({ queued: true, job_id: 'job-1' });
+    expect(enqueued[0]).toMatchObject({
+      queue: 'jobs',
+      name: 'videos-publisher-youtube:discover-videos',
+      data: { connection_id: CONN, cap: 5000 },
+    });
+    expect(String(enqueued[0].opts?.jobId)).toMatch(new RegExp(`^videos-publisher-youtube-sync-${CONN}-\\d+$`));
+  });
+
+  it('refuses a channel that is not connected', async () => {
+    db.connection = { id: CONN, platform: 'youtube', state: 'disconnected' };
+    expect((await sync(CONN)).status).toBe(409);
+    expect(enqueued).toHaveLength(0);
+  });
+
+  it('refuses another platform, a malformed id, and an unknown id', async () => {
+    db.connection = { id: CONN, platform: 'spotify', state: 'connected' };
+    expect((await sync(CONN)).status).toBe(404);
+    expect((await sync('nope')).status).toBe(404);
+    db.connection = null;
+    expect((await sync(CONN)).status).toBe(404);
+    expect(enqueued).toHaveLength(0);
+  });
+
+  it('is not served on the public prefix', async () => {
+    expect((await fetch(`${base}${PUB}/connections/${CONN}/sync`, { method: 'POST' })).status).toBe(404);
+  });
+
+  it('answers 503 when the server has no job queue', async () => {
+    const bare = express();
+    bare.use(express.json());
+    registerRoutes(bare as any);
+    const srv = bare.listen(0);
+    try {
+      db.connection = { id: CONN, platform: 'youtube', state: 'connected' };
+      const port = (srv.address() as AddressInfo).port;
+      expect((await fetch(`http://127.0.0.1:${port}${MOD}/connections/${CONN}/sync`, { method: 'POST' })).status).toBe(503);
+    } finally {
+      srv.close();
+    }
+  });
+});
+

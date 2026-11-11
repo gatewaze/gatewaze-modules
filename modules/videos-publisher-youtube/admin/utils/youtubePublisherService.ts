@@ -76,6 +76,11 @@ export function disconnectYouTubeChannel(id: string): Promise<{ ok: true; revoke
   return authedJson(`${BASE}/connections/${encodeURIComponent(id)}/disconnect`, { method: 'POST' });
 }
 
+/** Queue a full back-catalogue sync of one channel. */
+export function syncYouTubeChannel(id: string): Promise<{ queued: true; job_id: string }> {
+  return authedJson(`${BASE}/connections/${encodeURIComponent(id)}/sync`, { method: 'POST' });
+}
+
 /** A one-time Google consent URL, valid for ten minutes. */
 export function startYouTubeConnect(): Promise<{ authorize_url: string; redirect_uri: string; expires_in_seconds: number }> {
   return authedJson(`${BASE}/oauth/start`);

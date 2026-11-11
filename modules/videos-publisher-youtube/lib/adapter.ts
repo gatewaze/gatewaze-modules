@@ -261,7 +261,18 @@ export interface DiscoveredVideo {
   durationSeconds: number | null;
   /** 'short' when YouTube classifies it as a Short, else 'master'. */
   kind: 'master' | 'short';
+  /**
+   * YouTube's privacy status. Discovery runs as the channel owner, so it sees
+   * private and unlisted uploads too; anything not 'public' must never reach
+   * a public surface. Null when YouTube did not say.
+   */
+  privacy: Visibility | null;
   raw: Record<string, unknown>;
+}
+
+/** Gatewaze's two-value visibility for a YouTube privacy status. Unknown is private. */
+export function visibilityFor(privacy: Visibility | null | undefined): 'public' | 'private' {
+  return privacy === 'public' ? 'public' : 'private';
 }
 
 /**
@@ -308,7 +319,8 @@ export async function listChannelVideos(
       let truncated = false;
       for (;;) {
         const params = new URLSearchParams({
-          part: 'snippet,contentDetails',
+          // 'status' carries privacyStatus at no extra quota cost.
+          part: 'snippet,contentDetails,status',
           playlistId: uploads,
           maxResults: '50',
           ...(pageToken ? { pageToken } : {}),
@@ -327,6 +339,7 @@ export async function listChannelVideos(
           items?: Array<{
             snippet?: { title?: string; description?: string; publishedAt?: string; thumbnails?: Record<string, { url?: string }> };
             contentDetails?: { videoId?: string; videoPublishedAt?: string };
+            status?: { privacyStatus?: string };
           }>;
         };
 
@@ -343,7 +356,8 @@ export async function listChannelVideos(
             // playlistItems does not carry duration; the metrics pass fills it.
             durationSeconds: null,
             kind: 'master',
-            raw: { snippet: item.snippet ?? {}, contentDetails: item.contentDetails ?? {} },
+            privacy: (['public', 'unlisted', 'private'] as const).find((p) => p === item.status?.privacyStatus) ?? null,
+            raw: { snippet: item.snippet ?? {}, contentDetails: item.contentDetails ?? {}, status: item.status ?? {} },
           });
           if (out.length >= cap) { truncated = true; break; }
         }
