@@ -16,6 +16,10 @@ const UPLOAD_ENDPOINT = 'https://www.googleapis.com/upload/youtube/v3/videos';
 const DATA_ENDPOINT = 'https://www.googleapis.com/youtube/v3/videos';
 const TIMEOUT_MS = 60_000;
 
+/** The most uploads one discovery run reads (Sync now), and the nightly run's share. */
+export const MAX_DISCOVERY_CAP = 5000;
+export const NIGHTLY_CAP = 1000;
+
 /** YouTube's own vocabulary. video_publications.requested_visibility mirrors it. */
 export type Visibility = 'public' | 'unlisted' | 'private';
 
@@ -287,14 +291,17 @@ export function visibilityFor(privacy: Visibility | null | undefined): 'public' 
  * 100 quota units per call against playlistItems' 1.
  *
  * `cap` exists because a first connection on a large channel would otherwise
- * run until the daily quota is gone. The caller resumes on the next run.
+ * run until the daily quota is gone. Every run starts from the newest upload
+ * and there is no resume, so a channel with more uploads than the cap (Shorts,
+ * private and unlisted uploads all count) never has its oldest ones read; the
+ * result says `truncated`, and the worker records that on the connection.
  */
 export async function listChannelVideos(
   client: ClientCredentials,
   refreshToken: string,
   opts: { cap?: number; since?: string | null } = {},
 ): Promise<{ videos: DiscoveredVideo[]; truncated: boolean; error?: string }> {
-  const cap = Math.max(1, Math.min(5000, opts.cap ?? 1000));
+  const cap = Math.max(1, Math.min(MAX_DISCOVERY_CAP, opts.cap ?? NIGHTLY_CAP));
   const out: DiscoveredVideo[] = [];
 
   try {
@@ -398,7 +405,10 @@ export async function fetchVideoDetails(
         const res = await fetch(`${DATA_ENDPOINT}?${params}`, {
           headers: { Authorization: `Bearer ${accessToken}` },
         });
-        if (!res.ok) return;
+        // One failed batch loses only its own 50 videos' details, not every
+        // batch after it: a Short in a later batch would otherwise be stored
+        // as a full talk for good.
+        if (!res.ok) continue;
         const json = (await res.json()) as {
           items?: Array<{ id?: string; contentDetails?: { duration?: string } }>;
         };

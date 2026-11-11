@@ -16,9 +16,11 @@ process.env.API_URL = 'https://api.example.test';
 
 let revokeResult = true;
 const enqueued: Array<{ queue: string; name: string; data: Record<string, unknown>; opts?: Record<string, unknown> }> = [];
+let enqueueMode: 'ok' | 'noid' | 'throw' = 'ok';
 const fakeEnqueue = async (queue: string, name: string, data: Record<string, unknown>, opts?: Record<string, unknown>) => {
+  if (enqueueMode === 'throw') throw new Error('redis down');
   enqueued.push({ queue, name, data, opts });
-  return { id: `job-${enqueued.length}` };
+  return { id: enqueueMode === 'noid' ? undefined : `job-${enqueued.length}` };
 };
 const db = {
   config: {} as Record<string, unknown>,
@@ -128,6 +130,7 @@ beforeEach(() => {
   db.failConnRead = false;
   db.failConnUpdate = false;
   enqueued.length = 0;
+  enqueueMode = 'ok';
   revokeResult = true;
   vi.mocked(oauthMod.revokeToken).mockClear();
 });
@@ -491,6 +494,84 @@ describe('sync now', () => {
     } finally {
       srv.close();
     }
+  });
+});
+
+describe('sync now: cooldown and failures', () => {
+  const CONN = 'c0000000-0000-0000-0000-000000000003';
+  const sync = () => fetch(`${base}${MOD}/connections/${CONN}/sync`, { method: 'POST' });
+
+  it('refuses within an hour of the last run, whichever started it', async () => {
+    db.connection = { id: CONN, platform: 'youtube', state: 'connected', discovery_started_at: new Date(Date.now() - 20 * 60_000).toISOString() };
+    const r = await sync();
+    expect(r.status).toBe(429);
+    expect((await r.json()).retry_after).toBeTruthy();
+    expect(enqueued).toHaveLength(0);
+  });
+
+  it('allows a sync once the hour has passed', async () => {
+    db.connection = { id: CONN, platform: 'youtube', state: 'connected', discovery_started_at: new Date(Date.now() - 61 * 60_000).toISOString() };
+    expect((await sync()).status).toBe(200);
+    expect(enqueued).toHaveLength(1);
+  });
+
+  it('gives two clicks inside one hour the same job id, and the next hour a new one', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(new Date('2026-11-11T10:05:00Z'));
+    db.connection = { id: CONN, platform: 'youtube', state: 'connected', discovery_started_at: null };
+    await sync();
+    vi.setSystemTime(new Date('2026-11-11T10:40:00Z'));
+    await sync();
+    vi.setSystemTime(new Date('2026-11-11T11:10:00Z'));
+    await sync();
+    const ids = enqueued.map((e) => e.opts?.jobId);
+    expect(ids[0]).toBe(ids[1]);
+    expect(ids[2]).not.toBe(ids[1]);
+  });
+
+  it('answers 500 on a failed read, 503 when the queue fails or gives no job', async () => {
+    db.connection = { id: CONN, platform: 'youtube', state: 'connected' };
+    db.failConnRead = true;
+    expect((await sync()).status).toBe(500);
+    db.failConnRead = false;
+    enqueueMode = 'throw';
+    expect((await sync()).status).toBe(503);
+    enqueueMode = 'noid';
+    expect((await sync()).status).toBe(503);
+  });
+});
+
+describe('channel settings: auto-publish', () => {
+  const CONN = 'c0000000-0000-0000-0000-000000000004';
+  const patch = (body: unknown, id = CONN) =>
+    fetch(`${base}${MOD}/connections/${id}/settings`, { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+
+  it('turns auto-publish on, keeping the rest of config', async () => {
+    db.connection = { id: CONN, platform: 'youtube', state: 'connected', config: { other: 'kept' }, updated_at: '2026-11-11T09:00:00.000Z' };
+    const r = await patch({ auto_publish: true });
+    expect(r.status).toBe(200);
+    expect(db.connectionUpdate?.config).toEqual({ other: 'kept', auto_publish: true });
+  });
+
+  it.each([[{}], [{ auto_publish: 'yes' }], [{ auto_publish: true, refresh_token: 'x' }], [null]])('rejects %j', async (body) => {
+    db.connection = { id: CONN, platform: 'youtube', state: 'connected', config: {} };
+    expect((await patch(body)).status).toBe(400);
+    expect(db.connectionUpdate).toBeNull();
+  });
+
+  it('refuses another platform and a malformed id', async () => {
+    db.connection = { id: CONN, platform: 'spotify', state: 'connected', config: {} };
+    expect((await patch({ auto_publish: true })).status).toBe(404);
+    expect((await patch({ auto_publish: true }, 'nope')).status).toBe(404);
+    expect(db.connectionUpdate).toBeNull();
+  });
+
+  it('lists auto_publish and the last run, but not the rest of config', async () => {
+    db.connection = { id: CONN, platform: 'youtube', state: 'connected', config: { auto_publish: true, other: 'secret-ish' },
+      discovery_finished_at: '2026-11-11T10:00:00Z', discovery_detail: 'Read 10 upload(s).' };
+    const list = await (await fetch(`${base}${MOD}/connections`)).json();
+    expect(list.connections[0]).toMatchObject({ auto_publish: true, discovery_detail: 'Read 10 upload(s).' });
+    expect(list.connections[0]).not.toHaveProperty('config');
   });
 });
 

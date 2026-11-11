@@ -14,6 +14,7 @@ import { Badge, Button, Card, Input, WorkspaceLayout } from '@/components/ui';
 
 import {
   disconnectYouTubeChannel,
+  setYouTubeAutoPublish,
   syncYouTubeChannel,
   getYouTubeSettings,
   listYouTubeConnections,
@@ -38,7 +39,7 @@ export default function YouTubeChannels() {
   const [connections, setConnections] = useState<YouTubeConnection[]>([]);
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
-  const [busy, setBusy] = useState<'load' | 'save' | 'connect' | 'disconnect' | 'sync' | null>('load');
+  const [busy, setBusy] = useState<'load' | 'save' | 'connect' | 'disconnect' | 'sync' | 'settings' | null>('load');
   // Loaded separately, so one failing call does not blank the other card, and
   // so "loading" and "failed" are never shown as "not configured" or "none".
   const [settingsState, setSettingsState] = useState<'loading' | 'error' | 'ready'>('loading');
@@ -132,11 +133,27 @@ export default function YouTubeChannels() {
     }
   };
 
+  const toggleAutoPublish = async (c: YouTubeConnection, on: boolean) => {
+    setBusy('settings');
+    try {
+      await setYouTubeAutoPublish(c.id, on);
+      setConnections((all) => all.map((x) => (x.id === c.id ? { ...x, auto_publish: on } : x)));
+      toast.success(on
+        ? `Public uploads from ${c.label ?? 'this channel'} will be published as they are synced.`
+        : `New uploads from ${c.label ?? 'this channel'} will arrive as drafts.`);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not save the setting');
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const sync = async (c: YouTubeConnection) => {
     setBusy('sync');
     try {
       await syncYouTubeChannel(c.id);
       toast.success(`Sync of ${c.label ?? c.external_account_id} queued. Its uploads appear under Unassigned videos over the next few minutes.`);
+      await load();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not queue the sync');
     } finally {
@@ -244,6 +261,26 @@ export default function YouTubeChannels() {
                     <div className="font-medium truncate">{c.label ?? c.external_account_id}</div>
                     <div className="text-xs text-muted-foreground font-mono">{c.external_account_id}</div>
                     {c.state_detail && <div className="text-xs text-muted-foreground">{c.state_detail}</div>}
+                    {c.state === 'connected' && (
+                      <div className="text-xs text-muted-foreground">
+                        {c.discovery_finished_at
+                          ? `Last synced ${new Date(c.discovery_finished_at).toLocaleString()}. ${c.discovery_detail ?? ''}`
+                          : c.discovery_started_at
+                            ? 'Syncing…'
+                            : 'Not synced yet. Uploads are read nightly at 03:40 UTC, or now with Sync now.'}
+                      </div>
+                    )}
+                    {c.state === 'connected' && (
+                      <label className="mt-1 flex items-center gap-2 text-xs">
+                        <input
+                          type="checkbox"
+                          checked={c.auto_publish === true}
+                          onChange={(e) => void toggleAutoPublish(c, e.target.checked)}
+                          disabled={busy !== null}
+                        />
+                        Auto-publish public uploads (private and unlisted ones are never published)
+                      </label>
+                    )}
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <Badge color={stateColor(c.state)} variant="soft">{c.state}</Badge>

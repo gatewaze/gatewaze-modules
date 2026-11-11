@@ -24,6 +24,7 @@ import { rateLimit } from 'express-rate-limit';
 import { randomBytes, timingSafeEqual } from 'crypto';
 
 import { authorizeUrl, CALLBACK_PATH, exchangeCode, fetchChannel, redirectUri, revokeToken, SCOPES } from '../lib/oauth.js';
+import { MAX_DISCOVERY_CAP } from '../lib/adapter.js';
 import { parseSettingsPatch, readClientSecret } from '../lib/settings.js';
 import { loadClientCredentials, readModuleConfig } from '../lib/client-credentials.js';
 import { serviceClient } from '../lib/service-client.js';
@@ -100,9 +101,13 @@ function page(title: string, paragraphs: string[]): string {
     `<body><h1>${esc(title)}</h1>${body}<p>You can close this tab and return to Gatewaze.</p></body></html>`;
 }
 
-/** The adapter's ceiling for one discovery run, and the de-duplication window for Sync now. */
-export const SYNC_CAP = 5000;
-const SYNC_WINDOW_MS = 10 * 60 * 1000;
+/**
+ * Sync now reads up to the adapter's ceiling. One sync per channel per hour:
+ * a full run costs a couple of hundred quota units from the shared daily
+ * 10,000, and a second run within the hour would mostly re-read the first.
+ */
+export const SYNC_CAP = MAX_DISCOVERY_CAP;
+export const SYNC_COOLDOWN_MS = 60 * 60 * 1000;
 
 type EnqueueJob = (
   queue: string,
@@ -398,7 +403,7 @@ export function registerRoutes(app: Express, ctx?: Record<string, unknown>): voi
   router.get('/connections', async (_req: Request, res: Response) => {
     const { data, error } = await supabase
       .from('video_platform_connections')
-      .select('id, platform, external_account_id, label, state, state_detail, scopes, collection_enabled, last_collected_at, last_collect_status, last_collect_detail, created_at')
+      .select('id, platform, external_account_id, label, state, state_detail, scopes, collection_enabled, last_collected_at, last_collect_status, last_collect_detail, created_at, config, discovery_started_at, discovery_finished_at, discovery_detail')
       .eq('platform', 'youtube')
       .order('created_at');
     if (error) {
@@ -408,8 +413,11 @@ export function registerRoutes(app: Express, ctx?: Record<string, unknown>): voi
     // A disconnected row is history, except when Google never confirmed the
     // revoke: then the grant may still be live, and the operator must see it.
     res.json({
-      connections: (data ?? []).map((c: Record<string, unknown>) => ({
+      connections: (data ?? []).map(({ config, ...c }: Record<string, unknown>) => ({
         ...c,
+        // Only the one setting this page manages leaves the server; the rest
+        // of config is other modules' business.
+        auto_publish: ((config ?? {}) as Record<string, unknown>).auto_publish === true,
         needs_manual_revoke: c.state === 'disconnected' && c.state_detail === DETAIL_REVOKE_UNCONFIRMED,
       })),
     });
@@ -491,7 +499,7 @@ export function registerRoutes(app: Express, ctx?: Record<string, unknown>): voi
 
     const { data: conn, error: readErr } = await supabase
       .from('video_platform_connections')
-      .select('id, state')
+      .select('id, state, discovery_started_at')
       .eq('id', id)
       .eq('platform', 'youtube')
       .maybeSingle();
@@ -503,13 +511,24 @@ export function registerRoutes(app: Express, ctx?: Record<string, unknown>): voi
     if (conn.state !== 'connected') {
       return res.status(409).json({ error: 'Only a connected channel can be synced. Connect it again first.' });
     }
+    // The last run's start, whether it was a Sync now or the nightly run.
+    const lastStart = conn.discovery_started_at ? Date.parse(String(conn.discovery_started_at)) : NaN;
+    if (Number.isFinite(lastStart) && Date.now() - lastStart < SYNC_COOLDOWN_MS) {
+      const next = new Date(lastStart + SYNC_COOLDOWN_MS);
+      return res.status(429).json({
+        error: `This channel was synced less than an hour ago. Try again after ${next.toISOString().slice(11, 16)} UTC.`,
+        retry_after: next.toISOString(),
+      });
+    }
 
     try {
       const job = await enqueueJob(
         'jobs',
         'videos-publisher-youtube:discover-videos',
         { kind: 'videos-publisher-youtube:discover-videos', connection_id: id, cap: SYNC_CAP },
-        { jobId: `videos-publisher-youtube-sync-${id}-${Math.floor(Date.now() / SYNC_WINDOW_MS)}` },
+        // Bucketed by the cooldown, so two clicks before the run has started
+        // (and so before discovery_started_at is set) still queue one job.
+        { jobId: `videos-publisher-youtube-sync-${id}-${Math.floor(Date.now() / SYNC_COOLDOWN_MS)}` },
       );
       if (!job?.id) return res.status(503).json({ error: 'The sync could not be queued.' });
       log('sync queued', { connection: id, job: job.id });
@@ -518,6 +537,48 @@ export function registerRoutes(app: Express, ctx?: Record<string, unknown>): voi
       log('could not queue sync', { error: (err as Error).message });
       res.status(503).json({ error: 'The sync could not be queued.' });
     }
+  });
+
+  /**
+   * Per-channel settings this page manages. Only auto_publish today: when on,
+   * public uploads are published as discovery finds them. Written into the
+   * connection's config, merged, so other keys are kept.
+   */
+  router.patch('/connections/:id/settings', async (req: Request, res: Response) => {
+    const id = String(req.params.id ?? '');
+    if (!UUID_RE.test(id)) return res.status(404).json({ error: 'No such connection.' });
+    const body = (req.body ?? {}) as Record<string, unknown>;
+    if (typeof body.auto_publish !== 'boolean' || Object.keys(body).some((k) => k !== 'auto_publish')) {
+      return res.status(400).json({ error: 'Send { "auto_publish": true | false } and nothing else.' });
+    }
+
+    const { data: conn, error: readErr } = await supabase
+      .from('video_platform_connections')
+      .select('id, config, updated_at')
+      .eq('id', id)
+      .eq('platform', 'youtube')
+      .maybeSingle();
+    if (readErr) {
+      log('could not read connection', { error: readErr.message });
+      return res.status(500).json({ error: 'The connection could not be read.' });
+    }
+    if (!conn) return res.status(404).json({ error: 'No such connection.' });
+
+    const config = { ...((conn.config ?? {}) as Record<string, unknown>), auto_publish: body.auto_publish };
+    let q = supabase
+      .from('video_platform_connections')
+      .update({ config, updated_at: new Date().toISOString() })
+      .eq('id', id)
+      .eq('platform', 'youtube');
+    q = conn.updated_at ? q.eq('updated_at', conn.updated_at) : q.is('updated_at', null);
+    const { data: changed, error } = await q.select('id');
+    if (error) {
+      log('could not save channel settings', { error: error.message });
+      return res.status(500).json({ error: 'The setting could not be saved.' });
+    }
+    if (!changed?.length) return res.status(409).json({ error: 'The channel changed while saving. Refresh and try again.' });
+    log('channel settings saved', { connection: id, auto_publish: body.auto_publish });
+    res.json({ ok: true, auto_publish: body.auto_publish });
   });
 
   app.use('/api/modules/videos-publisher-youtube', router);

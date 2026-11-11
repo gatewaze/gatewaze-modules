@@ -29,7 +29,7 @@
  * specific.
  */
 
-import { fetchVideoDetails, listChannelVideos, visibilityFor } from '../lib/adapter.js';
+import { fetchVideoDetails, listChannelVideos, MAX_DISCOVERY_CAP, NIGHTLY_CAP, visibilityFor } from '../lib/adapter.js';
 
 import { serviceClient } from '../lib/service-client.js';
 import { unsealSecret } from '../lib/secret-envelope.js';
@@ -54,6 +54,8 @@ export interface DiscoverResult {
   created: number;
   adopted: number;
   publications: number;
+  /** Rows published by the channel's auto-publish setting this run. */
+  published: number;
   truncated: boolean;
   errors: string[];
 }
@@ -69,7 +71,7 @@ export async function discoverAll(
 ): Promise<DiscoverResult> {
   const log = opts.log ?? (() => {});
   const out: DiscoverResult = {
-    connections: 0, seen: 0, created: 0, adopted: 0, publications: 0, truncated: false, errors: [],
+    connections: 0, seen: 0, created: 0, adopted: 0, publications: 0, published: 0, truncated: false, errors: [],
   };
 
   const client = await clientCredentials(supabase);
@@ -80,19 +82,79 @@ export async function discoverAll(
 
   let q = supabase
     .from('video_platform_connections')
-    .select('id, label, external_account_id, encrypted_credentials')
+    .select('id, label, external_account_id, encrypted_credentials, config')
     .eq('platform', PROVIDER)
     .eq('state', 'connected');
   if (opts.connectionId) q = q.eq('id', opts.connectionId);
   const { data: connections, error } = await q;
   if (error) { out.errors.push(`connection read failed: ${error.message}`); return out; }
 
+  const cap = clampCap(opts.cap);
+
   for (const conn of connections ?? []) {
     out.connections += 1;
     const refreshToken = unsealSecret(conn.encrypted_credentials);
     if (!refreshToken) { out.errors.push(`${conn.label}: credentials could not be unsealed`); continue; }
 
-    const listed = await listChannelVideos(client, refreshToken, { cap: opts.cap ?? 1000 });
+    // One run per channel at a time. The jobs queue runs two handlers at once
+    // and ignores a module's per-worker concurrency, so a Sync now during the
+    // nightly run would otherwise walk the same channel twice.
+    const lease = await claimLease(supabase, conn.id);
+    if (lease === 'held') { log(`${conn.label}: another discovery run is in progress — skipped`); continue; }
+    if (lease === 'error') { out.errors.push(`${conn.label}: could not take the discovery lease`); continue; }
+
+    const summary = await discoverConnection(supabase, client, refreshToken, conn, cap, out, log);
+    await finishLease(supabase, conn.id, summary, lease === 'none');
+  }
+
+  log(
+    `discover-videos: ${out.created} new, ${out.adopted} already known, ` +
+    `${out.publications} publication(s), ${out.published} published` +
+    `${out.truncated ? ` (reached the ${cap.toLocaleString('en')}-upload limit; older uploads were not read)` : ''}` +
+    `${out.errors.length ? `, ${out.errors.length} problem(s)` : ''}`,
+  );
+  return out;
+}
+
+/** A job's cap, bounded to what the adapter allows whoever queued it. */
+export function clampCap(raw: unknown): number {
+  const n = Number(raw);
+  if (!Number.isFinite(n) || n < 1) return NIGHTLY_CAP;
+  return Math.min(MAX_DISCOVERY_CAP, Math.floor(n));
+}
+
+/**
+ * Take the per-connection lease (videos migration 022). 'none' when the
+ * function is missing because the videos module is older, in which case the
+ * run proceeds without one, as it always did.
+ */
+async function claimLease(supabase, connectionId: string): Promise<'taken' | 'held' | 'none' | 'error'> {
+  const { data, error } = await supabase.rpc('claim_video_discovery', { p_connection: connectionId });
+  if (error) {
+    return /claim_video_discovery|PGRST202|42883|could not find the function/i.test(`${error.code ?? ''} ${error.message ?? ''}`)
+      ? 'none'
+      : 'error';
+  }
+  return data === true ? 'taken' : 'held';
+}
+
+/** Release the lease and record what the run did, for the channels page. */
+async function finishLease(supabase, connectionId: string, detail: string, noLease: boolean): Promise<void> {
+  if (noLease) return;
+  await supabase
+    .from('video_platform_connections')
+    .update({ discovery_finished_at: new Date().toISOString(), discovery_detail: detail.slice(0, 500) })
+    .eq('id', connectionId);
+}
+
+/** Walk one connected channel. Returns a one-line summary for the operator. */
+async function discoverConnection(supabase, client, refreshToken: string, conn, cap: number, out: DiscoverResult, log): Promise<string> {
+  // Public uploads are published on discovery when the channel asks for it,
+  // so they reach the public site and /api/v1/videos without a click each.
+  const autoPublish = (conn.config ?? {}).auto_publish === true;
+  const before = { created: out.created, adopted: out.adopted, published: out.published };
+  {
+    const listed = await listChannelVideos(client, refreshToken, { cap });
     if (listed.error === 'auth') {
       await supabase.from('video_platform_connections').update({
         state: 'needs_reauth', state_detail: 'YouTube rejected the stored credentials',
@@ -100,27 +162,29 @@ export async function discoverAll(
       // and that must not come back as "needs reauth".
       }).eq('id', conn.id).eq('state', 'connected');
       out.errors.push(`${conn.label}: needs reconnecting`);
-      continue;
+      return 'YouTube rejected the stored credentials; reconnect this channel.';
     }
     if (listed.error) out.errors.push(`${conn.label}: ${listed.error}`);
     if (listed.truncated) out.truncated = true;
     out.seen += listed.videos.length;
-    if (listed.videos.length === 0) continue;
+    if (listed.videos.length === 0) return listed.error ? `Could not list uploads: ${listed.error}` : 'No uploads found.';
 
     // Durations in one extra quota unit per 50, which is also how a Short is
     // told from a full talk: there is no isShort field on the API.
     const details = await fetchVideoDetails(client, refreshToken, listed.videos.map((v) => v.externalId));
 
     // Which of these do we already hold? Read once rather than per video.
-    const existing = new Map<string, { id: string; title: string | null }>();
+    const existing = new Map<string, { id: string; title: string | null; status: string | null; visibility: string | null }>();
     const ids = listed.videos.map((v) => v.externalId);
     for (let i = 0; i < ids.length; i += 200) {
       const { data } = await supabase
         .from('videos')
-        .select('id, provider_video_id, title')
+        .select('id, provider_video_id, title, status, visibility')
         .eq('provider', PROVIDER)
         .in('provider_video_id', ids.slice(i, i + 200));
-      for (const r of data ?? []) existing.set(String(r.provider_video_id), { id: r.id, title: r.title });
+      for (const r of data ?? []) {
+        existing.set(String(r.provider_video_id), { id: r.id, title: r.title, status: r.status ?? null, visibility: r.visibility ?? null });
+      }
     }
 
     for (const v of listed.videos) {
@@ -137,11 +201,21 @@ export async function discoverAll(
         const patch: Record<string, unknown> = {};
         if (!already.title && v.title) patch.title = v.title;
         if (detail?.durationSeconds) patch.duration_seconds = detail.durationSeconds;
-        // Privacy is the platform's fact, not an editorial one, and it changes
-        // (a premiere goes public, a talk is pulled), so it is refreshed every run.
-        if (v.privacy) patch.visibility = visibilityFor(v.privacy);
+        // The platform may only HIDE a video here, never unhide one. A talk
+        // pulled to private or unlisted on YouTube is hidden at once; one an
+        // editor hid in Gatewaze stays hidden whatever YouTube says.
+        const hiddenOnPlatform = v.privacy !== null && v.privacy !== 'public';
+        if (hiddenOnPlatform && already.visibility !== 'private') patch.visibility = 'private';
+        // Auto-publish reaches only drafts nobody has decided on: 'archived'
+        // (unpublished by hand), 'rejected' and 'pending_review' are left alone.
+        if (autoPublish && v.privacy === 'public' && already.status === 'draft' && already.visibility === 'public') {
+          patch.status = 'published';
+          patch.publish_state = 'published';
+        }
         patch.discovered_via_connection_id = conn.id;
-        await supabase.from('videos').update(patch).eq('id', videoId);
+        const { error: upErr } = await supabase.from('videos').update(patch).eq('id', videoId);
+        if (upErr) out.errors.push(`${v.externalId}: update ${upErr.message}`);
+        else if (patch.status === 'published') out.published += 1;
       } else {
         const { data, error: insErr } = await supabase
           .from('videos')
@@ -159,6 +233,11 @@ export async function discoverAll(
             kind: videoKind(detail?.kind),
             // Private or unlisted on YouTube, or unknown, is private here.
             visibility: visibilityFor(v.privacy),
+            // Published at once only when the channel auto-publishes and the
+            // upload is public; otherwise a draft for somebody to decide.
+            ...(autoPublish && v.privacy === 'public'
+              ? { status: 'published', publish_state: 'published' }
+              : { status: 'draft', publish_state: 'draft' }),
             source: 'platform_discovery',
             is_external: true,
             discovered_via_connection_id: conn.id,
@@ -175,6 +254,7 @@ export async function discoverAll(
         }
         videoId = data.id;
         out.created += 1;
+        if (autoPublish && v.privacy === 'public') out.published += 1;
       }
 
       // The publication is what the metrics collector walks, so without this
@@ -198,15 +278,14 @@ export async function discoverAll(
     }
 
     log(`${conn.label}: ${listed.videos.length} video(s) on the channel`);
+    return [
+      `Read ${listed.videos.length.toLocaleString('en')} upload(s): ${out.created - before.created} new, ${out.adopted - before.adopted} already known`,
+      autoPublish ? `, ${out.published - before.published} published` : '',
+      listed.truncated
+        ? `. Reached the ${cap.toLocaleString('en')}-upload limit, so older uploads were not read.`
+        : '.',
+    ].join('');
   }
-
-  log(
-    `discover-videos: ${out.created} new, ${out.adopted} already known, ` +
-    `${out.publications} publication(s)` +
-    `${out.truncated ? ' (capped — run again to continue)' : ''}` +
-    `${out.errors.length ? `, ${out.errors.length} problem(s)` : ''}`,
-  );
-  return out;
 }
 
 export default async function discoverVideosHandler(job, ctx): Promise<DiscoverResult> {
@@ -215,6 +294,7 @@ export default async function discoverVideosHandler(job, ctx): Promise<DiscoverR
   return discoverAll(supabase, {
     log,
     connectionId: job?.data?.connection_id ?? null,
+    // Bounded inside discoverAll whoever queued the job.
     cap: job?.data?.cap,
   });
 }
