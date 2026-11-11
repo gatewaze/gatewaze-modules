@@ -51,7 +51,7 @@ const youtubePublisherModule: GatewazeModule = {
   name: 'Videos Publisher: YouTube',
   description:
     'Connects one or more YouTube channels, publishes videos to them on a schedule, and collects their statistics back. Publishing and collection share one adapter so a de-authorised channel is learned once.',
-  version: '0.2.0',
+  version: '0.2.1',
   // Must be namespaced on the MODULE ID, not on the host module's. The
   // platform rejects 'videos.publishing.youtube' outright:
   // MODULE_FEATURE_NAMESPACE_VIOLATION. sites-publisher-netlify predates

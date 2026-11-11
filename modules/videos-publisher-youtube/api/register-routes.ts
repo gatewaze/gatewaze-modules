@@ -23,11 +23,13 @@ import { Router, type Express, type Request, type Response } from 'express';
 import { rateLimit } from 'express-rate-limit';
 import { randomBytes, timingSafeEqual } from 'crypto';
 
-import { authorizeUrl, CALLBACK_PATH, exchangeCode, fetchChannel, redirectUri, SCOPES } from '../lib/oauth.js';
+import { authorizeUrl, CALLBACK_PATH, exchangeCode, fetchChannel, redirectUri, revokeToken, SCOPES } from '../lib/oauth.js';
 import { parseSettingsPatch, readClientSecret } from '../lib/settings.js';
 import { loadClientCredentials, readModuleConfig } from '../lib/client-credentials.js';
 import { serviceClient } from '../lib/service-client.js';
-import { sealSecret } from '../lib/secret-envelope.js';
+import { sealSecret, unsealSecret } from '../lib/secret-envelope.js';
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 /**
  * The connect flow has two single-use secrets, both in memory and short-lived.
@@ -386,6 +388,57 @@ export function registerRoutes(app: Express, ctx?: Record<string, unknown>): voi
       return res.status(500).json({ error: 'The connections could not be read.' });
     }
     res.json({ connections: data ?? [] });
+  });
+
+  /**
+   * Disconnect a channel. The row is kept, not deleted: metrics history
+   * cascades from it, and publications and discovered videos point at it.
+   * Disconnecting revokes the grant at Google (best effort), drops the sealed
+   * refresh token, stops collection, and marks the row 'disconnected', which
+   * both workers already skip. Connecting the same channel again goes through
+   * the normal flow and upserts this same row back to 'connected'.
+   */
+  router.post('/connections/:id/disconnect', async (req: Request, res: Response) => {
+    const id = String(req.params.id ?? '');
+    if (!UUID_RE.test(id)) return res.status(404).json({ error: 'No such connection.' });
+
+    const { data: conn, error: readErr } = await supabase
+      .from('video_platform_connections')
+      .select('id, label, external_account_id, encrypted_credentials, state')
+      .eq('id', id)
+      .eq('platform', 'youtube')
+      .maybeSingle();
+    if (readErr) {
+      log('could not read connection', { error: readErr.message });
+      return res.status(500).json({ error: 'The connection could not be read.' });
+    }
+    if (!conn) return res.status(404).json({ error: 'No such connection.' });
+
+    // Revoke before clearing, while we still hold the token. A sealed value
+    // that will not unseal cannot be revoked; it is dropped all the same.
+    const refreshToken = conn.encrypted_credentials ? unsealSecret(conn.encrypted_credentials) : null;
+    const revoked = refreshToken ? await revokeToken(refreshToken) : false;
+
+    const { data: changed, error } = await supabase
+      .from('video_platform_connections')
+      .update({
+        state: 'disconnected',
+        state_detail: revoked
+          ? 'Disconnected by an admin; access revoked at Google.'
+          : 'Disconnected by an admin. Google access could not be confirmed revoked; remove "AAIF" under the channel account\'s Third-party apps if it is still listed.',
+        encrypted_credentials: null,
+        collection_enabled: false,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', id)
+      .eq('platform', 'youtube')
+      .select('id');
+    if (error || !changed?.length) {
+      log('could not disconnect', { error: error?.message ?? 'no row changed' });
+      return res.status(500).json({ error: 'The channel could not be disconnected.' });
+    }
+    log('channel disconnected', { channel: conn.external_account_id, revoked });
+    res.json({ ok: true, revoked });
   });
 
   app.use('/api/modules/videos-publisher-youtube', router);

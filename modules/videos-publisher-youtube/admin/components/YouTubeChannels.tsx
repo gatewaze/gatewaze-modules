@@ -13,6 +13,7 @@ import { ArrowPathIcon, PlusIcon } from '@heroicons/react/24/outline';
 import { Badge, Button, Card, Input, WorkspaceLayout } from '@/components/ui';
 
 import {
+  disconnectYouTubeChannel,
   getYouTubeSettings,
   listYouTubeConnections,
   saveYouTubeSettings,
@@ -36,7 +37,7 @@ export default function YouTubeChannels() {
   const [connections, setConnections] = useState<YouTubeConnection[]>([]);
   const [clientId, setClientId] = useState('');
   const [clientSecret, setClientSecret] = useState('');
-  const [busy, setBusy] = useState<'load' | 'save' | 'connect' | null>('load');
+  const [busy, setBusy] = useState<'load' | 'save' | 'connect' | 'disconnect' | null>('load');
   // Loaded separately, so one failing call does not blank the other card, and
   // so "loading" and "failed" are never shown as "not configured" or "none".
   const [settingsState, setSettingsState] = useState<'loading' | 'error' | 'ready'>('loading');
@@ -113,6 +114,23 @@ export default function YouTubeChannels() {
     }
   };
 
+  const disconnect = async (c: YouTubeConnection) => {
+    const name = c.label ?? c.external_account_id;
+    if (!window.confirm(`Disconnect ${name}? Gatewaze stops reading its uploads and statistics, and its access is revoked at Google. Videos already discovered and their history are kept. You can connect it again at any time.`)) return;
+    setBusy('disconnect');
+    try {
+      const r = await disconnectYouTubeChannel(c.id);
+      toast.success(r.revoked ? `${name} disconnected` : `${name} disconnected. Google did not confirm the revoke; remove the app from the channel account's third-party access if it is still listed.`);
+      await load();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not disconnect');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  // Disconnected rows are kept for their history but not shown as channels.
+  const shown = connections.filter((c) => c.state !== 'disconnected');
   const configured = Boolean(settings?.clientId && settings.clientSecretSet && settings.clientSecretReadable);
 
   return (
@@ -145,6 +163,12 @@ export default function YouTubeChannels() {
               value={clientId}
               onChange={(e) => setClientId(e.target.value)}
               placeholder="123456789-abc.apps.googleusercontent.com"
+              // Not a login: keep browser and password-manager autofill out.
+              name="gw-youtube-oauth-client-id"
+              autoComplete="off"
+              data-1p-ignore=""
+              data-lpignore="true"
+              data-bwignore=""
               className="mt-1 font-mono"
             />
           </label>
@@ -152,7 +176,13 @@ export default function YouTubeChannels() {
             <span className="font-medium">Client secret</span>
             <Input
               type="password"
-              autoComplete="off"
+              // "new-password" is the value browsers honour for "do not fill
+              // a saved login here"; "off" alone is ignored on password fields.
+              name="gw-youtube-oauth-client-secret"
+              autoComplete="new-password"
+              data-1p-ignore=""
+              data-lpignore="true"
+              data-bwignore=""
               value={clientSecret}
               onChange={(e) => setClientSecret(e.target.value)}
               placeholder={settings?.clientSecretSet ? 'Stored. Leave blank to keep it.' : 'Paste the client secret'}
@@ -187,18 +217,23 @@ export default function YouTubeChannels() {
             <p className="text-sm text-muted-foreground">Loading…</p>
           ) : connectionsState === 'error' ? (
             <p className="text-sm text-red-600">Could not load the connected channels. Refresh to try again.</p>
-          ) : connections.length === 0 ? (
+          ) : shown.length === 0 ? (
             <p className="text-sm text-muted-foreground">No channels connected yet.</p>
           ) : (
             <ul className="divide-y">
-              {connections.map((c) => (
+              {shown.map((c) => (
                 <li key={c.id} className="py-2 flex items-center justify-between gap-2">
                   <div className="min-w-0">
                     <div className="font-medium truncate">{c.label ?? c.external_account_id}</div>
                     <div className="text-xs text-muted-foreground font-mono">{c.external_account_id}</div>
                     {c.state_detail && <div className="text-xs text-muted-foreground">{c.state_detail}</div>}
                   </div>
-                  <Badge color={stateColor(c.state)} variant="soft">{c.state}</Badge>
+                  <div className="flex items-center gap-2 shrink-0">
+                    <Badge color={stateColor(c.state)} variant="soft">{c.state}</Badge>
+                    <Button variant="ghost" size="sm" color="red" onClick={() => void disconnect(c)} disabled={busy !== null}>
+                      Disconnect
+                    </Button>
+                  </div>
                 </li>
               ))}
             </ul>

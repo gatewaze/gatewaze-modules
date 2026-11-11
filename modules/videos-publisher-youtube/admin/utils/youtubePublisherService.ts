@@ -69,6 +69,11 @@ export async function listYouTubeConnections(): Promise<YouTubeConnection[]> {
   return r.connections ?? [];
 }
 
+/** Revoke and forget a channel's access. Its history is kept. */
+export function disconnectYouTubeChannel(id: string): Promise<{ ok: true; revoked: boolean }> {
+  return authedJson(`${BASE}/connections/${encodeURIComponent(id)}/disconnect`, { method: 'POST' });
+}
+
 /** A one-time Google consent URL, valid for ten minutes. */
 export function startYouTubeConnect(): Promise<{ authorize_url: string; redirect_uri: string; expires_in_seconds: number }> {
   return authedJson(`${BASE}/oauth/start`);

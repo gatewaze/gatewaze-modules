@@ -195,3 +195,23 @@ describe('parseIsoDuration — how a Short is told from a talk', () => {
     expect(parseIsoDuration('PT3M1S')).toBe(181);
   });
 });
+
+describe('revokeToken', () => {
+  it('treats 200 and an already-invalid token as revoked, anything else as not', async () => {
+    const { revokeToken } = await import('../lib/oauth.js');
+    const real = globalThis.fetch;
+    try {
+      globalThis.fetch = (async () => new Response('{}', { status: 200 })) as typeof fetch;
+      expect(await revokeToken('t')).toBe(true);
+      globalThis.fetch = (async () => new Response('{"error":"invalid_token"}', { status: 400 })) as typeof fetch;
+      expect(await revokeToken('t')).toBe(true);
+      globalThis.fetch = (async () => new Response('{"error":"server"}', { status: 503 })) as typeof fetch;
+      expect(await revokeToken('t')).toBe(false);
+      globalThis.fetch = (async () => { throw new Error('offline'); }) as typeof fetch;
+      expect(await revokeToken('t')).toBe(false);
+      expect(await revokeToken('')).toBe(false);
+    } finally {
+      globalThis.fetch = real;
+    }
+  });
+});

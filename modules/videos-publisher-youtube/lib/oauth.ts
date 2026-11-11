@@ -117,6 +117,38 @@ async function postForm(body: URLSearchParams): Promise<Record<string, unknown>>
   }
 }
 
+const REVOKE_ENDPOINT = 'https://oauth2.googleapis.com/revoke';
+
+/**
+ * Revoke a refresh token at Google, so the grant disappears from the
+ * channel's "Third-party apps" list as well as from Gatewaze.
+ *
+ * Best effort by design: true when Google confirms (200) or says the token is
+ * already gone (400 invalid_token), false on anything else. A disconnect must
+ * still succeed locally when Google is unreachable; the caller says so.
+ */
+export async function revokeToken(token: string): Promise<boolean> {
+  if (!token) return false;
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), TIMEOUT_MS);
+  try {
+    const res = await fetch(REVOKE_ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ token }),
+      signal: ctl.signal,
+      redirect: 'error',
+    });
+    if (res.ok) return true;
+    const json = (await res.json().catch(() => ({}))) as Record<string, unknown>;
+    return res.status === 400 && json.error === 'invalid_token';
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /** Exchange the one-time code for a token set. */
 export async function exchangeCode(
   client: ClientCredentials,

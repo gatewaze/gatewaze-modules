@@ -14,24 +14,28 @@ const OTHER_KEY = Buffer.alloc(32, 8).toString('base64');
 process.env.GATEWAZE_SECRETS_KEY = KEY;
 process.env.API_URL = 'https://api.example.test';
 
+let revokeResult = true;
 const db = {
   config: {} as Record<string, unknown>,
   upserts: [] as unknown[],
   /** Force the next installed_modules read or the connections read to fail. */
   failRead: false,
   failConnections: false,
+  /** The connection row the disconnect route reads, and what it last wrote. */
+  connection: null as Record<string, unknown> | null,
+  connectionUpdate: null as Record<string, unknown> | null,
 };
 
 vi.mock('../lib/service-client.js', () => {
   function chain(table: string) {
-    const st: { op: string; payload?: unknown } = { op: 'select' };
+    const st: { op: string; payload?: unknown; single?: boolean } = { op: 'select' };
     const b: any = {
       select: () => b,
       eq: () => b,
       order: () => b,
       update: (p: unknown) => { st.op = 'update'; st.payload = p; return b; },
       upsert: (p: unknown) => { db.upserts.push(p); st.op = 'upsert'; return b; },
-      maybeSingle: () => b,
+      maybeSingle: () => { st.single = true; return b; },
       then: (resolve: (v: unknown) => void) => {
         if (table === 'installed_modules' && st.op === 'update') {
           db.config = (st.payload as { config: Record<string, unknown> }).config;
@@ -40,6 +44,13 @@ vi.mock('../lib/service-client.js', () => {
         if (table === 'installed_modules') {
           if (db.failRead) return resolve({ data: null, error: { message: 'boom' } });
           return resolve({ data: { config: db.config }, error: null });
+        }
+        if (table === 'video_platform_connections' && st.op === 'update') {
+          db.connectionUpdate = st.payload as Record<string, unknown>;
+          return resolve({ data: db.connection ? [{ id: db.connection.id }] : [], error: null });
+        }
+        if (table === 'video_platform_connections' && st.op === 'select' && st.single) {
+          return resolve({ data: db.connection, error: null });
         }
         if (table === 'video_platform_connections' && st.op === 'select' && db.failConnections) {
           return resolve({ data: null, error: { message: 'relation "secret_internal_table" does not exist' } });
@@ -59,6 +70,7 @@ vi.mock('../lib/oauth.js', async (orig) => {
     ...real,
     exchangeCode: vi.fn(async () => ({ accessToken: 'at', refreshToken: 'rt', expiresAt: 0, scopes: ['s'] })),
     fetchChannel: vi.fn(async () => ({ id: 'UCG6qpjVnBTTT8wLGBygANOQ', title: 'AAIF Live' })),
+    revokeToken: vi.fn(async () => revokeResult),
   };
 });
 
@@ -88,6 +100,9 @@ beforeEach(() => {
   db.upserts = [];
   db.failRead = false;
   db.failConnections = false;
+  db.connection = null;
+  db.connectionUpdate = null;
+  revokeResult = true;
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -308,3 +323,39 @@ describe('connect flow', () => {
     expect(text).toContain('&lt;script&gt;');
   });
 });
+
+describe('disconnect', () => {
+  const CONN = 'c0000000-0000-0000-0000-000000000001';
+  const disconnect = (id: string) => fetch(`${base}${MOD}/connections/${id}/disconnect`, { method: 'POST' });
+
+  it('revokes at Google, drops the token, stops collection, and keeps the row', async () => {
+    db.connection = { id: CONN, label: 'Dan Baker', external_account_id: 'UCxxxxxxxxxxxxxxxxxxxxxx', state: 'connected',
+      encrypted_credentials: sealSecret('refresh-token-value') };
+    const oauth = await import('../lib/oauth.js');
+    const r = await disconnect(CONN);
+    expect(r.status).toBe(200);
+    expect(await r.json()).toEqual({ ok: true, revoked: true });
+    expect(oauth.revokeToken).toHaveBeenCalledWith('refresh-token-value');
+    expect(db.connectionUpdate).toMatchObject({ state: 'disconnected', encrypted_credentials: null, collection_enabled: false });
+  });
+
+  it('still disconnects when Google does not confirm the revoke, and says so', async () => {
+    revokeResult = false;
+    db.connection = { id: CONN, label: 'X', external_account_id: 'UCx', state: 'connected', encrypted_credentials: sealSecret('t') };
+    const r = await disconnect(CONN);
+    expect(await r.json()).toEqual({ ok: true, revoked: false });
+    expect(db.connectionUpdate).toMatchObject({ state: 'disconnected', encrypted_credentials: null });
+    expect(String(db.connectionUpdate?.state_detail)).toContain('could not be confirmed revoked');
+  });
+
+  it('answers 404 for an unknown or malformed id, and writes nothing', async () => {
+    expect((await disconnect(CONN)).status).toBe(404);
+    expect((await disconnect('not-a-uuid')).status).toBe(404);
+    expect(db.connectionUpdate).toBeNull();
+  });
+
+  it('is not served on the public prefix', async () => {
+    expect((await fetch(`${base}${PUB}/connections/${CONN}/disconnect`, { method: 'POST' })).status).toBe(404);
+  });
+});
+
