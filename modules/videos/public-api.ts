@@ -116,6 +116,12 @@ export function registerPublicApi(router: any, ctx: any): void {
     return (data as { id: string } | null)?.id ?? null;
   }
 
+  /** A table that is not there because its module is not installed. */
+  function missingTable(error: { code?: string; message?: string } | null): boolean {
+    return !!error && (error.code === '42P01' || error.code === 'PGRST205'
+      || /relation .* does not exist|could not find the table/i.test(error.message ?? ''));
+  }
+
   function idsFrom(rows: Array<{ video_id: string }> | null): string[] {
     return (rows ?? []).map((r) => String(r.video_id));
   }
@@ -130,8 +136,10 @@ export function registerPublicApi(router: any, ctx: any): void {
     if (uuid && typeof uuid === 'object') return uuid;
     if (!uuid) return [];
 
+    // events_agenda_entries belongs to event-agenda, which not every brand
+    // installs; without it an event simply has no agenda entries.
     const entries = await supabase.from('events_agenda_entries').select('id').eq('event_uuid', uuid).limit(SUBJECT_FILTER_CAP);
-    if (entries.error) return { error: entries.error.message ?? 'agenda lookup failed' };
+    if (entries.error && !missingTable(entries.error)) return { error: entries.error.message ?? 'agenda lookup failed' };
     const entryIds = (entries.data ?? []).map((r: { id: string }) => String(r.id));
 
     const direct = await supabase.from('video_subjects').select('video_id').eq('subject_type', 'event').eq('subject_id', uuid).limit(SUBJECT_FILTER_CAP);
@@ -141,7 +149,7 @@ export function registerPublicApi(router: any, ctx: any): void {
       : { data: [], error: null };
     if (viaEntries.error) return { error: viaEntries.error.message ?? 'subject lookup failed' };
     const legacy = await supabase.from('event_videos').select('video_id').eq('event_uuid', uuid).limit(SUBJECT_FILTER_CAP);
-    if (legacy.error) return { error: legacy.error.message ?? 'event_videos lookup failed' };
+    if (legacy.error && !missingTable(legacy.error)) return { error: legacy.error.message ?? 'event_videos lookup failed' };
 
     return [...new Set<string>([...idsFrom(direct.data), ...idsFrom(viaEntries.data), ...idsFrom(legacy.data)])].slice(0, SUBJECT_FILTER_CAP);
   }
@@ -257,7 +265,7 @@ export function registerPublicApi(router: any, ctx: any): void {
       const entryEvent = new Map<string, string>();
       if (entryIds.length) {
         const e = await supabase.from('events_agenda_entries').select('id, event_uuid').in('id', entryIds);
-        if (e.error) return queryError(res, ctx, 'subject events', e.error);
+        if (e.error && !missingTable(e.error)) return queryError(res, ctx, 'subject events', e.error);
         for (const r of (e.data ?? []) as Array<{ id: string; event_uuid: string }>) entryEvent.set(String(r.id), String(r.event_uuid));
       }
       const eventIds = [...new Set<string>([

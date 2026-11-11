@@ -71,19 +71,29 @@ BEGIN
   RAISE NOTICE 'case4 ok';
 END $$;
 
--- case 5: the discovery lease is taken once, refused while held, released by
--- a finish, and taken over when stale.
+-- case 5: the discovery lease is taken once, refused while held, released
+-- only by the run that holds it, and taken over when stale.
 DO $$
-DECLARE c uuid := 'd1000000-0000-0000-0000-000000000001';
+DECLARE
+  c uuid := 'd1000000-0000-0000-0000-000000000001';
+  s1 timestamptz;
+  s2 timestamptz;
 BEGIN
   INSERT INTO public.video_platform_connections (id, platform, external_account_id, label) VALUES (c, 'youtube', 'UCzzzzzzzzzzzzzzzzzzzzzz', 'zz');
-  IF NOT public.claim_video_discovery(c) THEN RAISE EXCEPTION 'case5: first claim refused'; END IF;
-  IF public.claim_video_discovery(c) THEN RAISE EXCEPTION 'case5: second claim taken while held'; END IF;
-  UPDATE public.video_platform_connections SET discovery_finished_at = now() WHERE id = c;
-  IF NOT public.claim_video_discovery(c) THEN RAISE EXCEPTION 'case5: claim refused after finish'; END IF;
-  UPDATE public.video_platform_connections SET discovery_started_at = now() - interval '3 hours', discovery_finished_at = now() - interval '4 hours' WHERE id = c;
-  IF NOT public.claim_video_discovery(c) THEN RAISE EXCEPTION 'case5: stale lease not taken over'; END IF;
-  IF public.claim_video_discovery('d1000000-0000-0000-0000-00000000ffff') THEN RAISE EXCEPTION 'case5: unknown connection claimed'; END IF;
+  s1 := public.claim_video_discovery(c);
+  IF s1 IS NULL THEN RAISE EXCEPTION 'case5: first claim refused'; END IF;
+  IF public.claim_video_discovery(c) IS NOT NULL THEN RAISE EXCEPTION 'case5: second claim taken while held'; END IF;
+  IF public.finish_video_discovery(c, s1 - interval '1 second', 'x') THEN RAISE EXCEPTION 'case5: a wrong start released the lease'; END IF;
+  IF NOT public.finish_video_discovery(c, s1, 'Read 3 uploads.') THEN RAISE EXCEPTION 'case5: the holder could not release'; END IF;
+  s2 := public.claim_video_discovery(c);
+  IF s2 IS NULL THEN RAISE EXCEPTION 'case5: claim refused after finish'; END IF;
+  -- Stale: the holder vanished three hours ago.
+  UPDATE public.video_platform_connections SET discovery_started_at = clock_timestamp() - interval '3 hours', discovery_finished_at = NULL WHERE id = c;
+  s2 := public.claim_video_discovery(c);
+  IF s2 IS NULL THEN RAISE EXCEPTION 'case5: stale lease not taken over'; END IF;
+  -- The vanished run comes back and must not release the new lease.
+  IF public.finish_video_discovery(c, clock_timestamp() - interval '3 hours', 'late') THEN RAISE EXCEPTION 'case5: an old run released the new lease'; END IF;
+  IF public.claim_video_discovery('d1000000-0000-0000-0000-00000000ffff') IS NOT NULL THEN RAISE EXCEPTION 'case5: unknown connection claimed'; END IF;
   RAISE NOTICE 'case5 ok';
 END $$;
 
@@ -95,8 +105,12 @@ BEGIN
     RAISE EXCEPTION 'case6: videos_unassigned lost security_invoker';
   END IF;
   PERFORM status, visibility FROM public.videos_unassigned LIMIT 1;
-  IF has_function_privilege('authenticated', 'public.claim_video_discovery(uuid, integer)', 'EXECUTE') THEN
-    RAISE EXCEPTION 'case6: authenticated can claim a lease';
+  IF has_function_privilege('authenticated', 'public.claim_video_discovery(uuid, integer)', 'EXECUTE')
+     OR has_function_privilege('authenticated', 'public.finish_video_discovery(uuid, timestamptz, text)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'case6: authenticated can take or release a lease';
+  END IF;
+  IF NOT has_table_privilege('authenticated', 'public.videos_unassigned', 'SELECT') THEN
+    RAISE EXCEPTION 'case6: authenticated lost its SELECT on videos_unassigned';
   END IF;
   RAISE NOTICE 'case6 ok';
 END $$;

@@ -119,6 +119,30 @@ describe('GET /api/v1/videos', () => {
     expect(sb.chains.some((c) => c.table === 'videos_api_public')).toBe(false);
   });
 
+  it('treats a brand without event-agenda as having no agenda entries', async () => {
+    const EV = 'e0000000-0000-0000-0000-000000000001';
+    use((c: Chain) => {
+      if (c.table === 'events') return { data: { id: EV } };
+      if (c.table === 'events_agenda_entries') return { error: { code: '42P01', message: 'relation "events_agenda_entries" does not exist' } };
+      if (c.table === 'video_subjects') return { data: [{ video_id: 'v1' }] };
+      if (c.table === 'event_videos') return { data: [] };
+      return { data: [{ id: 'v1' }], count: 1 };
+    });
+    expect((await get(`?event=${EV}`)).status).toBe(200);
+    expect(listChain().has('in', 'id', ['v1'])).toBe(true);
+  });
+
+  it.each(['events', 'events_agenda_entries', 'event_videos'])('answers a failed %s lookup with a 500 and does not list', async (table) => {
+    use((c: Chain) => {
+      if (c.table === table) return { error: { code: '57014', message: 'boom' } };
+      if (c.table === 'events') return { data: { id: 'e0000000-0000-0000-0000-000000000001' } };
+      if (c.table === 'events_agenda_entries') return { data: [] };
+      return { data: [] };
+    });
+    expect((await get('?event=e0000000-0000-0000-0000-000000000001')).status).toBe(500);
+    expect(sb.chains.some((c) => c.table === 'videos_api_public')).toBe(false);
+  });
+
   it('answers a failed subject lookup with a 500 and does not list', async () => {
     use((c: Chain) => (c.table === 'video_subjects' ? { error: { message: 'boom' } } : { data: [{ id: 'x' }], count: 1 }));
     const r = await get('?podcast_episode=e0000000-0000-0000-0000-000000000001');
@@ -197,6 +221,26 @@ describe('GET /api/v1/videos/:id', () => {
     expect(subj.arg('in', 1)).toEqual(['event', 'podcast', 'podcast_episode', 'talk', 'agenda_entry']);
     const ev = sb.chains.find((c) => c.table === 'events')!;
     expect(ev.has('eq', 'is_listed', true)).toBe(true);
+  });
+
+  it('drops a link whose agenda entry no longer exists, and passes whole-podcast links', async () => {
+    use((c: Chain) => {
+      if (c.table === 'video_subjects') return { data: [{ subject_type: 'agenda_entry', subject_id: 'gone' }, { subject_type: 'podcast', subject_id: 'pod' }] };
+      if (c.table === 'events_agenda_entries') return { data: [] };
+      if (c.table === 'events') return { data: [] };
+      return { data: { id: 'v1' } };
+    });
+    expect((await get('/FKjj1OGALkc')).body.data.subjects).toEqual([{ type: 'podcast', id: 'pod' }]);
+  });
+
+  it.each(['events_agenda_entries', 'events'])('answers a failed %s lookup on the detail route with a 500', async (table) => {
+    use((c: Chain) => {
+      if (c.table === 'video_subjects') return { data: [{ subject_type: 'talk', subject_id: 'a1' }] };
+      if (c.table === table) return { error: { code: '57014', message: 'boom' } };
+      if (c.table === 'events_agenda_entries') return { data: [{ id: 'a1', event_uuid: 'e1' }] };
+      return { data: { id: 'v1' } };
+    });
+    expect((await get('/FKjj1OGALkc')).status).toBe(500);
   });
 
   it('honours ?fields= on the detail route, still adding subjects', async () => {

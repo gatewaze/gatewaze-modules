@@ -154,6 +154,9 @@ export default function UnassignedVideos() {
   // we already have, rather than letting the list 403 and showing the operator
   // an error for something that is not a fault.
   const mayTriage = scope?.unrestricted === true;
+  // Publishing is admin-only on the server; an unrestricted editor who is not
+  // an admin does not get a button that can only answer 403.
+  const mayPublish = scope?.is_admin === true;
 
   const load = useCallback(async () => {
     if (!mayTriage) return;
@@ -518,7 +521,7 @@ export default function UnassignedVideos() {
                               {v.status === 'published' ? 'published' : v.status === 'archived' ? 'unpublished' : 'draft'}
                             </Badge>
                           )}
-                          {v.visibility !== 'private' && (
+                          {mayPublish && v.visibility !== 'private' && (v.status === 'published' || v.status === 'draft' || v.status === 'archived') && (
                             <Button
                               variant="ghost"
                               size="sm"

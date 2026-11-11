@@ -589,23 +589,17 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
   });
 
   /**
-   * Attach one video to an event, podcast, agenda entry or episode.
-   *
-   * Goes through assign_video_subject() rather than inserting directly, so
-   * the two rules stay in one place: one subject per video, and the subject
-   * has to exist.
-   */
-  /**
    * Publish or unpublish one video: what the public site, the anon reads and
-   * /api/v1/videos show. Admins only. Publishing is refused for a video that
-   * is private or unlisted on its platform (visibility 'private'), because
-   * publishing would not make it watchable and must not make it listed.
+   * /api/v1/videos show. Admins only.
    *
-   * Both columns are written: publish_state is the content-platform machine
-   * and status is what every public read filters on. The 001 trigger keeps
-   * them in step only when publish_state changes, and a discovered draft can
-   * carry publish_state 'published' already, so setting both is the only way
-   * to be sure.
+   * Goes through content-platform's content_publish_state_set(), which
+   * enforces the allowed transitions (a rejected or never-published video
+   * cannot be "unpublished", a rejected one cannot be published straight
+   * away) and writes the audit row with who did it. The 001 trigger then
+   * keeps status in step with publish_state.
+   *
+   * Publishing is refused for a video recorded as private or unlisted on its
+   * platform, as of its last sync: listing it would not make it watchable.
    */
   async function setPublished(req: Request, res: Response, publish: boolean): Promise<void> {
     const videoId = String(req.params.videoId ?? '');
@@ -615,30 +609,64 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
     if (!asUser) { res.status(401).json({ error: 'session required' }); return; }
     const { data: isAdmin, error: adminErr } = await asUser.rpc('is_admin');
     if (adminErr || isAdmin !== true) { res.status(403).json({ error: 'only an admin can publish videos' }); return; }
+    const uid = await callerId(req);
 
     const { data: video, error: readErr } = await supabase
       .from('videos')
-      .select('id, visibility, status')
+      .select('id, visibility, status, publish_state')
       .eq('id', videoId)
       .maybeSingle();
     if (readErr) { logger.warn('publish: read failed', { error: readErr.message }); res.status(500).json({ error: 'the video could not be read' }); return; }
     if (!video) { res.status(404).json({ error: 'video not found' }); return; }
     if (publish && video.visibility !== 'public') {
-      res.status(409).json({ error: 'this video is private or unlisted on its platform, so it cannot be published' });
+      res.status(409).json({ error: 'this video was private or unlisted on its platform at its last sync, so it cannot be published' });
+      return;
+    }
+    if (!publish && video.status !== 'published') {
+      res.status(409).json({ error: 'this video is not published' });
       return;
     }
 
-    const patch = publish
-      ? { publish_state: 'published', status: 'published' }
-      : { publish_state: 'unpublished', status: 'archived' };
-    const { error } = await supabase.from('videos').update(patch).eq('id', videoId);
-    if (error) { logger.warn('publish: update failed', { error: error.message }); res.status(500).json({ error: 'the video could not be updated' }); return; }
-    res.json({ ok: true, status: patch.status });
+    const { error: rpcErr } = await supabase.rpc('content_publish_state_set', {
+      p_content_type: 'video',
+      p_content_id: videoId,
+      p_to: publish ? 'published' : 'unpublished',
+      p_actor: uid ? `admin:${uid}` : 'admin:ui',
+      p_reason: publish ? 'published from the videos triage queue' : 'unpublished from the videos triage queue',
+    });
+    if (rpcErr) {
+      if (/INVALID_STATE_TRANSITION/i.test(String(rpcErr.message ?? ''))) {
+        res.status(409).json({ error: `a video in state "${video.publish_state}" cannot be ${publish ? 'published' : 'unpublished'} from here` });
+        return;
+      }
+      logger.warn('publish: transition failed', { error: rpcErr.message });
+      res.status(500).json({ error: 'the video could not be updated' });
+      return;
+    }
+    // Rows discovered before 0.2.1 carry publish_state 'published' with status
+    // 'draft', so the transition above was a no-op and the trigger never ran.
+    if (publish) {
+      const { error: fixErr } = await supabase
+        .from('videos')
+        .update({ status: 'published' })
+        .eq('id', videoId)
+        .eq('publish_state', 'published')
+        .neq('status', 'published');
+      if (fixErr) { logger.warn('publish: status repair failed', { error: fixErr.message }); res.status(500).json({ error: 'the video could not be updated' }); return; }
+    }
+    res.json({ ok: true, status: publish ? 'published' : 'archived' });
   }
 
   router.post('/videos/:videoId/publish', (req: Request, res: Response) => setPublished(req, res, true));
   router.post('/videos/:videoId/unpublish', (req: Request, res: Response) => setPublished(req, res, false));
 
+  /**
+   * Attach one video to an event, podcast, agenda entry or episode.
+   *
+   * Goes through assign_video_subject() rather than inserting directly, so
+   * the two rules stay in one place: one subject per video, and the subject
+   * has to exist.
+   */
   router.post('/unassigned/:videoId/assign', async (req: Request, res: Response) => {
     const videoId = String(req.params.videoId ?? '');
     if (!UUID_RE.test(videoId)) return res.status(400).json({ error: 'invalid video id' });

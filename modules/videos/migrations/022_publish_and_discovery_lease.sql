@@ -6,8 +6,9 @@
 --      jobs queue runs two handlers at a time and does not honour a module's
 --      per-worker concurrency, so a "Sync now" during the nightly run would
 --      otherwise walk the same channel twice. claim_video_discovery() takes
---      the lease atomically; a lease older than the stale window is taken
---      over, so a crashed run cannot block a channel for ever.
+--      the lease atomically and finish_video_discovery() releases it; a
+--      lease older than the stale window is taken over, so a crashed run
+--      cannot block a channel for ever.
 --   2. videos_unassigned gains status and visibility, so the Unassigned page
 --      can show what is published and offer Publish / Unpublish. Columns are
 --      appended, as CREATE OR REPLACE VIEW requires.
@@ -20,31 +21,55 @@ ALTER TABLE public.video_platform_connections
   -- What the last run did, for the operator. Never a credential.
   ADD COLUMN IF NOT EXISTS discovery_detail      text;
 
+-- Both ends of the lease are stamped by the database clock, never the
+-- worker's, so a skewed worker clock cannot make a finished run look held.
+-- claim returns the start it stamped (NULL when the lease is held); finish
+-- releases only the lease with that start, so a run whose lease went stale
+-- and was taken over cannot release the new run's.
+DROP FUNCTION IF EXISTS public.claim_video_discovery(uuid, integer);
 CREATE OR REPLACE FUNCTION public.claim_video_discovery(
   p_connection uuid,
   p_stale_minutes integer DEFAULT 120
-) RETURNS boolean
+) RETURNS timestamptz
 LANGUAGE sql VOLATILE
 SET search_path = public, pg_temp
 AS $fn$
-  WITH claimed AS (
-    UPDATE public.video_platform_connections
-       SET discovery_started_at = now()
-     WHERE id = p_connection
-       AND (
-         discovery_started_at IS NULL
-         OR (discovery_finished_at IS NOT NULL AND discovery_finished_at >= discovery_started_at)
-         OR discovery_started_at < now() - make_interval(mins => GREATEST(p_stale_minutes, 1))
-       )
-    RETURNING id
-  )
-  SELECT EXISTS (SELECT 1 FROM claimed);
+  UPDATE public.video_platform_connections
+     SET discovery_started_at = clock_timestamp()
+   WHERE id = p_connection
+     AND (
+       discovery_started_at IS NULL
+       OR (discovery_finished_at IS NOT NULL AND discovery_finished_at >= discovery_started_at)
+       OR discovery_started_at < clock_timestamp() - make_interval(mins => GREATEST(p_stale_minutes, 1))
+     )
+  RETURNING discovery_started_at;
 $fn$;
 REVOKE ALL ON FUNCTION public.claim_video_discovery(uuid, integer) FROM PUBLIC, anon, authenticated;
 GRANT EXECUTE ON FUNCTION public.claim_video_discovery(uuid, integer) TO service_role;
 
 COMMENT ON FUNCTION public.claim_video_discovery(uuid, integer) IS
-  'Take the discovery lease on one connection. True when taken; false while another run holds a lease younger than p_stale_minutes.';
+  'Take the discovery lease on one connection. Returns the lease start when taken, NULL while another run holds a lease younger than p_stale_minutes.';
+
+CREATE OR REPLACE FUNCTION public.finish_video_discovery(
+  p_connection uuid,
+  p_started_at timestamptz,
+  p_detail text
+) RETURNS boolean
+LANGUAGE sql VOLATILE
+SET search_path = public, pg_temp
+AS $fn$
+  WITH released AS (
+    UPDATE public.video_platform_connections
+       SET discovery_finished_at = clock_timestamp(),
+           discovery_detail = left(p_detail, 500)
+     WHERE id = p_connection
+       AND discovery_started_at = p_started_at
+    RETURNING id
+  )
+  SELECT EXISTS (SELECT 1 FROM released);
+$fn$;
+REVOKE ALL ON FUNCTION public.finish_video_discovery(uuid, timestamptz, text) FROM PUBLIC, anon, authenticated;
+GRANT EXECUTE ON FUNCTION public.finish_video_discovery(uuid, timestamptz, text) TO service_role;
 
 -- Same definition as 010, with status and visibility appended.
 CREATE OR REPLACE VIEW public.videos_unassigned AS

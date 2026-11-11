@@ -11,7 +11,12 @@ import { fakeSupabase, type Chain } from './helpers/fake-supabase.js';
 const VID = 'f0000000-0000-0000-0000-000000000001';
 let video: Record<string, unknown> | null = null;
 let isAdmin: boolean | null = true;
-let failUpdate = false;
+let adminRpcError: unknown = null;
+let userRpcNames: string[] = [];
+let rpcCalls: Array<{ fn: string; args: Record<string, unknown> }> = [];
+let rpcError: { message: string } | null = null;
+let failRead = false;
+let failRepair = false;
 let sb = fakeSupabase(() => ({ data: null }));
 let base = '';
 let server: ReturnType<express.Express['listen']>;
@@ -19,8 +24,17 @@ let server: ReturnType<express.Express['listen']>;
 beforeAll(() => {
   const router = express.Router();
   mountEditorRoutes(router, {
-    supabase: { from: (t: string) => sb.client.from(t), storage: {}, rpc: async () => ({ data: null, error: null }) },
-    userClient: (req) => (req.headers.authorization ? { rpc: async () => ({ data: isAdmin, error: null }), auth: { getUser: async () => ({ data: { user: null } }) } } : null),
+    supabase: {
+      from: (t: string) => sb.client.from(t),
+      storage: {},
+      rpc: async (fn: string, args: Record<string, unknown>) => { rpcCalls.push({ fn, args }); return { data: null, error: rpcError }; },
+    },
+    userClient: (req) => (req.headers.authorization
+      ? {
+          rpc: async (fn: string) => { userRpcNames.push(fn); return { data: fn === 'is_admin' ? isAdmin : null, error: adminRpcError }; },
+          auth: { getUser: async () => ({ data: { user: { id: 'a0000000-0000-0000-0000-00000000000a' } } }) },
+        }
+      : null),
     logger: { info: () => {}, warn: () => {} },
   });
   const app = express();
@@ -32,57 +46,89 @@ beforeAll(() => {
 afterAll(() => server.close());
 
 beforeEach(() => {
-  video = { id: VID, visibility: 'public', status: 'draft' };
+  video = { id: VID, visibility: 'public', status: 'draft', publish_state: 'draft' };
   isAdmin = true;
-  failUpdate = false;
+  adminRpcError = null;
+  userRpcNames = [];
+  rpcCalls = [];
+  rpcError = null;
+  failRead = false;
+  failRepair = false;
   sb = fakeSupabase((c: Chain) => {
-    if (c.calls.some((x) => x.op === 'update')) return failUpdate ? { error: { message: 'boom' } } : { data: null };
-    return { data: video };
+    if (c.calls.some((x) => x.op === 'update')) return failRepair ? { error: { message: 'boom' } } : { data: null };
+    return failRead ? { error: { message: 'boom' } } : { data: video };
   });
 });
 
 const post = (path: string, auth = true) =>
   fetch(`${base}${path}`, { method: 'POST', headers: auth ? { authorization: 'Bearer t' } : {} });
-const update = () => sb.chains.find((c) => c.calls.some((x) => x.op === 'update'));
+const repair = () => sb.chains.find((c) => c.calls.some((x) => x.op === 'update'));
 
 describe('publish and unpublish', () => {
-  it('publishes a public video, writing both status columns', async () => {
+  it('publishes through content_publish_state_set, with the admin as actor, and repairs a stale status', async () => {
     const r = await post(`/videos/${VID}/publish`);
     expect(r.status).toBe(200);
     expect(await r.json()).toEqual({ ok: true, status: 'published' });
-    expect(update()!.arg('update')).toEqual({ publish_state: 'published', status: 'published' });
-    expect(update()!.has('eq', 'id', VID)).toBe(true);
+    expect(userRpcNames).toContain('is_admin');
+    expect(rpcCalls).toEqual([{
+      fn: 'content_publish_state_set',
+      args: expect.objectContaining({ p_content_type: 'video', p_content_id: VID, p_to: 'published', p_actor: 'admin:a0000000-0000-0000-0000-00000000000a' }),
+    }]);
+    const fix = repair()!;
+    expect(fix.arg('update')).toEqual({ status: 'published' });
+    expect(fix.has('eq', 'publish_state', 'published')).toBe(true);
+    expect(fix.has('neq', 'status', 'published')).toBe(true);
   });
 
-  it('unpublishes to archived, which auto-publish never undoes', async () => {
+  it('unpublishes a published video through the state machine', async () => {
+    video = { id: VID, visibility: 'public', status: 'published', publish_state: 'published' };
     const r = await post(`/videos/${VID}/unpublish`);
     expect(await r.json()).toEqual({ ok: true, status: 'archived' });
-    expect(update()!.arg('update')).toEqual({ publish_state: 'unpublished', status: 'archived' });
+    expect(rpcCalls[0].args.p_to).toBe('unpublished');
+    expect(repair()).toBeUndefined();
+  });
+
+  it('refuses to unpublish a video that is not published', async () => {
+    expect((await post(`/videos/${VID}/unpublish`)).status).toBe(409);
+    expect(rpcCalls).toHaveLength(0);
   });
 
   it('refuses to publish a video that is private or unlisted on its platform', async () => {
-    video = { id: VID, visibility: 'private', status: 'draft' };
+    video = { id: VID, visibility: 'private', status: 'draft', publish_state: 'draft' };
     expect((await post(`/videos/${VID}/publish`)).status).toBe(409);
-    expect(update()).toBeUndefined();
-    // Unpublishing it is still allowed.
-    expect((await post(`/videos/${VID}/unpublish`)).status).toBe(200);
+    expect(rpcCalls).toHaveLength(0);
   });
 
-  it('needs a session and an admin', async () => {
+  it('answers a transition the state machine refuses with 409', async () => {
+    video = { id: VID, visibility: 'public', status: 'rejected', publish_state: 'rejected' };
+    rpcError = { message: 'INVALID_STATE_TRANSITION: video.x rejected -> published' };
+    const r = await post(`/videos/${VID}/publish`);
+    expect(r.status).toBe(409);
+    expect(repair()).toBeUndefined();
+  });
+
+  it('needs a session and an admin, and an is_admin error is a refusal', async () => {
     expect((await post(`/videos/${VID}/publish`, false)).status).toBe(401);
     isAdmin = false;
     expect((await post(`/videos/${VID}/publish`)).status).toBe(403);
-    isAdmin = null;
+    isAdmin = true;
+    adminRpcError = { message: 'boom' };
     expect((await post(`/videos/${VID}/publish`)).status).toBe(403);
-    expect(update()).toBeUndefined();
+    expect(rpcCalls).toHaveLength(0);
   });
 
-  it('answers 400 for a malformed id, 404 for an unknown one, 500 for a failed write', async () => {
+  it('answers 400, 404 and 500 without detail', async () => {
     expect((await post('/videos/nope/publish')).status).toBe(400);
     video = null;
     expect((await post(`/videos/${VID}/publish`)).status).toBe(404);
-    video = { id: VID, visibility: 'public', status: 'draft' };
-    failUpdate = true;
+    video = { id: VID, visibility: 'public', status: 'draft', publish_state: 'draft' };
+    failRead = true;
+    expect((await post(`/videos/${VID}/publish`)).status).toBe(500);
+    failRead = false;
+    rpcError = { message: 'boom' };
+    expect((await post(`/videos/${VID}/publish`)).status).toBe(500);
+    rpcError = null;
+    failRepair = true;
     const r = await post(`/videos/${VID}/publish`);
     expect(r.status).toBe(500);
     expect(await r.text()).not.toContain('boom');
