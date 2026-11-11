@@ -31,6 +31,12 @@ import { sealSecret, unsealSecret } from '../lib/secret-envelope.js';
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
+/** What a disconnect records, and how the list tells the two apart. */
+export const DETAIL_REVOKED = 'Disconnected by an admin; access revoked at Google.';
+export const DETAIL_REVOKE_UNCONFIRMED =
+  'Disconnected by an admin, but Google did not confirm the access was revoked. '
+  + 'Remove this app under the channel account\'s third-party access (myaccount.google.com/permissions).';
+
 /**
  * The connect flow has two single-use secrets, both in memory and short-lived.
  *
@@ -387,7 +393,14 @@ export function registerRoutes(app: Express, ctx?: Record<string, unknown>): voi
       log('could not list connections', { error: error.message });
       return res.status(500).json({ error: 'The connections could not be read.' });
     }
-    res.json({ connections: data ?? [] });
+    // A disconnected row is history, except when Google never confirmed the
+    // revoke: then the grant may still be live, and the operator must see it.
+    res.json({
+      connections: (data ?? []).map((c: Record<string, unknown>) => ({
+        ...c,
+        needs_manual_revoke: c.state === 'disconnected' && c.state_detail === DETAIL_REVOKE_UNCONFIRMED,
+      })),
+    });
   });
 
   /**
@@ -413,29 +426,36 @@ export function registerRoutes(app: Express, ctx?: Record<string, unknown>): voi
       return res.status(500).json({ error: 'The connection could not be read.' });
     }
     if (!conn) return res.status(404).json({ error: 'No such connection.' });
+    // Already disconnected and holding nothing: done. Repeating it would
+    // overwrite the record of whether the revoke succeeded.
+    if (conn.state === 'disconnected' && !conn.encrypted_credentials) return res.json({ ok: true, revoked: null });
 
     // Revoke before clearing, while we still hold the token. A sealed value
     // that will not unseal cannot be revoked; it is dropped all the same.
     const refreshToken = conn.encrypted_credentials ? unsealSecret(conn.encrypted_credentials) : null;
     const revoked = refreshToken ? await revokeToken(refreshToken) : false;
 
-    const { data: changed, error } = await supabase
+    let q = supabase
       .from('video_platform_connections')
       .update({
         state: 'disconnected',
-        state_detail: revoked
-          ? 'Disconnected by an admin; access revoked at Google.'
-          : 'Disconnected by an admin. Google access could not be confirmed revoked; remove "AAIF" under the channel account\'s Third-party apps if it is still listed.',
+        state_detail: revoked ? DETAIL_REVOKED : DETAIL_REVOKE_UNCONFIRMED,
         encrypted_credentials: null,
         collection_enabled: false,
         updated_at: new Date().toISOString(),
       })
       .eq('id', id)
-      .eq('platform', 'youtube')
-      .select('id');
-    if (error || !changed?.length) {
-      log('could not disconnect', { error: error?.message ?? 'no row changed' });
+      .eq('platform', 'youtube');
+    // Only the credential we revoked: a reconnect that landed in between
+    // stored a new one, and that connection stands.
+    q = conn.encrypted_credentials ? q.eq('encrypted_credentials', conn.encrypted_credentials) : q.is('encrypted_credentials', null);
+    const { data: changed, error } = await q.select('id');
+    if (error) {
+      log('could not disconnect', { error: error.message });
       return res.status(500).json({ error: 'The channel could not be disconnected.' });
+    }
+    if (!changed?.length) {
+      return res.status(409).json({ error: 'The channel was reconnected while disconnecting. Refresh and try again.' });
     }
     log('channel disconnected', { channel: conn.external_account_id, revoked });
     res.json({ ok: true, revoked });

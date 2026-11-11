@@ -114,7 +114,9 @@ export async function collectAll(
         last_collect_status: 'auth',
         last_collect_detail: 'reconnect this channel',
         last_collected_at: new Date().toISOString(),
-      }).eq('id', conn.id);
+      // Only while still connected: an admin who disconnected the channel
+      // mid-run (which revokes the token, hence this auth failure) wins.
+      }).eq('id', conn.id).eq('state', 'connected');
       out.errors.push(`${conn.label}: needs reconnecting`);
       bump('auth');
       continue;

@@ -120,7 +120,9 @@ export default function YouTubeChannels() {
     setBusy('disconnect');
     try {
       const r = await disconnectYouTubeChannel(c.id);
-      toast.success(r.revoked ? `${name} disconnected` : `${name} disconnected. Google did not confirm the revoke; remove the app from the channel account's third-party access if it is still listed.`);
+      toast.success(r.revoked === false
+        ? `${name} disconnected, but Google did not confirm the revoke. It stays listed below until you remove the app from the channel account's third-party access.`
+        : `${name} disconnected`);
       await load();
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Could not disconnect');
@@ -129,8 +131,10 @@ export default function YouTubeChannels() {
     }
   };
 
-  // Disconnected rows are kept for their history but not shown as channels.
-  const shown = connections.filter((c) => c.state !== 'disconnected');
+  // Disconnected rows are kept for their history but not shown as channels,
+  // except one whose revoke Google never confirmed: its grant may still be
+  // live, so it stays visible with what to do about it.
+  const shown = connections.filter((c) => c.state !== 'disconnected' || c.needs_manual_revoke);
   const configured = Boolean(settings?.clientId && settings.clientSecretSet && settings.clientSecretReadable);
 
   return (
@@ -230,9 +234,11 @@ export default function YouTubeChannels() {
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <Badge color={stateColor(c.state)} variant="soft">{c.state}</Badge>
-                    <Button variant="ghost" size="sm" color="red" onClick={() => void disconnect(c)} disabled={busy !== null}>
-                      Disconnect
-                    </Button>
+                    {c.state !== 'disconnected' && (
+                      <Button variant="ghost" size="sm" color="red" onClick={() => void disconnect(c)} disabled={busy !== null}>
+                        Disconnect
+                      </Button>
+                    )}
                   </div>
                 </li>
               ))}

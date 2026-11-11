@@ -96,7 +96,9 @@ export async function discoverAll(
     if (listed.error === 'auth') {
       await supabase.from('video_platform_connections').update({
         state: 'needs_reauth', state_detail: 'YouTube rejected the stored credentials',
-      }).eq('id', conn.id);
+      // Only while still connected: a disconnect mid-run revokes the token,
+      // and that must not come back as "needs reauth".
+      }).eq('id', conn.id).eq('state', 'connected');
       out.errors.push(`${conn.label}: needs reconnecting`);
       continue;
     }

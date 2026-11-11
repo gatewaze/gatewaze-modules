@@ -68,3 +68,11 @@ describe('redirectUri', () => {
     expect(redirectUri('https://api.aaif.live/')).toBe('https://api.aaif.live/api/videos-publisher-youtube/oauth/callback');
   });
 });
+
+describe('connection list flags', () => {
+  it('flags only a disconnect whose revoke Google did not confirm', async () => {
+    const { DETAIL_REVOKED, DETAIL_REVOKE_UNCONFIRMED } = await import('../api/register-routes.js');
+    expect(DETAIL_REVOKE_UNCONFIRMED).not.toBe(DETAIL_REVOKED);
+    expect(DETAIL_REVOKE_UNCONFIRMED).not.toContain('AAIF');
+  });
+});

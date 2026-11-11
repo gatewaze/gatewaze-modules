@@ -201,8 +201,21 @@ describe('revokeToken', () => {
     const { revokeToken } = await import('../lib/oauth.js');
     const real = globalThis.fetch;
     try {
-      globalThis.fetch = (async () => new Response('{}', { status: 200 })) as typeof fetch;
-      expect(await revokeToken('t')).toBe(true);
+      const calls: Array<{ url: string; init: RequestInit }> = [];
+      globalThis.fetch = (async (url: string, init: RequestInit) => {
+        calls.push({ url, init });
+        return new Response('{}', { status: 200 });
+      }) as typeof fetch;
+      expect(await revokeToken('t0k')).toBe(true);
+      expect(calls[0].url).toBe('https://oauth2.googleapis.com/revoke');
+      expect(calls[0].init.method).toBe('POST');
+      expect(String(calls[0].init.body)).toBe('token=t0k');
+      expect(calls[0].init.redirect).toBe('error');
+      calls.length = 0;
+      expect(await revokeToken('')).toBe(false);
+      expect(calls).toHaveLength(0);
+      globalThis.fetch = (async () => new Response('{"error":"invalid_request"}', { status: 400 })) as typeof fetch;
+      expect(await revokeToken('t')).toBe(false);
       globalThis.fetch = (async () => new Response('{"error":"invalid_token"}', { status: 400 })) as typeof fetch;
       expect(await revokeToken('t')).toBe(true);
       globalThis.fetch = (async () => new Response('{"error":"server"}', { status: 503 })) as typeof fetch;

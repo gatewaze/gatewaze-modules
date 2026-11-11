@@ -54,6 +54,8 @@ export interface YouTubeConnection {
   last_collected_at: string | null;
   last_collect_status: string | null;
   created_at: string;
+  /** Disconnected, but Google never confirmed the access was revoked. */
+  needs_manual_revoke?: boolean;
 }
 
 export function getYouTubeSettings(): Promise<YouTubeClientSettings> {
@@ -70,7 +72,7 @@ export async function listYouTubeConnections(): Promise<YouTubeConnection[]> {
 }
 
 /** Revoke and forget a channel's access. Its history is kept. */
-export function disconnectYouTubeChannel(id: string): Promise<{ ok: true; revoked: boolean }> {
+export function disconnectYouTubeChannel(id: string): Promise<{ ok: true; revoked: boolean | null }> {
   return authedJson(`${BASE}/connections/${encodeURIComponent(id)}/disconnect`, { method: 'POST' });
 }
 
