@@ -1,4 +1,5 @@
 import type { GatewazeModule } from '@gatewaze/shared';
+import { VIDEOS_OPENAPI } from './openapi';
 
 /**
  * Videos module — the canonical video object, and the place video is managed
@@ -21,7 +22,7 @@ const videosModule: GatewazeModule = {
   description:
     'Video masters, shorts and scheduled publication. Editors upload against a talk or episode; '
     + 'Gatewaze holds the file and publishes on a schedule.',
-  version: '1.12.1',
+  version: '1.13.0',
   features: ['videos', 'videos.manage', 'videos.edit'],
 
   dependencies: ['content-platform'],
@@ -80,7 +81,37 @@ const videosModule: GatewazeModule = {
     // 020 adds a company logo per talk (not per speaker) and the studio's
     // own uploads: a speaker photo or a background image in place of a frame.
     'migrations/020_talk_logos_and_uploads.sql',
+    // The gated read model behind /api/v1/videos and /api/v1/content.
+    'migrations/021_public_api.sql',
   ],
+
+  // Published, public videos in the unified /api/v1/content feed (and so in
+  // the content_list / content_get MCP tools), beside events and podcasts.
+  publicContentSources: [
+    {
+      type: 'video',
+      table: 'videos_api_public',
+      scope: 'videos:read',
+      fields: { id: 'id', title: 'title', date: 'sort_date', summary: 'description' },
+      resourcePath: (row: Record<string, unknown>) => `/videos/${String(row.id)}`,
+      fullFields: [
+        'id', 'provider', 'provider_video_id', 'url', 'title', 'description', 'thumbnail_url',
+        'duration_seconds', 'published_at', 'channel_id', 'channel_title', 'kind', 'topics',
+        'content_category', 'created_at', 'updated_at',
+      ],
+    },
+  ],
+
+  publicApiScopes: [
+    { action: 'read', description: 'Read published, public videos and what they are linked to' },
+  ],
+
+  publicApiRoutes: async (router: unknown, ctx: unknown) => {
+    const { registerPublicApi } = await import('./public-api');
+    registerPublicApi(router, ctx);
+  },
+
+  publicApiSchema: VIDEOS_OPENAPI,
 
   apiRoutes: async (app: unknown, ctx?: unknown) => {
     const { registerRoutes } = await import('./api/register-routes.js');
