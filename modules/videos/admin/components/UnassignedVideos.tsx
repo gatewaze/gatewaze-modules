@@ -36,6 +36,7 @@ import {
   listSubjects,
   listUnassigned,
   listUnits,
+  setVideoPublished,
   unassignedSummary,
   type AssignSubjectType,
   type EditorScope,
@@ -97,6 +98,23 @@ export default function UnassignedVideos() {
   const [loadingScope, setLoadingScope] = useState(true);
 
   const [videos, setVideos] = useState<UnassignedVideo[]>([]);
+  const [publishing, setPublishing] = useState<string | null>(null);
+
+  // Publish state is per video and independent of assignment: a video can be
+  // on the public site before anyone decides which event it belongs to.
+  const togglePublished = async (v: UnassignedVideo) => {
+    const publish = v.status !== 'published';
+    setPublishing(v.id);
+    try {
+      const r = await setVideoPublished(v.id, publish);
+      setVideos((all) => all.map((x) => (x.id === v.id ? { ...x, status: r.status } : x)));
+      toast.success(publish ? 'Published' : 'Unpublished');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Could not change the published state');
+    } finally {
+      setPublishing(null);
+    }
+  };
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -136,6 +154,9 @@ export default function UnassignedVideos() {
   // we already have, rather than letting the list 403 and showing the operator
   // an error for something that is not a fault.
   const mayTriage = scope?.unrestricted === true;
+  // Publishing is admin-only on the server; an unrestricted editor who is not
+  // an admin does not get a button that can only answer 403.
+  const mayPublish = scope?.is_admin === true;
 
   const load = useCallback(async () => {
     if (!mayTriage) return;
@@ -493,6 +514,23 @@ export default function UnassignedVideos() {
                           {v.duration_seconds ? <span>{formatDuration(v.duration_seconds)}</span> : null}
                           {v.published_at ? <span>{String(v.published_at).slice(0, 10)}</span> : null}
                           {v.connection_label ? <span>{v.connection_label}</span> : null}
+                          {v.visibility === 'private' ? (
+                            <Badge color="gray" variant="soft">private on {providerLabel(v.provider)}</Badge>
+                          ) : (
+                            <Badge color={v.status === 'published' ? 'green' : 'gray'} variant="soft">
+                              {v.status === 'published' ? 'published' : v.status === 'archived' ? 'unpublished' : 'draft'}
+                            </Badge>
+                          )}
+                          {mayPublish && v.visibility !== 'private' && (v.status === 'published' || v.status === 'draft' || v.status === 'archived') && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => void togglePublished(v)}
+                              disabled={publishing !== null}
+                            >
+                              {publishing === v.id ? '…' : v.status === 'published' ? 'Unpublish' : 'Publish'}
+                            </Button>
+                          )}
                           {link ? (
                             <a
                               href={link}

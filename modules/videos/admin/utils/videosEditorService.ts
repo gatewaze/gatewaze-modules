@@ -216,6 +216,10 @@ export interface UnassignedVideo {
   /** Null when no metric has been collected yet, which is not the same as 0. */
   latest_views: number | null;
   views_as_of: string | null;
+  /** 'published' is what the public site and /api/v1/videos show. */
+  status?: string | null;
+  /** 'private' when the upload is private or unlisted on its platform. */
+  visibility?: string | null;
 }
 
 export interface UnassignedPage {
@@ -268,6 +272,14 @@ export async function unassignedSummary(): Promise<{
     byProvider: body.by_provider ?? {},
     unreadable: body.unreadable ?? [],
   };
+}
+
+/** Publish or unpublish one video (admins only). */
+export async function setVideoPublished(videoId: string, publish: boolean): Promise<{ status: string }> {
+  const res = await authedFetch(`${BASE}/videos/${encodeURIComponent(videoId)}/${publish ? 'publish' : 'unpublish'}`, {
+    method: 'POST',
+  });
+  return jsonOrThrow<{ status: string }>(res);
 }
 
 /** Attach one video to an event, podcast, talk or episode. */
