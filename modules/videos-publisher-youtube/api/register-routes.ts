@@ -417,7 +417,7 @@ export function registerRoutes(app: Express, ctx?: Record<string, unknown>): voi
 
     const { data: conn, error: readErr } = await supabase
       .from('video_platform_connections')
-      .select('id, label, external_account_id, encrypted_credentials, state')
+      .select('id, label, external_account_id, encrypted_credentials, state, updated_at')
       .eq('id', id)
       .eq('platform', 'youtube')
       .maybeSingle();
@@ -446,9 +446,11 @@ export function registerRoutes(app: Express, ctx?: Record<string, unknown>): voi
       })
       .eq('id', id)
       .eq('platform', 'youtube');
-    // Only the credential we revoked: a reconnect that landed in between
-    // stored a new one, and that connection stands.
-    q = conn.encrypted_credentials ? q.eq('encrypted_credentials', conn.encrypted_credentials) : q.is('encrypted_credentials', null);
+    // Only the row as we read it: a reconnect that landed in between bumped
+    // updated_at with a new credential, and that connection stands. Compared
+    // on updated_at rather than the sealed credential, so the ciphertext never
+    // travels in a request URL (and so never in an access log).
+    q = conn.updated_at ? q.eq('updated_at', conn.updated_at) : q.is('updated_at', null);
     const { data: changed, error } = await q.select('id');
     if (error) {
       log('could not disconnect', { error: error.message });

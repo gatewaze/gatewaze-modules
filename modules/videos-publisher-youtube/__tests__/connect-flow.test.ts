@@ -352,7 +352,7 @@ describe('disconnect', () => {
   const disconnect = (id: string) => fetch(`${base}${MOD}/connections/${id}/disconnect`, { method: 'POST' });
   const row = (extra: Record<string, unknown> = {}) => ({
     id: CONN, platform: 'youtube', label: 'Dan Baker', external_account_id: 'UCxxxxxxxxxxxxxxxxxxxxxx',
-    state: 'connected', encrypted_credentials: sealSecret('refresh-token-value'), ...extra,
+    state: 'connected', encrypted_credentials: sealSecret('refresh-token-value'), updated_at: '2026-11-11T09:00:00.000Z', ...extra,
   });
 
   it('revokes at Google, drops the token, stops collection, and keeps the row', async () => {
@@ -414,7 +414,7 @@ describe('disconnect', () => {
     db.connection = row();
     // Simulate the callback storing a new credential after the read.
     vi.mocked(oauthMod.revokeToken).mockImplementationOnce(async () => {
-      db.connection = { ...db.connection!, encrypted_credentials: sealSecret('new-token') };
+      db.connection = { ...db.connection!, encrypted_credentials: sealSecret('new-token'), updated_at: '2026-11-11T09:00:05.000Z' };
       return true;
     });
     expect((await disconnect(CONN)).status).toBe(409);
