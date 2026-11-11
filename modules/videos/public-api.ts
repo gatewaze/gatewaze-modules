@@ -32,7 +32,10 @@ export const VIDEO_FIELDS = [
 ] as const;
 
 /** What a video can be linked to in public. People are left out on purpose. */
-export const PUBLIC_SUBJECT_TYPES = ['event', 'podcast_episode', 'talk', 'agenda_entry'] as const;
+export const PUBLIC_SUBJECT_TYPES = ['event', 'podcast', 'podcast_episode', 'talk', 'agenda_entry'] as const;
+
+/** An event's short public code, as /api/v1/events and /api/v1/content use it. */
+const EVENT_CODE_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
 const KINDS = ['full', 'short', 'clip', 'trailer', 'livestream'] as const;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -99,17 +102,61 @@ export function registerPublicApi(router: any, ctx: any): void {
   const read = ctx.requireScope('read');
   const cache = (res: any) => ctx.setCache(res, { kind: 'public', maxAge: 300, sMaxAge: 600 });
 
-  /** Video ids linked to one subject, or a 400 for a malformed id. */
-  async function videoIdsFor(type: 'event' | 'podcast_episode', raw: string): Promise<string[] | { error: string }> {
-    if (!UUID_RE.test(raw)) throw badRequest(`Parameter "${type}" must be a UUID.`);
+  // The events API's own notion of a public event: live in production and
+  // listed. Used both to resolve ?event= and to gate the event ids a video's
+  // detail reveals, so neither says anything about an unpublished event.
+  const publicEvents = () => supabase.from('events').select('id').eq('is_live_in_production', true).eq('is_listed', true);
+
+  /** A public event's uuid from its uuid or its short code, or null. */
+  async function publicEventUuid(raw: string): Promise<string | null | { error: string }> {
+    const isUuid = UUID_RE.test(raw);
+    if (!isUuid && !EVENT_CODE_RE.test(raw)) throw badRequest('Parameter "event" must be an event id or event code.');
+    const { data, error } = await (isUuid ? publicEvents().eq('id', raw) : publicEvents().eq('event_id', raw)).limit(1).maybeSingle();
+    if (error) return { error: error.message ?? 'event lookup failed' };
+    return (data as { id: string } | null)?.id ?? null;
+  }
+
+  function idsFrom(rows: Array<{ video_id: string }> | null): string[] {
+    return (rows ?? []).map((r) => String(r.video_id));
+  }
+
+  /**
+   * Videos linked to one public event: to the event itself, to any of its
+   * agenda entries or talks (how per-talk recordings are linked), or through
+   * the older event_videos table the event pages read.
+   */
+  async function videoIdsForEvent(raw: string): Promise<string[] | { error: string }> {
+    const uuid = await publicEventUuid(raw);
+    if (uuid && typeof uuid === 'object') return uuid;
+    if (!uuid) return [];
+
+    const entries = await supabase.from('events_agenda_entries').select('id').eq('event_uuid', uuid).limit(SUBJECT_FILTER_CAP);
+    if (entries.error) return { error: entries.error.message ?? 'agenda lookup failed' };
+    const entryIds = (entries.data ?? []).map((r: { id: string }) => String(r.id));
+
+    const direct = await supabase.from('video_subjects').select('video_id').eq('subject_type', 'event').eq('subject_id', uuid).limit(SUBJECT_FILTER_CAP);
+    if (direct.error) return { error: direct.error.message ?? 'subject lookup failed' };
+    const viaEntries = entryIds.length
+      ? await supabase.from('video_subjects').select('video_id').in('subject_type', ['agenda_entry', 'talk']).in('subject_id', entryIds).limit(SUBJECT_FILTER_CAP)
+      : { data: [], error: null };
+    if (viaEntries.error) return { error: viaEntries.error.message ?? 'subject lookup failed' };
+    const legacy = await supabase.from('event_videos').select('video_id').eq('event_uuid', uuid).limit(SUBJECT_FILTER_CAP);
+    if (legacy.error) return { error: legacy.error.message ?? 'event_videos lookup failed' };
+
+    return [...new Set<string>([...idsFrom(direct.data), ...idsFrom(viaEntries.data), ...idsFrom(legacy.data)])].slice(0, SUBJECT_FILTER_CAP);
+  }
+
+  /** Videos linked to one podcast episode. */
+  async function videoIdsForEpisode(raw: string): Promise<string[] | { error: string }> {
+    if (!UUID_RE.test(raw)) throw badRequest('Parameter "podcast_episode" must be a UUID.');
     const { data, error } = await supabase
       .from('video_subjects')
       .select('video_id')
-      .eq('subject_type', type)
+      .eq('subject_type', 'podcast_episode')
       .eq('subject_id', raw)
       .limit(SUBJECT_FILTER_CAP);
     if (error) return { error: error.message ?? 'subject lookup failed' };
-    return [...new Set<string>((data ?? []).map((r: { video_id: string }) => String(r.video_id)))];
+    return [...new Set<string>(idsFrom(data))];
   }
 
   // GET / — public videos, newest first.
@@ -137,10 +184,9 @@ export function registerPublicApi(router: any, ctx: any): void {
       }
 
       let ids: string[] | null = null;
-      for (const [type, raw] of [['event', event], ['podcast_episode', episode]] as const) {
-        if (raw === undefined) continue;
-        const found = await videoIdsFor(type, raw);
-        if ('error' in found) return queryError(res, ctx, `${type} filter`, { message: found.error });
+      if (event !== undefined || episode !== undefined) {
+        const found = event !== undefined ? await videoIdsForEvent(event) : await videoIdsForEpisode(episode!);
+        if ('error' in found) return queryError(res, ctx, 'subject filter', { message: found.error });
         ids = found;
       }
       if (ids !== null && ids.length === 0) {
@@ -203,12 +249,39 @@ export function registerPublicApi(router: any, ctx: any): void {
         .in('subject_type', [...PUBLIC_SUBJECT_TYPES]);
       if (subj.error) return queryError(res, ctx, 'video subjects', subj.error);
 
+      // Only links whose event is public, as the events API gates its own
+      // sub-resources: an unlisted event's id is not this API's to reveal.
+      // Podcast links are passed through; podcasts gate their own reads.
+      const rows = (subj.data ?? []) as Array<{ subject_type: string; subject_id: string }>;
+      const entryIds = rows.filter((s) => s.subject_type === 'agenda_entry' || s.subject_type === 'talk').map((s) => s.subject_id);
+      const entryEvent = new Map<string, string>();
+      if (entryIds.length) {
+        const e = await supabase.from('events_agenda_entries').select('id, event_uuid').in('id', entryIds);
+        if (e.error) return queryError(res, ctx, 'subject events', e.error);
+        for (const r of (e.data ?? []) as Array<{ id: string; event_uuid: string }>) entryEvent.set(String(r.id), String(r.event_uuid));
+      }
+      const eventIds = [...new Set<string>([
+        ...rows.filter((s) => s.subject_type === 'event').map((s) => s.subject_id),
+        ...entryEvent.values(),
+      ])];
+      const publicIds = new Set<string>();
+      if (eventIds.length) {
+        const p = await publicEvents().in('id', eventIds);
+        if (p.error) return queryError(res, ctx, 'subject events', p.error);
+        for (const r of (p.data ?? []) as Array<{ id: string }>) publicIds.add(String(r.id));
+      }
+      const visible = rows.filter((s) => {
+        if (s.subject_type === 'event') return publicIds.has(s.subject_id);
+        if (s.subject_type === 'agenda_entry' || s.subject_type === 'talk') {
+          const ev = entryEvent.get(s.subject_id);
+          return ev !== undefined && publicIds.has(ev);
+        }
+        return true;
+      });
+
       const body: Record<string, unknown> = { ...(data as Record<string, unknown>) };
       if (!fields.includes('id')) delete body.id;
-      body.subjects = (subj.data ?? []).map((s: { subject_type: string; subject_id: string }) => ({
-        type: s.subject_type,
-        id: s.subject_id,
-      }));
+      body.subjects = visible.map((s) => ({ type: s.subject_type, id: s.subject_id }));
       cache(res);
       res.json({ data: body });
     } catch (err) {

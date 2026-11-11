@@ -8,9 +8,12 @@
 --   (the anon RLS policy in 005, videos_public_list/get in 003, the event
 --   RPCs in 006): status 'published', visibility 'public', and not hidden by
 --   content-keywords. So an API key sees what the public site shows and
---   nothing more. In particular a video discovered from a connected channel
---   is a draft until someone publishes it, and a private or unlisted upload
---   (visibility 'private') never appears.
+--   nothing more. A video discovered from a connected channel is a draft
+--   until it is published (by the channel's auto-publish setting or by hand),
+--   and one whose visibility is 'private' never appears. Discovery records
+--   YouTube's privacy into visibility from videos-publisher-youtube 0.2.1 on;
+--   rows discovered earlier were left at the 'public' default and are only
+--   corrected by the next sync that reaches them.
 --
 --   security_invoker, granted to service_role only: the API reads it with
 --   the service role, and anon/authenticated keep their existing RLS paths.

@@ -1,6 +1,7 @@
 -- ============================================================================
--- Manual test script for videos migration 021: the videos_api_public view
--- behind /api/v1/videos and /api/v1/content.
+-- Manual test script for videos migrations 021 and 022: the videos_api_public
+-- view behind /api/v1/videos and /api/v1/content, the discovery lease, and
+-- the triage view's protections.
 --
 -- The view is the only thing between an API key and a draft, private,
 -- unlisted or keyword-hidden video, so its rules are checked here. One
@@ -10,7 +11,7 @@
 --   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
 --     -f modules/videos/__tests__/videos_api_public.manual.sql
 --
--- Needs the videos migrations (001 to 021). The keyword case runs only where
+-- Needs the videos migrations (001 to 022). The keyword case runs only where
 -- content-keywords is installed, and says so.
 -- ============================================================================
 
@@ -68,6 +69,51 @@ BEGIN
   IF has_table_privilege('authenticated', 'public.videos_api_public', 'SELECT') THEN RAISE EXCEPTION 'case4: authenticated can read'; END IF;
   IF NOT has_table_privilege('service_role', 'public.videos_api_public', 'SELECT') THEN RAISE EXCEPTION 'case4: service_role cannot read'; END IF;
   RAISE NOTICE 'case4 ok';
+END $$;
+
+-- case 5: the discovery lease is taken once, refused while held, released by
+-- a finish, and taken over when stale.
+DO $$
+DECLARE c uuid := 'd1000000-0000-0000-0000-000000000001';
+BEGIN
+  INSERT INTO public.video_platform_connections (id, platform, external_account_id, label) VALUES (c, 'youtube', 'UCzzzzzzzzzzzzzzzzzzzzzz', 'zz');
+  IF NOT public.claim_video_discovery(c) THEN RAISE EXCEPTION 'case5: first claim refused'; END IF;
+  IF public.claim_video_discovery(c) THEN RAISE EXCEPTION 'case5: second claim taken while held'; END IF;
+  UPDATE public.video_platform_connections SET discovery_finished_at = now() WHERE id = c;
+  IF NOT public.claim_video_discovery(c) THEN RAISE EXCEPTION 'case5: claim refused after finish'; END IF;
+  UPDATE public.video_platform_connections SET discovery_started_at = now() - interval '3 hours', discovery_finished_at = now() - interval '4 hours' WHERE id = c;
+  IF NOT public.claim_video_discovery(c) THEN RAISE EXCEPTION 'case5: stale lease not taken over'; END IF;
+  IF public.claim_video_discovery('d1000000-0000-0000-0000-00000000ffff') THEN RAISE EXCEPTION 'case5: unknown connection claimed'; END IF;
+  RAISE NOTICE 'case5 ok';
+END $$;
+
+-- case 6: the replaced triage view keeps 010's protections and gains columns.
+DO $$
+BEGIN
+  IF has_table_privilege('anon', 'public.videos_unassigned', 'SELECT') THEN RAISE EXCEPTION 'case6: anon can read videos_unassigned'; END IF;
+  IF NOT EXISTS (SELECT 1 FROM pg_class WHERE relname = 'videos_unassigned' AND 'security_invoker=true' = ANY (reloptions)) THEN
+    RAISE EXCEPTION 'case6: videos_unassigned lost security_invoker';
+  END IF;
+  PERFORM status, visibility FROM public.videos_unassigned LIMIT 1;
+  IF has_function_privilege('authenticated', 'public.claim_video_discovery(uuid, integer)', 'EXECUTE') THEN
+    RAISE EXCEPTION 'case6: authenticated can claim a lease';
+  END IF;
+  RAISE NOTICE 'case6 ok';
+END $$;
+
+-- case 7: publishing through publish_state lands in the API view.
+DO $$
+BEGIN
+  UPDATE public.videos SET publish_state = 'draft', status = 'draft' WHERE id = 'd0000000-0000-0000-0000-000000000002';
+  UPDATE public.videos SET publish_state = 'published' WHERE id = 'd0000000-0000-0000-0000-000000000002';
+  IF NOT EXISTS (SELECT 1 FROM public.videos_api_public WHERE id = 'd0000000-0000-0000-0000-000000000002') THEN
+    RAISE EXCEPTION 'case7: published draft not in the view';
+  END IF;
+  UPDATE public.videos SET publish_state = 'unpublished' WHERE id = 'd0000000-0000-0000-0000-000000000002';
+  IF EXISTS (SELECT 1 FROM public.videos_api_public WHERE id = 'd0000000-0000-0000-0000-000000000002') THEN
+    RAISE EXCEPTION 'case7: unpublished video still in the view';
+  END IF;
+  RAISE NOTICE 'case7 ok';
 END $$;
 
 ROLLBACK;

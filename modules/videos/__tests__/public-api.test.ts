@@ -85,26 +85,64 @@ describe('GET /api/v1/videos', () => {
     expect(String(c.arg('or'))).toBe('title.ilike.%mcpid.gt.0%,description.ilike.%mcpid.gt.0%');
   });
 
-  it('filters by event through video_subjects, and answers an empty page when nothing is linked', async () => {
+  it('filters by a public event: its own links, its agenda entries and talks, and event_videos', async () => {
     const EV = 'e0000000-0000-0000-0000-000000000001';
-    use((c: Chain) => (c.table === 'video_subjects' ? { data: [{ video_id: 'v1' }, { video_id: 'v1' }, { video_id: 'v2' }] } : { data: [{ id: 'v1' }], count: 1 }));
-    await get(`?event=${EV}`);
-    const subj = sb.chains.find((c) => c.table === 'video_subjects')!;
-    expect(subj.has('eq', 'subject_type', 'event')).toBe(true);
-    expect(subj.has('eq', 'subject_id', EV)).toBe(true);
-    expect(subj.arg('limit')).toBe(200);
-    expect(listChain().has('in', 'id', ['v1', 'v2'])).toBe(true);
+    use((c: Chain) => {
+      if (c.table === 'events') return { data: { id: EV } };
+      if (c.table === 'events_agenda_entries') return { data: [{ id: 'a1' }, { id: 'a2' }] };
+      if (c.table === 'video_subjects' && c.has('eq', 'subject_type', 'event')) return { data: [{ video_id: 'v1' }] };
+      if (c.table === 'video_subjects') return { data: [{ video_id: 'v2' }, { video_id: 'v1' }] };
+      if (c.table === 'event_videos') return { data: [{ video_id: 'v3' }] };
+      return { data: [{ id: 'v1' }], count: 1 };
+    });
+    expect((await get('?event=AAIF-NA-2026')).status).toBe(200);
+    const ev = sb.chains.find((c) => c.table === 'events')!;
+    // The events API's public rule, and a short code looked up by event_id.
+    expect(ev.has('eq', 'is_live_in_production', true)).toBe(true);
+    expect(ev.has('eq', 'is_listed', true)).toBe(true);
+    expect(ev.has('eq', 'event_id', 'AAIF-NA-2026')).toBe(true);
+    const viaEntries = sb.chains.find((c) => c.table === 'video_subjects' && c.calls.some((x) => x.op === 'in' && x.args[0] === 'subject_id'))!;
+    expect(viaEntries.arg('in', 1)).toEqual(['agenda_entry', 'talk']);
+    expect(viaEntries.calls.find((x) => x.op === 'in' && x.args[0] === 'subject_id')!.args[1]).toEqual(['a1', 'a2']);
+    expect(listChain().has('in', 'id', ['v1', 'v2', 'v3'])).toBe(true);
+  });
 
-    use((c: Chain) => (c.table === 'video_subjects' ? { data: [] } : { data: [{ id: 'leak' }], count: 1 }));
-    const r = await get(`?podcast_episode=${EV}`);
+  it('answers an empty page for an unknown or unlisted event, or an episode with no videos, without listing', async () => {
+    use((c: Chain) => (c.table === 'events' ? { data: null } : { data: [{ id: 'leak' }], count: 1 }));
+    const r = await get('?event=e0000000-0000-0000-0000-000000000001');
     expect(r.body.data).toEqual([]);
     expect(sb.chains.some((c) => c.table === 'videos_api_public')).toBe(false);
+
+    use((c: Chain) => (c.table === 'video_subjects' ? { data: [] } : { data: [{ id: 'leak' }], count: 1 }));
+    const e = await get('?podcast_episode=e0000000-0000-0000-0000-000000000001');
+    expect(e.body.data).toEqual([]);
+    expect(sb.chains.some((c) => c.table === 'videos_api_public')).toBe(false);
+  });
+
+  it('answers a failed subject lookup with a 500 and does not list', async () => {
+    use((c: Chain) => (c.table === 'video_subjects' ? { error: { message: 'boom' } } : { data: [{ id: 'x' }], count: 1 }));
+    const r = await get('?podcast_episode=e0000000-0000-0000-0000-000000000001');
+    expect(r.status).toBe(500);
+    expect(sb.chains.some((c) => c.table === 'videos_api_public')).toBe(false);
+  });
+
+  it('rejects more than 20 topics', async () => {
+    use(() => ({ data: [] }));
+    const many = Array.from({ length: 21 }, (_, i) => `t${i}`).join(',');
+    expect((await get(`?topics=${many}`)).status).toBe(400);
+  });
+
+  it('links the next page when there is one', async () => {
+    use(() => ({ data: Array.from({ length: 25 }, (_, i) => ({ id: `v${i}` })), count: 30 }));
+    const r = await get('');
+    expect(r.body.pagination.has_more).toBe(true);
+    expect(r.body._links.next).toBe('/api/v1/videos?offset=25&limit=25');
   });
 
   it.each([
     '?channel=not-a-channel',
     '?kind=private',
-    '?event=nope',
+    '?event=a.b',
     '?podcast_episode=1',
     '?event=e0000000-0000-0000-0000-000000000001&podcast_episode=e0000000-0000-0000-0000-000000000001',
     '?from=yesterday',
@@ -130,18 +168,46 @@ describe('GET /api/v1/videos', () => {
 });
 
 describe('GET /api/v1/videos/:id', () => {
-  it('looks up a YouTube id, and returns public links without people', async () => {
-    use((c: Chain) => (c.table === 'video_subjects'
-      ? { data: [{ subject_type: 'event', subject_id: 'e1' }, { subject_type: 'podcast_episode', subject_id: 'p1' }] }
-      : { data: { id: 'v1', title: 'T' } }));
+  it('looks up a YouTube id, and returns only links whose event is public', async () => {
+    use((c: Chain) => {
+      if (c.table === 'video_subjects') {
+        return { data: [
+          { subject_type: 'event', subject_id: 'e-public' },
+          { subject_type: 'event', subject_id: 'e-unlisted' },
+          { subject_type: 'agenda_entry', subject_id: 'a-public' },
+          { subject_type: 'talk', subject_id: 'a-unlisted' },
+          { subject_type: 'podcast_episode', subject_id: 'p1' },
+        ] };
+      }
+      if (c.table === 'events_agenda_entries') return { data: [{ id: 'a-public', event_uuid: 'e-public' }, { id: 'a-unlisted', event_uuid: 'e-unlisted' }] };
+      if (c.table === 'events') return { data: [{ id: 'e-public' }] };
+      return { data: { id: 'v1', title: 'T' } };
+    });
     const r = await get('/FKjj1OGALkc');
     expect(r.status).toBe(200);
-    expect(r.body.data).toMatchObject({ id: 'v1', subjects: [{ type: 'event', id: 'e1' }, { type: 'podcast_episode', id: 'p1' }] });
+    expect(r.body.data.subjects).toEqual([
+      { type: 'event', id: 'e-public' },
+      { type: 'agenda_entry', id: 'a-public' },
+      { type: 'podcast_episode', id: 'p1' },
+    ]);
     const v = listChain();
     expect(v.has('eq', 'provider', 'youtube')).toBe(true);
     expect(v.has('eq', 'provider_video_id', 'FKjj1OGALkc')).toBe(true);
     const subj = sb.chains.find((c) => c.table === 'video_subjects')!;
-    expect(subj.arg('in', 1)).toEqual(['event', 'podcast_episode', 'talk', 'agenda_entry']);
+    expect(subj.arg('in', 1)).toEqual(['event', 'podcast', 'podcast_episode', 'talk', 'agenda_entry']);
+    const ev = sb.chains.find((c) => c.table === 'events')!;
+    expect(ev.has('eq', 'is_listed', true)).toBe(true);
+  });
+
+  it('honours ?fields= on the detail route, still adding subjects', async () => {
+    use((c: Chain) => (c.table === 'video_subjects' ? { data: [] } : { data: { id: 'v1', title: 'T' } }));
+    const r = await get('/FKjj1OGALkc?fields=title');
+    expect(r.body.data).toEqual({ title: 'T', subjects: [] });
+  });
+
+  it('answers a failed subjects lookup on the detail route with a 500', async () => {
+    use((c: Chain) => (c.table === 'video_subjects' ? { error: { message: 'boom' } } : { data: { id: 'v1' } }));
+    expect((await get('/FKjj1OGALkc')).status).toBe(500);
   });
 
   it('looks up a uuid by id', async () => {
@@ -166,8 +232,13 @@ describe('GET /api/v1/videos/:id', () => {
 
 describe('manifest', () => {
   it('serves the same fields in /api/v1/content as the list route, from the gated view', async () => {
-    const manifest = (await import('../index.js')).default as { publicContentSources: Array<{ table: string; fullFields: string[]; scope: string }> };
-    expect(manifest.publicContentSources[0]).toMatchObject({ table: 'videos_api_public', scope: 'videos:read' });
+    const manifest = (await import('../index.js')).default as unknown as { publicContentSources: Array<{ table: string; fullFields: string[]; scope: string }> };
+    expect(manifest.publicContentSources[0]).toMatchObject({
+      table: 'videos_api_public',
+      scope: 'videos:read',
+      fields: { id: 'id', title: 'title', date: 'sort_date', summary: 'description' },
+    });
+    expect((manifest.publicContentSources[0] as unknown as { resourcePath: (r: Record<string, unknown>) => string }).resourcePath({ id: 'abc' })).toBe('/videos/abc');
     expect(manifest.publicContentSources[0].fullFields).toEqual([...VIDEO_FIELDS]);
   });
 });

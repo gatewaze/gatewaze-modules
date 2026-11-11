@@ -83,6 +83,8 @@ const videosModule: GatewazeModule = {
     'migrations/020_talk_logos_and_uploads.sql',
     // The gated read model behind /api/v1/videos and /api/v1/content.
     'migrations/021_public_api.sql',
+    // Discovery lease per connection, and status/visibility on the triage view.
+    'migrations/022_publish_and_discovery_lease.sql',
   ],
 
   // Published, public videos in the unified /api/v1/content feed (and so in

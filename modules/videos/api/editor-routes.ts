@@ -531,7 +531,7 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
 
     let q = supabase
       .from('videos_unassigned')
-      .select('id, provider, title, url, thumbnail_url, duration_seconds, published_at, channel_title, kind, connection_label, latest_views, views_as_of', { count: 'exact' })
+      .select('id, provider, title, url, thumbnail_url, duration_seconds, published_at, channel_title, kind, connection_label, latest_views, views_as_of, status, visibility', { count: 'exact' })
       .order('latest_views', { ascending: false, nullsFirst: false })
       .order('published_at', { ascending: false, nullsFirst: false })
       .range(offset, offset + limit - 1);
@@ -595,6 +595,50 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
    * the two rules stay in one place: one subject per video, and the subject
    * has to exist.
    */
+  /**
+   * Publish or unpublish one video: what the public site, the anon reads and
+   * /api/v1/videos show. Admins only. Publishing is refused for a video that
+   * is private or unlisted on its platform (visibility 'private'), because
+   * publishing would not make it watchable and must not make it listed.
+   *
+   * Both columns are written: publish_state is the content-platform machine
+   * and status is what every public read filters on. The 001 trigger keeps
+   * them in step only when publish_state changes, and a discovered draft can
+   * carry publish_state 'published' already, so setting both is the only way
+   * to be sure.
+   */
+  async function setPublished(req: Request, res: Response, publish: boolean): Promise<void> {
+    const videoId = String(req.params.videoId ?? '');
+    if (!UUID_RE.test(videoId)) { res.status(400).json({ error: 'invalid video id' }); return; }
+
+    const asUser = userClient(req);
+    if (!asUser) { res.status(401).json({ error: 'session required' }); return; }
+    const { data: isAdmin, error: adminErr } = await asUser.rpc('is_admin');
+    if (adminErr || isAdmin !== true) { res.status(403).json({ error: 'only an admin can publish videos' }); return; }
+
+    const { data: video, error: readErr } = await supabase
+      .from('videos')
+      .select('id, visibility, status')
+      .eq('id', videoId)
+      .maybeSingle();
+    if (readErr) { logger.warn('publish: read failed', { error: readErr.message }); res.status(500).json({ error: 'the video could not be read' }); return; }
+    if (!video) { res.status(404).json({ error: 'video not found' }); return; }
+    if (publish && video.visibility !== 'public') {
+      res.status(409).json({ error: 'this video is private or unlisted on its platform, so it cannot be published' });
+      return;
+    }
+
+    const patch = publish
+      ? { publish_state: 'published', status: 'published' }
+      : { publish_state: 'unpublished', status: 'archived' };
+    const { error } = await supabase.from('videos').update(patch).eq('id', videoId);
+    if (error) { logger.warn('publish: update failed', { error: error.message }); res.status(500).json({ error: 'the video could not be updated' }); return; }
+    res.json({ ok: true, status: patch.status });
+  }
+
+  router.post('/videos/:videoId/publish', (req: Request, res: Response) => setPublished(req, res, true));
+  router.post('/videos/:videoId/unpublish', (req: Request, res: Response) => setPublished(req, res, false));
+
   router.post('/unassigned/:videoId/assign', async (req: Request, res: Response) => {
     const videoId = String(req.params.videoId ?? '');
     if (!UUID_RE.test(videoId)) return res.status(400).json({ error: 'invalid video id' });

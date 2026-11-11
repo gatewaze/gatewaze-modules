@@ -25,7 +25,7 @@ export const VIDEOS_OPENAPI = {
         parameters: [
           { name: 'channel', in: 'query', schema: { type: 'string' }, description: 'YouTube channel id (UC…)' },
           { name: 'kind', in: 'query', schema: { type: 'string', enum: ['full', 'short', 'clip', 'trailer', 'livestream'] } },
-          { name: 'event', in: 'query', schema: { type: 'string', format: 'uuid' }, description: 'Only videos linked to this event (first 200 links)' },
+          { name: 'event', in: 'query', schema: { type: 'string' }, description: 'Only videos linked to this public event, by event id or event code: directly, to one of its agenda entries or talks, or through its event page (first 200)' },
           { name: 'podcast_episode', in: 'query', schema: { type: 'string', format: 'uuid' }, description: 'Only videos linked to this podcast episode' },
           { name: 'q', in: 'query', schema: { type: 'string' }, description: 'Search title and description (partial match)' },
           { name: 'from', in: 'query', schema: { type: 'string', format: 'date-time' }, description: 'Published on or after (RFC 3339)' },
@@ -70,11 +70,11 @@ export const VIDEOS_OPENAPI = {
         content_category: { type: ['string', 'null'] },
         subjects: {
           type: 'array',
-          description: 'Detail endpoint only: the events, talks, agenda entries and podcast episodes the video is linked to',
+          description: 'Detail endpoint only: the public events, talks and agenda entries, and the podcasts and episodes, the video is linked to',
           items: {
             type: 'object',
             properties: {
-              type: { type: 'string', enum: ['event', 'podcast_episode', 'talk', 'agenda_entry'] },
+              type: { type: 'string', enum: ['event', 'podcast', 'podcast_episode', 'talk', 'agenda_entry'] },
               id: { type: 'string', format: 'uuid' },
             },
           },
