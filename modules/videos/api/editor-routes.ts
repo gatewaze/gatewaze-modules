@@ -531,7 +531,7 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
 
     let q = supabase
       .from('videos_unassigned')
-      .select('id, provider, title, url, thumbnail_url, duration_seconds, published_at, channel_title, kind, connection_label, latest_views, views_as_of', { count: 'exact' })
+      .select('id, provider, title, url, thumbnail_url, duration_seconds, published_at, channel_title, kind, connection_label, latest_views, views_as_of, status, visibility', { count: 'exact' })
       .order('latest_views', { ascending: false, nullsFirst: false })
       .order('published_at', { ascending: false, nullsFirst: false })
       .range(offset, offset + limit - 1);
@@ -587,6 +587,78 @@ export function mountEditorRoutes(router: Router, deps: EditorDeps): void {
       ...(unreadable.length > 0 ? { unreadable } : {}),
     });
   });
+
+  /**
+   * Publish or unpublish one video: what the public site, the anon reads and
+   * /api/v1/videos show. Admins only.
+   *
+   * Goes through content-platform's content_publish_state_set(), which
+   * enforces the allowed transitions (a rejected or never-published video
+   * cannot be "unpublished", a rejected one cannot be published straight
+   * away) and writes the audit row with who did it. The 001 trigger then
+   * keeps status in step with publish_state.
+   *
+   * Publishing is refused for a video recorded as private or unlisted on its
+   * platform, as of its last sync: listing it would not make it watchable.
+   */
+  async function setPublished(req: Request, res: Response, publish: boolean): Promise<void> {
+    const videoId = String(req.params.videoId ?? '');
+    if (!UUID_RE.test(videoId)) { res.status(400).json({ error: 'invalid video id' }); return; }
+
+    const asUser = userClient(req);
+    if (!asUser) { res.status(401).json({ error: 'session required' }); return; }
+    const { data: isAdmin, error: adminErr } = await asUser.rpc('is_admin');
+    if (adminErr || isAdmin !== true) { res.status(403).json({ error: 'only an admin can publish videos' }); return; }
+    const uid = await callerId(req);
+
+    const { data: video, error: readErr } = await supabase
+      .from('videos')
+      .select('id, visibility, status, publish_state')
+      .eq('id', videoId)
+      .maybeSingle();
+    if (readErr) { logger.warn('publish: read failed', { error: readErr.message }); res.status(500).json({ error: 'the video could not be read' }); return; }
+    if (!video) { res.status(404).json({ error: 'video not found' }); return; }
+    if (publish && video.visibility !== 'public') {
+      res.status(409).json({ error: 'this video was private or unlisted on its platform at its last sync, so it cannot be published' });
+      return;
+    }
+    if (!publish && video.status !== 'published') {
+      res.status(409).json({ error: 'this video is not published' });
+      return;
+    }
+
+    const { error: rpcErr } = await supabase.rpc('content_publish_state_set', {
+      p_content_type: 'video',
+      p_content_id: videoId,
+      p_to: publish ? 'published' : 'unpublished',
+      p_actor: uid ? `admin:${uid}` : 'admin:ui',
+      p_reason: publish ? 'published from the videos triage queue' : 'unpublished from the videos triage queue',
+    });
+    if (rpcErr) {
+      if (/INVALID_STATE_TRANSITION/i.test(String(rpcErr.message ?? ''))) {
+        res.status(409).json({ error: `a video in state "${video.publish_state}" cannot be ${publish ? 'published' : 'unpublished'} from here` });
+        return;
+      }
+      logger.warn('publish: transition failed', { error: rpcErr.message });
+      res.status(500).json({ error: 'the video could not be updated' });
+      return;
+    }
+    // Rows discovered before 0.2.1 carry publish_state 'published' with status
+    // 'draft', so the transition above was a no-op and the trigger never ran.
+    if (publish) {
+      const { error: fixErr } = await supabase
+        .from('videos')
+        .update({ status: 'published' })
+        .eq('id', videoId)
+        .eq('publish_state', 'published')
+        .neq('status', 'published');
+      if (fixErr) { logger.warn('publish: status repair failed', { error: fixErr.message }); res.status(500).json({ error: 'the video could not be updated' }); return; }
+    }
+    res.json({ ok: true, status: publish ? 'published' : 'archived' });
+  }
+
+  router.post('/videos/:videoId/publish', (req: Request, res: Response) => setPublished(req, res, true));
+  router.post('/videos/:videoId/unpublish', (req: Request, res: Response) => setPublished(req, res, false));
 
   /**
    * Attach one video to an event, podcast, agenda entry or episode.
