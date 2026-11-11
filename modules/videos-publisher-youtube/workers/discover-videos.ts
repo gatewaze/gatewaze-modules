@@ -176,13 +176,15 @@ async function finishLease(supabase, connectionId: string, startedAt: string, de
  * before 0.2.1 can carry publish_state 'published' with status 'draft'; that
  * transition is then a no-op and the status is repaired directly.
  */
-async function publishVideo(supabase, videoId: string, connLabel: string): Promise<string | null> {
+async function publishVideo(supabase, videoId: string, connectionId: string): Promise<string | null> {
   const { error } = await supabase.rpc('content_publish_state_set', {
     p_content_type: 'video',
     p_content_id: videoId,
     p_to: 'published',
     p_actor: 'system:youtube-auto-publish',
-    p_reason: `auto-published on discovery from ${connLabel}`,
+    // The connection's id, not its label: the label is the channel title,
+    // which whoever owns the channel can set to anything.
+    p_reason: `auto-published on discovery from connection ${connectionId}`,
   });
   if (error) return error.message ?? 'publish failed';
   const { error: fixErr } = await supabase
@@ -263,7 +265,7 @@ async function discoverConnection(supabase, client, refreshToken: string, conn, 
         // Auto-publish reaches only drafts nobody has decided on: 'archived'
         // (unpublished by hand), 'rejected' and 'pending_review' are left alone.
         else if (autoPublish && v.privacy === 'public' && already.status === 'draft') {
-          const failed = await publishVideo(supabase, videoId, conn.label);
+          const failed = await publishVideo(supabase, videoId, conn.id);
           if (failed) out.errors.push(`${v.externalId}: publish ${failed}`);
           else out.published += 1;
         }
@@ -304,7 +306,7 @@ async function discoverConnection(supabase, client, refreshToken: string, conn, 
         videoId = data.id;
         out.created += 1;
         if (autoPublish && v.privacy === 'public') {
-          const failed = await publishVideo(supabase, videoId, conn.label);
+          const failed = await publishVideo(supabase, videoId, conn.id);
           if (failed) out.errors.push(`${v.externalId}: publish ${failed}`);
           else out.published += 1;
         }
