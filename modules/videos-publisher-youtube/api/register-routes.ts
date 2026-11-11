@@ -485,10 +485,11 @@ export function registerRoutes(app: Express, ctx?: Record<string, unknown>): voi
 
   /**
    * Sync a channel now: queue the discovery job for this one connection with
-   * the largest cap the adapter allows, so the whole back catalogue arrives
-   * in one run instead of the nightly run's newest 1,000. Uploads already
-   * held are adopted, not duplicated, so a repeat is harmless; the job id is
-   * bucketed by ten minutes so repeated clicks queue one run, not many.
+   * the largest cap the adapter allows (5,000), instead of the nightly run's
+   * newest 1,000. Uploads already held are adopted, not duplicated. One sync
+   * per channel per hour, counted from the last run's start whichever kind it
+   * was, and the job id is bucketed by the same hour so repeated clicks
+   * before the run starts queue one job.
    */
   router.post('/connections/:id/sync', async (req: Request, res: Response) => {
     const id = String(req.params.id ?? '');

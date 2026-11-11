@@ -553,6 +553,24 @@ describe('channel settings: auto-publish', () => {
     expect(db.connectionUpdate?.config).toEqual({ other: 'kept', auto_publish: true });
   });
 
+  it('saves only against the row as read (409 when it changed), and answers a failed read with 500', async () => {
+    db.connection = { id: CONN, platform: 'youtube', state: 'connected', config: {}, updated_at: '2026-11-11T09:00:00.000Z' };
+    vi.mocked(oauthMod.revokeToken); // keep the import used
+    const real = db.connection;
+    // The row changes between the read and the write.
+    const orig = (db as any).connection;
+    let reads = 0;
+    Object.defineProperty(db, 'connection', {
+      configurable: true,
+      get() { reads += 1; return reads > 1 ? { ...orig, updated_at: '2026-11-11T09:00:09.000Z' } : orig; },
+      set(v) { Object.defineProperty(db, 'connection', { value: v, writable: true, configurable: true }); },
+    });
+    expect((await patch({ auto_publish: true })).status).toBe(409);
+    db.connection = real;
+    db.failConnRead = true;
+    expect((await patch({ auto_publish: true })).status).toBe(500);
+  });
+
   it.each([[{}], [{ auto_publish: 'yes' }], [{ auto_publish: true, refresh_token: 'x' }], [null]])('rejects %j', async (body) => {
     db.connection = { id: CONN, platform: 'youtube', state: 'connected', config: {} };
     expect((await patch(body)).status).toBe(400);

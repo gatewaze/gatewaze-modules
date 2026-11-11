@@ -263,10 +263,11 @@ export default function YouTubeChannels() {
                     {c.state_detail && <div className="text-xs text-muted-foreground">{c.state_detail}</div>}
                     {c.state === 'connected' && (
                       <div className="text-xs text-muted-foreground">
-                        {c.discovery_finished_at
-                          ? `Last synced ${new Date(c.discovery_finished_at).toLocaleString()}. ${c.discovery_detail ?? ''}`
-                          : c.discovery_started_at
-                            ? 'Syncing…'
+                        {c.discovery_started_at
+                          && (!c.discovery_finished_at || c.discovery_finished_at < c.discovery_started_at)
+                          ? `Syncing since ${new Date(c.discovery_started_at).toLocaleString()}…`
+                          : c.discovery_finished_at
+                            ? `Last synced ${new Date(c.discovery_finished_at).toLocaleString()}. ${c.discovery_detail ?? ''}`
                             : 'Not synced yet. Uploads are read nightly at 03:40 UTC, or now with Sync now.'}
                       </div>
                     )}

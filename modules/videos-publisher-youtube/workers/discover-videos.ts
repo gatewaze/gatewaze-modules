@@ -100,11 +100,26 @@ export async function discoverAll(
     // and ignores a module's per-worker concurrency, so a Sync now during the
     // nightly run would otherwise walk the same channel twice.
     const lease = await claimLease(supabase, conn.id);
-    if (lease === 'held') { log(`${conn.label}: another discovery run is in progress — skipped`); continue; }
-    if (lease === 'error') { out.errors.push(`${conn.label}: could not take the discovery lease`); continue; }
+    if (lease.kind === 'held') {
+      // Said out loud: a Sync now that lands here was queued for nothing.
+      out.errors.push(`${conn.label}: another discovery run is in progress, so this one was skipped`);
+      continue;
+    }
+    if (lease.kind === 'error') { out.errors.push(`${conn.label}: could not take the discovery lease`); continue; }
 
-    const summary = await discoverConnection(supabase, client, refreshToken, conn, cap, out, log);
-    await finishLease(supabase, conn.id, summary, lease === 'none');
+    // Released whatever happens, so a run that throws does not leave the
+    // channel looking busy until the stale window passes.
+    let summary = 'The run stopped with an error before it finished.';
+    try {
+      summary = await discoverConnection(supabase, client, refreshToken, conn, cap, out, log);
+    } catch (err) {
+      out.errors.push(`${conn.label}: ${(err as Error).message}`);
+    } finally {
+      if (lease.kind === 'taken') {
+        const fin = await finishLease(supabase, conn.id, lease.startedAt, summary);
+        if (!fin) out.errors.push(`${conn.label}: could not record the end of the run`);
+      }
+    }
   }
 
   log(
@@ -128,23 +143,55 @@ export function clampCap(raw: unknown): number {
  * function is missing because the videos module is older, in which case the
  * run proceeds without one, as it always did.
  */
-async function claimLease(supabase, connectionId: string): Promise<'taken' | 'held' | 'none' | 'error'> {
+type Lease = { kind: 'taken'; startedAt: string } | { kind: 'held' } | { kind: 'none' } | { kind: 'error' };
+
+async function claimLease(supabase, connectionId: string): Promise<Lease> {
   const { data, error } = await supabase.rpc('claim_video_discovery', { p_connection: connectionId });
   if (error) {
     return /claim_video_discovery|PGRST202|42883|could not find the function/i.test(`${error.code ?? ''} ${error.message ?? ''}`)
-      ? 'none'
-      : 'error';
+      ? { kind: 'none' }
+      : { kind: 'error' };
   }
-  return data === true ? 'taken' : 'held';
+  // The function returns the start it stamped, or null while another run holds it.
+  return typeof data === 'string' && data ? { kind: 'taken', startedAt: data } : { kind: 'held' };
 }
 
-/** Release the lease and record what the run did, for the channels page. */
-async function finishLease(supabase, connectionId: string, detail: string, noLease: boolean): Promise<void> {
-  if (noLease) return;
-  await supabase
-    .from('video_platform_connections')
-    .update({ discovery_finished_at: new Date().toISOString(), discovery_detail: detail.slice(0, 500) })
-    .eq('id', connectionId);
+/**
+ * Release the lease and record what the run did, for the channels page.
+ * Stamped by the database clock, and only for the lease this run took, so a
+ * run whose lease went stale and was taken over cannot release the new one.
+ */
+async function finishLease(supabase, connectionId: string, startedAt: string, detail: string): Promise<boolean> {
+  const { data, error } = await supabase.rpc('finish_video_discovery', {
+    p_connection: connectionId,
+    p_started_at: startedAt,
+    p_detail: detail.slice(0, 500),
+  });
+  return !error && data === true;
+}
+
+/**
+ * Publish one discovered video through content-platform's state machine, so
+ * the transition is checked and audited like any other. A row discovered
+ * before 0.2.1 can carry publish_state 'published' with status 'draft'; that
+ * transition is then a no-op and the status is repaired directly.
+ */
+async function publishVideo(supabase, videoId: string, connLabel: string): Promise<string | null> {
+  const { error } = await supabase.rpc('content_publish_state_set', {
+    p_content_type: 'video',
+    p_content_id: videoId,
+    p_to: 'published',
+    p_actor: 'system:youtube-auto-publish',
+    p_reason: `auto-published on discovery from ${connLabel}`,
+  });
+  if (error) return error.message ?? 'publish failed';
+  const { error: fixErr } = await supabase
+    .from('videos')
+    .update({ status: 'published' })
+    .eq('id', videoId)
+    .eq('publish_state', 'published')
+    .neq('status', 'published');
+  return fixErr ? fixErr.message ?? 'status repair failed' : null;
 }
 
 /** Walk one connected channel. Returns a one-line summary for the operator. */
@@ -201,21 +248,25 @@ async function discoverConnection(supabase, client, refreshToken: string, conn, 
         const patch: Record<string, unknown> = {};
         if (!already.title && v.title) patch.title = v.title;
         if (detail?.durationSeconds) patch.duration_seconds = detail.durationSeconds;
-        // The platform may only HIDE a video here, never unhide one. A talk
-        // pulled to private or unlisted on YouTube is hidden at once; one an
-        // editor hid in Gatewaze stays hidden whatever YouTube says.
-        const hiddenOnPlatform = v.privacy !== null && v.privacy !== 'public';
-        if (hiddenOnPlatform && already.visibility !== 'private') patch.visibility = 'private';
-        // Auto-publish reaches only drafts nobody has decided on: 'archived'
-        // (unpublished by hand), 'rejected' and 'pending_review' are left alone.
-        if (autoPublish && v.privacy === 'public' && already.status === 'draft' && already.visibility === 'public') {
-          patch.status = 'published';
-          patch.publish_state = 'published';
+        // visibility mirrors the platform, both ways: a talk pulled to private
+        // or unlisted is hidden, and a premiere that goes public is shown.
+        // People decide with status (Publish / Unpublish), never with
+        // visibility, which nothing in Gatewaze lets them set. Unknown
+        // privacy leaves it as it is.
+        if (v.privacy !== null) {
+          const vis = visibilityFor(v.privacy);
+          if (vis !== already.visibility) patch.visibility = vis;
         }
         patch.discovered_via_connection_id = conn.id;
         const { error: upErr } = await supabase.from('videos').update(patch).eq('id', videoId);
-        if (upErr) out.errors.push(`${v.externalId}: update ${upErr.message}`);
-        else if (patch.status === 'published') out.published += 1;
+        if (upErr) { out.errors.push(`${v.externalId}: update ${upErr.message}`); }
+        // Auto-publish reaches only drafts nobody has decided on: 'archived'
+        // (unpublished by hand), 'rejected' and 'pending_review' are left alone.
+        else if (autoPublish && v.privacy === 'public' && already.status === 'draft') {
+          const failed = await publishVideo(supabase, videoId, conn.label);
+          if (failed) out.errors.push(`${v.externalId}: publish ${failed}`);
+          else out.published += 1;
+        }
       } else {
         const { data, error: insErr } = await supabase
           .from('videos')
@@ -233,11 +284,9 @@ async function discoverConnection(supabase, client, refreshToken: string, conn, 
             kind: videoKind(detail?.kind),
             // Private or unlisted on YouTube, or unknown, is private here.
             visibility: visibilityFor(v.privacy),
-            // Published at once only when the channel auto-publishes and the
-            // upload is public; otherwise a draft for somebody to decide.
-            ...(autoPublish && v.privacy === 'public'
-              ? { status: 'published', publish_state: 'published' }
-              : { status: 'draft', publish_state: 'draft' }),
+            // A draft for somebody to decide, or for auto-publish below.
+            status: 'draft',
+            publish_state: 'draft',
             source: 'platform_discovery',
             is_external: true,
             discovered_via_connection_id: conn.id,
@@ -254,7 +303,11 @@ async function discoverConnection(supabase, client, refreshToken: string, conn, 
         }
         videoId = data.id;
         out.created += 1;
-        if (autoPublish && v.privacy === 'public') out.published += 1;
+        if (autoPublish && v.privacy === 'public') {
+          const failed = await publishVideo(supabase, videoId, conn.label);
+          if (failed) out.errors.push(`${v.externalId}: publish ${failed}`);
+          else out.published += 1;
+        }
       }
 
       // The publication is what the metrics collector walks, so without this
@@ -281,9 +334,13 @@ async function discoverConnection(supabase, client, refreshToken: string, conn, 
     return [
       `Read ${listed.videos.length.toLocaleString('en')} upload(s): ${out.created - before.created} new, ${out.adopted - before.adopted} already known`,
       autoPublish ? `, ${out.published - before.published} published` : '',
-      listed.truncated
-        ? `. Reached the ${cap.toLocaleString('en')}-upload limit, so older uploads were not read.`
-        : '.',
+      // The adapter also reports truncated when the listing failed partway
+      // (a quota or network error); that is a failure, not the limit.
+      listed.error
+        ? `. Listing stopped early (${listed.error}); run it again later.`
+        : listed.truncated
+          ? `. Reached the ${cap.toLocaleString('en')}-upload limit, so older uploads were not read.`
+          : '.',
     ].join('');
   }
 }
