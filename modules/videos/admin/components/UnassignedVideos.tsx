@@ -19,7 +19,7 @@
  * single rolled-back error is not.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import {
   ArrowTopRightOnSquareIcon,
@@ -161,11 +161,19 @@ export default function UnassignedVideos() {
   // an admin does not get a button that can only answer 403.
   const mayPublish = scope?.is_admin === true;
 
+  // Only the newest request may change the screen. A slow request that
+  // finishes after a later one (an unfiltered load stuck until the statement
+  // timeout, then a search that came back first) must not replace the newer
+  // list with its own result or error.
+  const loadSeq = useRef(0);
+
   const load = useCallback(async () => {
     if (!mayTriage) return;
+    const seq = ++loadSeq.current;
     setLoading(true);
     try {
       const page = await listUnassigned({ limit: PAGE_SIZE, offset, provider, search });
+      if (seq !== loadSeq.current) return;
       setVideos(page.videos);
       setTotal(page.total);
       // The selection belongs to the page in front of the operator. Keeping it
@@ -174,11 +182,16 @@ export default function UnassignedVideos() {
       setPicked(new Set());
       setLoadError(null);
     } catch (err) {
+      if (seq !== loadSeq.current) return;
       const message = err instanceof Error ? err.message : 'Could not load the queue';
+      // The list is hidden while the error shows, so nothing hidden may stay
+      // selectable or selected: Assign would act on videos not on screen.
+      setVideos([]);
+      setPicked(new Set());
       setLoadError(message);
       toast.error(message);
     } finally {
-      setLoading(false);
+      if (seq === loadSeq.current) setLoading(false);
     }
   }, [mayTriage, offset, provider, search]);
 
