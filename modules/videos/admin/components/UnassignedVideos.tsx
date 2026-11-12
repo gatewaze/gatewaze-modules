@@ -19,7 +19,7 @@
  * single rolled-back error is not.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import {
   ArrowTopRightOnSquareIcon,
@@ -118,6 +118,9 @@ export default function UnassignedVideos() {
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
+  // Why the last load failed. Kept apart from an empty queue: a failed read
+  // shown as "Nothing to do" tells the operator the work is done when it is not.
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [provider, setProvider] = useState('');
   const [search, setSearch] = useState('');
   const [byProvider, setByProvider] = useState<Record<string, number>>({});
@@ -158,21 +161,37 @@ export default function UnassignedVideos() {
   // an admin does not get a button that can only answer 403.
   const mayPublish = scope?.is_admin === true;
 
+  // Only the newest request may change the screen. A slow request that
+  // finishes after a later one (an unfiltered load stuck until the statement
+  // timeout, then a search that came back first) must not replace the newer
+  // list with its own result or error.
+  const loadSeq = useRef(0);
+
   const load = useCallback(async () => {
     if (!mayTriage) return;
+    const seq = ++loadSeq.current;
     setLoading(true);
     try {
       const page = await listUnassigned({ limit: PAGE_SIZE, offset, provider, search });
+      if (seq !== loadSeq.current) return;
       setVideos(page.videos);
       setTotal(page.total);
       // The selection belongs to the page in front of the operator. Keeping it
       // across a page or filter change would let the button say "assign 100"
       // while only the 50 now on screen would actually be assigned.
       setPicked(new Set());
+      setLoadError(null);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not load the queue');
+      if (seq !== loadSeq.current) return;
+      const message = err instanceof Error ? err.message : 'Could not load the queue';
+      // The list is hidden while the error shows, so nothing hidden may stay
+      // selectable or selected: Assign would act on videos not on screen.
+      setVideos([]);
+      setPicked(new Set());
+      setLoadError(message);
+      toast.error(message);
     } finally {
-      setLoading(false);
+      if (seq === loadSeq.current) setLoading(false);
     }
   }, [mayTriage, offset, provider, search]);
 
@@ -431,7 +450,7 @@ export default function UnassignedVideos() {
                   className="h-4 w-4"
                 />
                 <span className="text-sm font-medium">
-                  {total.toLocaleString()} waiting
+                  {loadError ? 'Queue not loaded' : `${total.toLocaleString()} waiting`}
                   {picked.size > 0 && (
                     <span className="text-[var(--gray-11)] font-normal"> · {picked.size} selected</span>
                   )}
@@ -464,6 +483,15 @@ export default function UnassignedVideos() {
 
             {loading ? (
               <div className="p-6"><LoadingSpinner /></div>
+            ) : loadError ? (
+              <div className="p-6 text-sm">
+                <p className="text-[var(--red-11)] mb-3">
+                  The queue could not be loaded: {loadError}
+                </p>
+                <Button variant="soft" size="sm" onClick={() => { void load(); }}>
+                  Try again
+                </Button>
+              </div>
             ) : videos.length === 0 ? (
               <p className="p-6 text-sm text-[var(--gray-11)]">
                 {search || provider

@@ -11,7 +11,7 @@
 --   psql "$DATABASE_URL" -v ON_ERROR_STOP=1 \
 --     -f modules/videos/__tests__/videos_api_public.manual.sql
 --
--- Needs the videos migrations (001 to 022). The keyword case runs only where
+-- Needs the videos migrations (001 to 023). The keyword case runs only where
 -- content-keywords is installed, and says so.
 -- ============================================================================
 
@@ -128,6 +128,51 @@ BEGIN
     RAISE EXCEPTION 'case7: unpublished video still in the view';
   END IF;
   RAISE NOTICE 'case7 ok';
+END $$;
+
+-- case 8: 023's triage view picks the same view count video_metrics_latest
+-- would: the newest 'ok' day per publication, not its largest (a newer
+-- no_data day does not blank it), and the publication with the most views
+-- when there are two. A video with no metrics, or only no_data ones, is
+-- still in the queue, with no view count.
+DO $$
+DECLARE
+  v uuid := 'd0000000-0000-0000-0000-000000000002';
+  c1 uuid := 'd1000000-0000-0000-0000-000000000011';
+  c2 uuid := 'd1000000-0000-0000-0000-000000000012';
+  p1 uuid := 'd2000000-0000-0000-0000-000000000001';
+  p2 uuid := 'd2000000-0000-0000-0000-000000000002';
+  p3 uuid := 'd2000000-0000-0000-0000-000000000003';
+  r record;
+BEGIN
+  INSERT INTO public.video_platform_connections (id, platform, external_account_id, label) VALUES
+    (c1, 'youtube', 'UCzzzzzzzzzzzzzzzzzzzz01', 'zz1'),
+    (c2, 'youtube', 'UCzzzzzzzzzzzzzzzzzzzz02', 'zz2');
+  INSERT INTO public.video_publications (id, video_id, connection_id, platform) VALUES
+    (p1, v, c1, 'youtube'), (p2, v, c2, 'youtube'),
+    (p3, 'd0000000-0000-0000-0000-000000000004', c1, 'youtube');
+  INSERT INTO public.video_metrics (publication_id, collected_for, status, views) VALUES
+    (p1, current_date - 2, 'ok', 90),
+    (p1, current_date - 1, 'ok', 70),
+    (p1, current_date,     'no_data', NULL),
+    (p2, current_date - 1, 'ok', 40),
+    (p2, current_date,     'ok', 45),
+    (p3, current_date,     'no_data', NULL);
+  SELECT latest_views, views_as_of INTO r FROM public.videos_unassigned WHERE id = v;
+  IF r.latest_views IS DISTINCT FROM 70::bigint OR r.views_as_of IS DISTINCT FROM current_date - 1 THEN
+    RAISE EXCEPTION 'case8: expected 70 views as of yesterday, got % as of %', r.latest_views, r.views_as_of;
+  END IF;
+  -- Present AND without a count: an inner join would drop these rows, and
+  -- they are most of a real queue.
+  IF (SELECT count(*) FROM public.videos_unassigned u
+       WHERE u.id IN ('d0000000-0000-0000-0000-000000000001', 'd0000000-0000-0000-0000-000000000004')
+         AND u.latest_views IS NULL) <> 2 THEN
+    RAISE EXCEPTION 'case8: a video with no metrics, or only no_data, is missing or has a view count';
+  END IF;
+  IF to_regclass('public.video_publications_video') IS NULL THEN
+    RAISE EXCEPTION 'case8: the video_id index is missing';
+  END IF;
+  RAISE NOTICE 'case8 ok';
 END $$;
 
 ROLLBACK;
