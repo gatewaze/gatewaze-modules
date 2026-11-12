@@ -118,6 +118,9 @@ export default function UnassignedVideos() {
   const [total, setTotal] = useState(0);
   const [offset, setOffset] = useState(0);
   const [loading, setLoading] = useState(true);
+  // Why the last load failed. Kept apart from an empty queue: a failed read
+  // shown as "Nothing to do" tells the operator the work is done when it is not.
+  const [loadError, setLoadError] = useState<string | null>(null);
   const [provider, setProvider] = useState('');
   const [search, setSearch] = useState('');
   const [byProvider, setByProvider] = useState<Record<string, number>>({});
@@ -169,8 +172,11 @@ export default function UnassignedVideos() {
       // across a page or filter change would let the button say "assign 100"
       // while only the 50 now on screen would actually be assigned.
       setPicked(new Set());
+      setLoadError(null);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Could not load the queue');
+      const message = err instanceof Error ? err.message : 'Could not load the queue';
+      setLoadError(message);
+      toast.error(message);
     } finally {
       setLoading(false);
     }
@@ -431,7 +437,7 @@ export default function UnassignedVideos() {
                   className="h-4 w-4"
                 />
                 <span className="text-sm font-medium">
-                  {total.toLocaleString()} waiting
+                  {loadError ? 'Queue not loaded' : `${total.toLocaleString()} waiting`}
                   {picked.size > 0 && (
                     <span className="text-[var(--gray-11)] font-normal"> · {picked.size} selected</span>
                   )}
@@ -464,6 +470,15 @@ export default function UnassignedVideos() {
 
             {loading ? (
               <div className="p-6"><LoadingSpinner /></div>
+            ) : loadError ? (
+              <div className="p-6 text-sm">
+                <p className="text-[var(--red-11)] mb-3">
+                  The queue could not be loaded: {loadError}
+                </p>
+                <Button variant="soft" size="sm" onClick={() => { void load(); }}>
+                  Try again
+                </Button>
+              </div>
             ) : videos.length === 0 ? (
               <p className="p-6 text-sm text-[var(--gray-11)]">
                 {search || provider

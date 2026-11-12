@@ -22,7 +22,7 @@ const videosModule: GatewazeModule = {
   description:
     'Video masters, shorts and scheduled publication. Editors upload against a talk or episode; '
     + 'Gatewaze holds the file and publishes on a schedule.',
-  version: '1.13.0',
+  version: '1.13.1',
   features: ['videos', 'videos.manage', 'videos.edit'],
 
   dependencies: ['content-platform'],
@@ -85,6 +85,9 @@ const videosModule: GatewazeModule = {
     'migrations/021_public_api.sql',
     // Discovery lease per connection, and status/visibility on the triage view.
     'migrations/022_publish_and_discovery_lease.sql',
+    // The triage view without rebuilding video_metrics_latest per video,
+    // which timed out the Unassigned page at about 2,800 videos.
+    'migrations/023_unassigned_view_speed.sql',
   ],
 
   // Published, public videos in the unified /api/v1/content feed (and so in
